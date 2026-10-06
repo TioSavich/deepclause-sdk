@@ -268,6 +268,45 @@ describe('prompt mode', () => {
     }
   });
 
+  it('rewrites task/N inside scratch-asserted clauses (same as loaded code)', async () => {
+    backend = new CannedBackend([
+      {
+        text: '',
+        toolCalls: [
+          { name: 'assert_many', arguments: { clauses: 'foo :- task("hi", X), output(X).\n' } },
+          { name: 'execute', arguments: { goal: 'foo' } },
+          { name: 'set_result', arguments: { variable: 'DMLCode', value: 'kept(1).' } },
+          { name: 'set_result', arguments: { variable: 'EntryGoal', value: '' } },
+          { name: 'set_result', arguments: { variable: 'Answer', value: '' } },
+          { name: 'finish', arguments: { success: true } },
+        ],
+      },
+      {
+        text: '',
+        toolCalls: [
+          { name: 'set_result', arguments: { variable: 'X', value: 'nested-ok' } },
+          { name: 'finish', arguments: { success: true } },
+        ],
+      },
+    ]);
+    repl = await openRepl();
+
+    const events = await collect(repl.prompt('assert a clause that calls task'));
+    expect(events.some((event) => event.type === 'error')).toBe(false);
+    // The nested task ran through the scratch-asserted clause and produced its output.
+    expect(events.some((event) => event.type === 'output' && event.content === 'nested-ok')).toBe(true);
+  });
+
+  it('fails loudly on an unrewritten task/N at the runtime', async () => {
+    const { loadProlog } = await import('../src/prolog/loader.js');
+    const swipl = await loadProlog();
+    const result = swipl.prolog.query(
+      `catch(deepclause_mi:mi_call(task("x", _), state{memory: [], params: params{}, context_stack: [], depth: 0}, _), E, true), term_string(E, S)`,
+    ).once() as Record<string, unknown> | null;
+    const term = result?.S as { v?: string } | string | undefined;
+    expect(String(typeof term === 'object' ? term?.v : term)).toContain('unrewritten_task_form');
+  });
+
   it('assert_many accepts blocks that end with a newline', async () => {
     backend = new CannedBackend([{
       text: '',

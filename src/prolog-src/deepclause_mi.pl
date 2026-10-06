@@ -1284,33 +1284,47 @@ repl_set_meta_catalog(SessionId, CatalogText) :-
     retractall(session_meta_catalog(SessionId, _)),
     assertz(session_meta_catalog(SessionId, CatalogText)).
 
-%% repl_read_clause(+SessionId, +ClauseText, -Clause)
-%% Reads exactly one clause. Trailing content is an error so `assert` can never
-%% silently drop clauses that `assert_many` would have kept.
-repl_read_clause(SessionId, ClauseText, Clause) :-
+%% repl_prepare_single(+SessionId, +ClauseText, -PreparedTerms)
+%% Reads exactly ONE source term and runs the SAME load-time preprocessing as
+%% parse_dml_string/2: transform_task_calls/3 (task/N, prompt/N ->
+%% task_named/3, prompt_named/3), expand_interpolations/3 ({Var} strings), and
+%% expand_term/2 (e.g. DCG rules). Scratch asserts must be preprocessed exactly
+%% like a file load, or a clause asserted mid-turn keeps task/N, which has no
+%% runtime handler and fails silently.
+%%
+%% Trailing content is an error so `assert` can never silently drop clauses that
+%% `assert_many` would have kept.
+repl_prepare_single(SessionId, ClauseText, PreparedTerms) :-
     ensure_full_stop(ClauseText, Text1),
     open_string(Text1, Stream),
-    read_term(Stream, Clause, [module(SessionId)]),
+    read_term(Stream, Term, [module(SessionId), variable_names(Bindings)]),
     (   read_term(Stream, Extra, [module(SessionId)]),
         Extra \== end_of_file
     ->  close(Stream),
         throw(error(syntax_error('assert expects a single clause; use assert_many for multiple'), _))
     ;   close(Stream)
+    ),
+    preprocess_loaded_term(Term, Bindings, PreparedTerms).
+
+%% repl_assert_clause(+PreparedTerm, +SessionId)
+%% Asserts one already-preprocessed term, rejecting reserved names.
+repl_assert_clause(PreparedTerm, SessionId) :-
+    (   repl_protected_clause(PreparedTerm)
+    ->  throw(error(permission_error(modify, reserved_name, PreparedTerm),
+                context(repl_assert/3, 'cannot define a reserved predicate')))
+    ;   process_clause(PreparedTerm, SessionId)
     ).
 
 %% repl_assert(+SessionId, +ClauseText, -Result)
-%% Parses and asserts generated DML through process_clause/2 (so tool schemas,
-%% dict-dot expansion, and interpolation behave exactly as on load).
+%% Parses and asserts generated DML with the load-time preprocessing applied,
+%% so scratch-asserted clauses behave exactly like loaded ones.
 %% Refused when frozen; reserved names are rejected.
 repl_assert(SessionId, ClauseText, Result) :-
     catch(
         (   guard_not_frozen(SessionId),
-            repl_read_clause(SessionId, ClauseText, Clause),
-            (   repl_protected_clause(Clause)
-            ->  throw(error(permission_error(modify, reserved_name, Clause),
-                        context(repl_assert/3, 'cannot define a reserved predicate')))
-            ;   process_clause(Clause, SessionId)
-            ),
+            repl_prepare_single(SessionId, ClauseText, PreparedTerms),
+            forall(member(PreparedTerm, PreparedTerms),
+                repl_assert_clause(PreparedTerm, SessionId)),
             Result = ok
         ),
         AssertError,
@@ -1347,14 +1361,18 @@ repl_assert_many(SessionId, ClausesText, Result) :-
     ).
 
 repl_assert_stream(Stream, SessionId) :-
-    read_term(Stream, Term, [module(SessionId)]),
+    read_term(Stream, Term, [module(SessionId), variable_names(Bindings)]),
     (   Term == end_of_file
     ->  true
-    ;   (   repl_protected_clause(Term)
-        ->  throw(error(permission_error(modify, reserved_name, Term),
-                    context(repl_assert_many/3, 'cannot define a reserved predicate')))
-        ;   process_clause(Term, SessionId)
-        ),
+    ;   % Apply the same preprocessing as parse_dml_string/2 so scratch clauses
+        % match loaded ones (task/prompt rewrite, interpolation, expand_term).
+        preprocess_loaded_term(Term, Bindings, PreparedTerms),
+        forall(member(PreparedTerm, PreparedTerms),
+            (   repl_protected_clause(PreparedTerm)
+            ->  throw(error(permission_error(modify, reserved_name, PreparedTerm),
+                        context(repl_assert_many/3, 'cannot define a reserved predicate')))
+            ;   process_clause(PreparedTerm, SessionId)
+            )),
         repl_assert_stream(Stream, SessionId)
     ).
 
@@ -3874,6 +3892,21 @@ guard_reserved_direct(Goal, StateIn) :-
         functor(Goal, Name, _),
         repl_reserved_name(Name)
     ).
+
+%% Untransformed task/N and prompt/N (N >= 2) are source-level sugar rewritten
+%% to task_named/3 / prompt_named/3 by transform_task_calls/3 at load time.
+%% There is no runtime handler for the untransformed form, so it would match no
+%% clause and fail silently (looking like an inexplicable "0 solutions"). Fail
+%% loudly instead: reaching here means a clause was asserted/run without the
+%% load-time preprocessing (assert/assert_many now apply it, so this is a guard).
+mi_call(Goal, _StateIn, _StateOut) :-
+    compound(Goal),
+    functor(Goal, Name, Arity),
+    Arity >= 2,
+    ( Name == task ; Name == prompt ),
+    !,
+    throw(error(domain_error(unrewritten_task_form, Goal),
+                context(mi_call/3, 'task/N and prompt/N are rewritten at load time (task_named/3, prompt_named/3); preprocess the clause before running it'))).
 
 %% mi_call(Goal, +StateIn, -StateOut)
 %% Catch-all for built-in and user-defined predicates
