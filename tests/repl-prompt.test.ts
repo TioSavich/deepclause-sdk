@@ -149,6 +149,12 @@ describe('prompt mode', () => {
     expect(promptText).toContain('tool(count_words(File, Count)');
     expect(promptText).toContain('BOUNDED ITERATION');
     expect(promptText).toContain('CLAUSE ORDER MATTERS');
+    expect(promptText).toContain('WHAT A HARNESS IS');
+    expect(promptText).toContain('living library of reusable DML SKILLS');
+    expect(promptText).toContain('DATA = CODE');
+    expect(promptText).toContain('TESTS');
+    expect(promptText).toContain('bash access to a sandbox');
+    expect(promptText).toContain('EVOLVE ONLY WHEN ASKED');
   });
 
   it('keeps meta memory clean: raw request/outcome pairs, not the assembled prompt', async () => {

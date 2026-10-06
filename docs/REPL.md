@@ -54,6 +54,36 @@ A small set of whole-line commands is matched before the classifier:
 | `trace.` / `notrace.` | toggle verbose logging |
 | `params.` | show session parameters |
 
+## What a harness is
+
+A harness is a **living library of reusable DML skills** for the workspace, not
+a single program. A skill is a predicate; the ones a user should call are
+declared as entry points with `repl_entry/1`. Skills compose:
+
+- **helper predicates** (plain Prolog/CLP),
+- **semantic judgments** (`choose`/`rate`/`verify`/`probability`),
+- **host tools** via `exec/2`, and
+- **model calls** via `task/N` — a bounded agentic turn that may itself invoke
+  other skills.
+
+Because the module is a live Prolog program, **data = code**: small/medium
+structured data belongs in it as facts (`country(ch, "Switzerland").`),
+inspected and queried exactly like predicates via `listing`, `goal:`, and
+`execute`. Keep large datasets in a file or a linked script rather than bloating
+the module.
+
+A harness may also carry **test predicates** that pin the intended behavior of a
+skill (for example `test_<name>`, or a small `check/2` runner). When a skill is
+changed, its test is updated or added and run, so the change is verified rather
+than assumed.
+
+The meta task therefore treats the module like a codebase: it **reuses and
+composes** existing skills rather than duplicating them, and it **changes the
+harness only when the request asks for it**. On a fresh workspace it creates
+what was requested; on an existing harness it changes only what the request
+requires (a plain question changes nothing). A frozen harness is a live agent
+that simply cannot be modified.
+
 ## Goal mode
 
 ```text
@@ -346,6 +376,12 @@ SDK's shell manager with the configured sandbox. `--tools a,b` or
 configured. **File reading and writing are DML language, not host tools** — use
 `open/3`, `close/1`, `read_string/3`, `write/2`, `write_file/2`, `read_file/2`,
 `append_file/2` (paths resolve under the workspace).
+
+`bash` runs in the workspace shell, or a sandbox (`--sandbox` uses the AgentVM;
+`agentvm.network` controls networking). The meta task may explore that
+environment and install a dependency when a skill genuinely needs one — installs
+are sandbox/session-local and do **not** travel with an exported harness, so
+prefer the standard library.
 
 The meta prompt carries the live host tool catalog, and `listing(tools)`
 returns it, so generated `exec(...)` calls use real names and argument shapes.
