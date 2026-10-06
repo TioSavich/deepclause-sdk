@@ -109,6 +109,34 @@ ERROR: turn aborted; current harness saved to /tmp/deepclause-repl-<id>-<ts>.dml
 Load that file with `deepclause repl -l <file>` to resume. Ctrl-C while idle
 exits the REPL. The same applies to `goal:` queries and `-g` runs.
 
+### Meta tools and guard rails
+
+The code-writing meta task is restricted to `listing`, `assert`, `assert_many`,
+`retract`, `execute`, and `ask_user`. The meta prompt embeds the full bundled
+`DML_REFERENCE.md`, the live host tool catalog, and the current harness manifest,
+and it states the rules that matter most:
+
+* **Read before writing** — call `listing` first.
+* **Clause order matters** — a base case must precede a recursive rule. Define a
+  predicate with `assert_many`, which asserts a whole block in the written
+  order, rather than one clause at a time.
+* **Verify** — call `listing(Name/Arity)` after changing a predicate.
+* **Bounded iteration** — no unbounded loops/assert/execute; use finite
+  recursion, CLP(FD)/CLP(Q), or an explicit bound. `execute` is gas-limited and
+  the turn has a model-call budget.
+
+`ask_user` / `input/2` prompt on a clearly separated pane and read through the
+REPL's own input line (no second readline, so no character echo and no lost
+input):
+
+```text
+dml> ask me for my name
+meta │ ⠋ meta task (writing the harness)
+? What is your name?
+> Andreas
+meta │   ✔ ask_user(prompt=What is your name?) — Andreas
+```
+
 ### Direct questions
 
 For a simple question that can be answered directly — "what did we just do?",

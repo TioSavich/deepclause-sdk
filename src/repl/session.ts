@@ -11,6 +11,7 @@ import * as os from 'os';
 import * as path from 'path';
 
 import { loadProlog, mountWorkspace, type SWIPLModule } from '../prolog/loader.js';
+import { getWorkspaceDocAssetPath } from '../system/assets/index.js';
 import { DMLRunner, type Frame, type InternalRunOptions, type RunnerOptions } from '../runner.js';
 import type {
   DMLEvent,
@@ -97,6 +98,7 @@ export class DMLSession {
   private modelCallsThisTurn = 0;
   /** Current budget; grows by maxModelCalls when the user extends it. */
   private modelCallBudget: number;
+  private dmlReference?: string;
   private disposed = false;
 
   private constructor(swipl: SWIPLModule, options: DMLSessionOptions) {
@@ -243,6 +245,19 @@ export class DMLSession {
         content: saved ? `turn aborted; current harness saved to ${saved}` : 'turn aborted',
       };
     }
+  }
+
+  /** Load the bundled DML reference once, for inclusion in the meta prompt. */
+  private async loadDmlReference(): Promise<string> {
+    if (this.dmlReference !== undefined) {
+      return this.dmlReference;
+    }
+    try {
+      this.dmlReference = await fs.readFile(getWorkspaceDocAssetPath('dml-reference'), 'utf8');
+    } catch {
+      this.dmlReference = '';
+    }
+    return this.dmlReference;
   }
 
   /**
@@ -432,6 +447,12 @@ export class DMLSession {
         this.prologQuery(
           `deepclause_mi:repl_set_meta_catalog('${this.sessionId}', ${quoteString(catalog)})`
         );
+        const reference = await this.loadDmlReference();
+        if (reference) {
+          this.prologQuery(
+            `deepclause_mi:repl_set_dml_reference('${this.sessionId}', ${quoteString(reference)})`
+          );
+        }
 
         // 2. Assemble the prompt and create the meta frame.
         const promptResult = this.prologQuery(
@@ -620,6 +641,15 @@ export class DMLSession {
       signal: options.signal,
       onModelCall: () => this.reserveModelCall(),
     };
+  }
+
+  /**
+   * Replace the human-in-the-loop channel after construction. The CLI uses
+   * this to route input through the REPL's own readline interface instead of a
+   * second interface on the same stdin.
+   */
+  setInputHandler(handler: ((prompt: string, options?: string[]) => Promise<string | undefined>) | undefined): void {
+    this.inputHandler = handler;
   }
 
   /** Resolve a human answer, or undefined when no channel is configured. */

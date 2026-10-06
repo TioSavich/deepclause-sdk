@@ -124,6 +124,33 @@ export function createMetaTools(ctx: MetaToolContext): Map<string, ToolDefinitio
     }),
   });
 
+  tools.set('assert_many', {
+    description: 'Parse a block of clauses and assert them in the order written. Use this to define a whole predicate so clause order (base case before recursive rule) is preserved.',
+    parameters: {
+      type: 'object',
+      properties: {
+        clauses: { type: 'string', description: 'The DML clauses/facts, in order, each ending with a period.' },
+      },
+      required: ['clauses'],
+    },
+    execute: (args) => serialized(async () => {
+      if (ctx.isFrozen()) {
+        return { ok: false, error: 'harness is frozen; assert is disabled' };
+      }
+      const clauses = String(args.clauses ?? '');
+      const result = ctx.prologQuery(
+        `deepclause_mi:repl_assert_many('${ctx.sessionId}', ${quoteString(clauses)}, Result)`
+      );
+      const outcome = plainValue(result?.Result);
+      if (outcome === 'ok') {
+        notify('assert_many', { clauses }, 'completed', 'ok');
+        return { ok: true };
+      }
+      notify('assert_many', { clauses }, 'failed', String(outcome));
+      return { ok: false, error: String(outcome) };
+    }),
+  });
+
   tools.set('retract', {
     description: 'Remove matching clauses from the scratch harness (reserved names are protected).',
     parameters: {
@@ -211,7 +238,8 @@ export function createMetaTools(ctx: MetaToolContext): Map<string, ToolDefinitio
 export function describeMetaTools(): string {
   return [
     '- listing(filter) — read-only list of predicates (all), Name/Arity, tools, or scripts.',
-    '- assert(clause) — parse and assert a clause/tool/script fact into the scratch harness.',
+    '- assert(clause) — parse and assert a single clause/tool/script fact into the scratch harness.',
+    '- assert_many(clauses) — parse and assert a block of clauses in order (prefer this for a whole predicate).',
     '- retract(clause) — remove matching clauses from the scratch harness.',
     '- execute(goal, limit?) — run a DML goal against the scratch harness; returns bindings/output.',
     '- ask_user(prompt, options?) — ask the human a clarifying question (non-interactive runs return cancelled).',

@@ -124,6 +124,47 @@ describe('prompt mode', () => {
     expect(listing).toContain('repl_entry(demo)');
   });
 
+  it('includes the bundled DML reference and guard rails in the meta prompt', async () => {
+    backend = new CannedBackend([finalResponse('kept(1).', '')]);
+    repl = await openRepl();
+    await collect(repl.prompt('build something'));
+
+    const promptText = backend.calls[0].messages.map((message) => message.content).join('\n');
+    expect(promptText).toContain('DML LANGUAGE REFERENCE');
+    expect(promptText).toContain('# DML Language Reference');
+    expect(promptText).toContain('BOUNDED ITERATION');
+    expect(promptText).toContain('CLAUSE ORDER MATTERS');
+  });
+
+  it('assert_many keeps clause order so recursion terminates', async () => {
+    backend = new CannedBackend([{
+      text: '',
+      toolCalls: [
+        {
+          name: 'assert_many',
+          arguments: {
+            clauses: 'fact(0, 1).\nfact(N, F) :- N > 0, N1 is N - 1, fact(N1, F1), F is N * F1.',
+          },
+        },
+        { name: 'execute', arguments: { goal: 'fact(5, F)' } },
+        { name: 'set_result', arguments: { variable: 'DMLCode', value: 'kept(1).' } },
+        { name: 'set_result', arguments: { variable: 'EntryGoal', value: '' } },
+        { name: 'set_result', arguments: { variable: 'Answer', value: '' } },
+        { name: 'finish', arguments: { success: true } },
+      ],
+    }]);
+    repl = await openRepl();
+
+    const events = await collect(repl.prompt('define fact with assert_many'));
+    expect(events.some((event) => event.type === 'error')).toBe(false);
+    expect(events.some((event) => (
+      event.type === 'tool_call'
+      && event.toolName === 'execute'
+      && event.toolState === 'completed'
+      && event.toolSummary?.includes('solution')
+    ))).toBe(true);
+  });
+
   it('answers a simple question directly without changing the harness', async () => {
     backend = new CannedBackend([{
       text: 'Answering directly.',

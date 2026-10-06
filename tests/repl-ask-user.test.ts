@@ -142,6 +142,18 @@ describe('harness input/2', () => {
     expect(values(events, 'Answer')).toEqual(['"yes"']);
   });
 
+  it('routes input/2 through a replacement handler (setOnInput)', async () => {
+    repl = await createHarnessRepl({
+      workspacePath: workspace,
+      model: 'test-model',
+      provider: 'openai',
+    });
+    repl.setOnInput(async () => 'replaced');
+
+    const events = await collect(repl.query('input("Anything?", Answer)'));
+    expect(values(events, 'Answer')).toEqual(['"replaced"']);
+  });
+
   it('fails input/2 (without hanging) when no channel is configured', async () => {
     repl = await createHarnessRepl({
       workspacePath: workspace,

@@ -63,6 +63,8 @@ export interface HarnessRepl {
   load(file: string): Promise<{ error?: string }>;
   /** Read-only listing of the living module. */
   list(filter?: string): Promise<string>;
+  /** Replace the human-in-the-loop channel (used by the CLI's shared readline). */
+  setOnInput(handler: ((prompt: string, options?: string[]) => Promise<string | undefined>) | undefined): void;
   /** Read-only lock (M2). */
   freeze(): Promise<void>;
   /** Irreversible freeze: `unfreeze.` is refused (--locked). */
@@ -82,6 +84,10 @@ class HarnessReplImpl implements HarnessRepl {
 
   constructor(session: DMLSession) {
     this.session = session;
+  }
+
+  setOnInput(handler: ((prompt: string, options?: string[]) => Promise<string | undefined>) | undefined): void {
+    this.session.setInputHandler(handler);
   }
 
   query(goal: string, opts?: RunOpts): AsyncGenerator<DMLQueryEvent> {

@@ -188,6 +188,8 @@ export interface ReplRuntime {
   /** Resolved model and backend, shown in the startup banner. */
   model: string;
   backend: 'env' | 'pi';
+  /** Replace the input channel (the interactive loop uses its own readline). */
+  setOnInput(handler: (prompt: string, choices?: string[]) => Promise<string | undefined>): void;
   /** Set when the env backend has no credentials for the selected provider. */
   missingCredential?: string;
 }
@@ -286,6 +288,7 @@ export async function createReplRuntime(options: ReplCliOptions): Promise<ReplRu
     toolset,
     model: backendKind === 'pi' ? harnessModel : `${harnessProvider}:${harnessModel}`,
     backend: backendKind,
+    setOnInput: (handler) => repl.setOnInput(handler),
     missingCredential,
   };
 }
@@ -478,18 +481,46 @@ async function runInteractive(runtime: ReplRuntime, options: ReplCliOptions): Pr
     output: process.stdout,
     terminal: true,
   });
-  const lines = rl[Symbol.asyncIterator]();
-  const nextLine = async (): Promise<string | null> => {
-    const { value, done } = await lines.next();
-    return done ? null : String(value);
-  };
+  // A single readline interface serves the REPL prompt, the input handler, and
+  // the pager. `rl.question` can be called whenever no other question is
+  // pending (the loop is blocked inside a turn), so ask_user / input/2 do not
+  // need a second interface (which double-echoed and closed stdin).
+  let rlClosed = false;
+  rl.on('close', () => {
+    rlClosed = true;
+  });
+  const ask = (query: string): Promise<string | null> => new Promise((resolve) => {
+    // Calling question() on a closed interface throws; treat it as EOF.
+    if (rlClosed) {
+      resolve(null);
+      return;
+    }
+    let settled = false;
+    const finish = (value: string | null) => {
+      if (settled) return;
+      settled = true;
+      rl.off('close', onClose);
+      resolve(value);
+    };
+    const onClose = () => finish(null);
+    rl.once('close', onClose);
+    rl.question(query, (answer) => finish(answer));
+  });
+
+  runtime.setOnInput(async (prompt, choices) => {
+    const options = choices && choices.length > 0 ? ` (${choices.join('/')})` : '';
+    runtime.renderer.writeLine('');
+    runtime.renderer.writeLine(`? ${prompt}${options}`);
+    const answer = await ask('> ');
+    return answer === null ? undefined : answer;
+  });
+
   const holder: { turn: AbortController | null } = { turn: null };
   const removeSigint = installSigint(runtime, holder, rl);
 
   try {
     while (true) {
-      process.stdout.write(promptPrefix);
-      const line = await nextLine();
+      const line = await ask(promptPrefix);
       if (line === null) break;
       const input = classifyReplInput(line);
       if (input.kind === 'halt') break;
@@ -498,7 +529,7 @@ async function runInteractive(runtime: ReplRuntime, options: ReplCliOptions): Pr
       holder.turn = controller;
       try {
         if (input.kind === 'goal') {
-          await runInteractiveGoal(runtime, input.goal, options, nextLine, controller.signal);
+          await runInteractiveGoal(runtime, input.goal, options, ask, controller.signal);
         } else {
           const keepGoing = await dispatchReplInput(runtime, input, {
             first: options.first,
@@ -522,7 +553,7 @@ async function runInteractiveGoal(
   runtime: ReplRuntime,
   goal: string,
   options: ReplCliOptions,
-  nextLine: () => Promise<string | null>,
+  ask: (query: string) => Promise<string | null>,
   signal?: AbortSignal,
 ): Promise<void> {
   const { renderer, repl } = runtime;
@@ -543,7 +574,7 @@ async function runInteractiveGoal(
         }
         if (!pageAll) {
           // SWI-style pager: ';' continues, '.' or Enter stops, a/w/p print all.
-          const key = await nextLine();
+          const key = await ask(' ;');
           const trimmed = (key ?? '').trim();
           if (trimmed === '' || trimmed === '.' || trimmed === 'd') {
             renderer.writeLine('.');

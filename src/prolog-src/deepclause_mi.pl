@@ -53,7 +53,9 @@
     repl_extract_code/2,
     repl_entry_goal/2,
     repl_assert/3,
+    repl_assert_many/3,
     repl_retract/3,
+    repl_set_dml_reference/2,
     repl_manifest/2,
     repl_set_meta_catalog/2,
     repl_run_meta/4,
@@ -98,6 +100,7 @@
 :- dynamic session_directive/2.     % session_directive(SessionId, Directive) - recorded :- directives for export
 :- dynamic session_meta_catalog/2.  % session_meta_catalog(SessionId, CatalogText) - host tool catalog for the meta prompt
 :- dynamic session_repl_entry/2.    % session_repl_entry(SessionId, EntryGoal) - resolved entry for the pending commit
+:- dynamic session_dml_reference/2. % session_dml_reference(SessionId, Text) - bundled DML reference for the meta prompt
 :- dynamic repl_snapshot/2.         % repl_snapshot(SessionId, Snapshot) - transactional edit snapshot
 :- dynamic session_params/2.       % session_params(SessionId, ParamsDict)
 :- dynamic session_user_tools/2.   % session_user_tools(SessionId, ToolName)
@@ -1266,6 +1269,41 @@ repl_assert(SessionId, ClauseText, Result) :-
         format(atom(Result), 'error(~w)', [AssertError])
     ).
 
+%% repl_set_dml_reference(+SessionId, +Text)
+%% Stores the bundled DML reference so the meta prompt can include it.
+repl_set_dml_reference(SessionId, Text) :-
+    retractall(session_dml_reference(SessionId, _)),
+    assertz(session_dml_reference(SessionId, Text)).
+
+%% repl_assert_many(+SessionId, +ClausesText, -Result)
+%% Parses a block of clauses and asserts them in the order written. Prefer this
+%% for defining a predicate: clause order matters for backtracking, so asserting
+%% one clause at a time can produce a wrong program.
+repl_assert_many(SessionId, ClausesText, Result) :-
+    catch(
+        (   guard_not_frozen(SessionId),
+            ensure_full_stop(ClausesText, Text1),
+            open_string(Text1, Stream),
+            repl_assert_stream(Stream, SessionId),
+            close(Stream),
+            Result = ok
+        ),
+        AssertError,
+        format(atom(Result), 'error(~w)', [AssertError])
+    ).
+
+repl_assert_stream(Stream, SessionId) :-
+    read_term(Stream, Term, [module(SessionId)]),
+    (   Term == end_of_file
+    ->  true
+    ;   (   repl_protected_clause(Term)
+        ->  throw(error(permission_error(modify, reserved_name, Term),
+                    context(repl_assert_many/3, 'cannot define a reserved predicate')))
+        ;   process_clause(Term, SessionId)
+        ),
+        repl_assert_stream(Stream, SessionId)
+    ).
+
 %% repl_retract(+SessionId, +ClausePattern, -Result)
 %% Retracts matching user clauses. Reserved names are protected.
 repl_retract(SessionId, ClauseText, Result) :-
@@ -1368,6 +1406,7 @@ last_n(List, N, Tail) :-
 %% output contract.
 repl_meta_prompt(SessionId, Request, Prompt) :-
     (   session_meta_catalog(SessionId, Catalog) -> true ; Catalog = "" ),
+    (   session_dml_reference(SessionId, Reference) -> true ; Reference = "" ),
     repl_manifest(SessionId, Manifest),
     repl_meta_memory_text(SessionId, MemoryText),
     with_output_to(string(Prompt),
@@ -1381,10 +1420,14 @@ repl_meta_prompt(SessionId, Request, Prompt) :-
             format("- Prefer CLP(FD)/CLP(Q) for arithmetic constraints. File I/O uses the MI predicates open/3, close/1, read_string/3, write/2, write_file/2, read_file/2, append_file/2 (paths resolve under the workspace).~n"),
             format("- SELF-CONTAINMENT: any Python/JS/shell/SQL code a tool needs must be embedded in the harness as a string fact (script_body/2, python_source/2, js_source/2, shell_source/2) and materialized at run time with write_file/2. Never leave it only as a side file.~n"),
             format("- Naming: there is no agent_main requirement. Name predicates descriptively and declare entries with repl_entry/1. To delete a predicate, emit repl_delete(Name/Arity) as a directive fact.~n"),
-            format("- Call the listing tool before writing so you build on the current harness.~n"),
+            format("- READ FIRST: call the listing tool before writing so you build on the current harness.~n"),
+            format("- CLAUSE ORDER MATTERS: a predicate's clauses are tried in order, so a base case must come before a recursive rule. Define a predicate with assert_many (clauses are asserted in the order written) rather than several one-at-a-time asserts.~n"),
+            format("- After changing a predicate, call listing(Name/Arity) to confirm the clauses are present and in the right order.~n"),
+            format("- BOUNDED ITERATION: do not loop, assert, or execute unboundedly. Use finite recursion, CLP(FD)/CLP(Q), or plain iteration with a known bound; execute is gas-limited and the turn has a model-call budget. Stop when the task is done.~n"),
             format("- If the request is ambiguous, call the ask_user tool to ask a clarifying question before writing code.~n"),
             format("- DIRECT QUESTIONS: if the request is only a question you can answer directly (for example \"what did we just do?\", \"what can you do?\", \"how do I ...?\"), do NOT write or change harness code. Set DMLCode to the empty string and set the Answer output variable to your reply. Build DML only when the user asks you to create, change, or run logic.~n~n"),
             format("HOST TOOL CATALOG (only these names may be called through exec/2; listing(tools) has full schemas)~n~w~n~n", [Catalog]),
+            format("DML LANGUAGE REFERENCE~n~w~n~n", [Reference]),
             format("CURRENT HARNESS MANIFEST~n~w~n~n", [Manifest]),
             format("RECENT PROMPTS~n~w~n~n", [MemoryText]),
             format("USER REQUEST~n~w~n~n", [Request]),
