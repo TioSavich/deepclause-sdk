@@ -101,12 +101,6 @@ export class DMLSession {
   private modelCallBudget: number;
   private dmlReference?: string;
   private dmlAuthoring?: string;
-  /**
-   * Per-turn file staging. Maps a workspace-relative path to its new content,
-   * or to null for a staged deletion. Promoted on commit, discarded on failure
-   * so file edits participate in the prompt transaction.
-   */
-  private staging = new Map<string, string | null>();
   private disposed = false;
 
   private constructor(swipl: SWIPLModule, options: DMLSessionOptions) {
@@ -354,7 +348,7 @@ export class DMLSession {
     if (!text.trim()) {
       return null;
     }
-    // A bundle (module + current scripts, staged edits included) so an aborted
+    // A bundle (module + current scripts) so an aborted
     // turn's work is fully recoverable, not just the module source.
     const file = path.join(
       os.tmpdir(),
@@ -575,9 +569,8 @@ export class DMLSession {
 
     try {
       for (let attempt = 0; attempt <= this.repairRounds && !succeeded; attempt += 1) {
-        // 1. Snapshot the living module + bookkeeping + harness memory. File
-        //    edits are staged per turn and promoted only on a successful commit.
-        this.staging.clear();
+        // 1. Snapshot the living module + bookkeeping + harness memory.
+        //    (Workspace file edits are written straight to disk.)
         this.prologQuery(`deepclause_mi:repl_snapshot_save('${this.sessionId}')`);
 
         const catalog = this.hostToolsCatalog
@@ -636,9 +629,9 @@ export class DMLSession {
           onEvent: emit,
           fileTools: {
             read: (filePath) => this.readWorkspaceFile(filePath),
-            write: async (filePath, content) => { this.writeWorkspaceFile(filePath, content); },
+            write: (filePath, content) => this.writeWorkspaceFile(filePath, content),
             list: (dir) => this.listWorkspaceDir(dir),
-            remove: async (filePath) => { this.writeWorkspaceFile(filePath, null); },
+            remove: (filePath) => this.writeWorkspaceFile(filePath, null),
           },
         });
 
@@ -677,7 +670,6 @@ export class DMLSession {
         // the committed harness (the turn stays atomic).
         if (options.signal?.aborted) {
           const saved = await this.saveCurrentHarness('cancelled');
-          this.staging.clear();
           this.prologQuery(`deepclause_mi:repl_snapshot_restore('${this.sessionId}')`);
           yield {
             type: 'error',
@@ -688,14 +680,13 @@ export class DMLSession {
         }
 
         // A failed or empty meta turn (iteration cap, budget, model error):
-        // save the scratch module + staged scripts BEFORE discarding the
+        // save the scratch module + linked scripts BEFORE discarding the
         // transaction, so the author's work is recoverable, then abort.
         if (metaFailed || (!code.trim() && !answer.trim())) {
           const saved = await this.saveCurrentHarness(
             metaFailed ? 'meta task failed' : 'meta task produced no DML',
           );
           this.prologQuery(`deepclause_mi:repl_snapshot_restore('${this.sessionId}')`);
-          this.staging.clear();
           lastError = (metaFailed
             ? `meta task failed: ${metaFailed}`
             : 'the meta task returned no DML source or answer')
@@ -709,7 +700,6 @@ export class DMLSession {
         // Direct answer: a simple question the model answered without changing
         // the harness. Render the reply and skip the commit entirely.
         if (!code.trim() && answer.trim()) {
-          this.staging.clear();
           const reply = answer.trim();
           yield { type: 'output', content: reply };
           const summary = `answered: ${reply.length > 200 ? `${reply.slice(0, 197)}…` : reply}`;
@@ -735,9 +725,6 @@ export class DMLSession {
           continue;
         }
         succeeded = true;
-        // Promote staged script/file edits into the workspace now that the
-        // returned source is the authoritative module.
-        await this.promoteStaging();
 
         // 6. Run the declared entry (EntryGoal or repl_entry/1), if any.
         const start = this.prologQuery(
@@ -833,63 +820,39 @@ export class DMLSession {
       .split(path.sep).join('/');
   }
 
-  /** Read a file, preferring the turn's staging overlay. */
+  /** Read a workspace file. */
   private async readWorkspaceFile(relPath: string): Promise<string | null> {
-    const key = this.normalizeRel(relPath);
-    if (this.staging.has(key)) {
-      return this.staging.get(key) ?? null;
-    }
     try {
-      return await fs.readFile(this.resolveWorkspacePath(key), 'utf8');
+      return await fs.readFile(this.resolveWorkspacePath(this.normalizeRel(relPath)), 'utf8');
     } catch {
       return null;
     }
   }
 
-  /** Stage a file write (or deletion when content is null). */
-  private writeWorkspaceFile(relPath: string, content: string | null): void {
+  /**
+   * Write a workspace file (or delete it when content is null). Writes land on
+   * disk immediately so the author can run the file with bash in the same turn.
+   */
+  private async writeWorkspaceFile(relPath: string, content: string | null): Promise<void> {
     if (this.isFrozen()) {
       throw new Error('harness is frozen; file writes are disabled');
     }
-    this.staging.set(this.normalizeRel(relPath), content);
+    const abs = this.resolveWorkspacePath(this.normalizeRel(relPath));
+    if (content === null) {
+      await fs.rm(abs, { force: true });
+      return;
+    }
+    await fs.mkdir(path.dirname(abs), { recursive: true });
+    await fs.writeFile(abs, content, 'utf8');
   }
 
-  /** List a workspace directory, overlaying staged files. */
+  /** List a workspace directory. */
   private async listWorkspaceDir(relPath = '.'): Promise<string[]> {
-    const dir = this.normalizeRel(relPath);
-    const prefix = dir === '.' || dir === '' ? '' : `${dir}/`;
-    const entries = new Set<string>();
     try {
-      for (const entry of await fs.readdir(this.resolveWorkspacePath(dir))) {
-        entries.add(entry);
-      }
+      return (await fs.readdir(this.resolveWorkspacePath(this.normalizeRel(relPath)))).sort();
     } catch {
-      // missing dir
+      return [];
     }
-    for (const [key, value] of this.staging) {
-      if (value === null || !key.startsWith(prefix)) continue;
-      const rest = key.slice(prefix.length);
-      if (rest && !rest.includes('/')) entries.add(rest);
-    }
-    return [...entries].sort();
-  }
-
-  /** Apply staged writes/deletions to the workspace and clear the staging. */
-  private async promoteStaging(): Promise<void> {
-    for (const [rel, content] of this.staging) {
-      const abs = this.resolveWorkspacePath(rel);
-      try {
-        if (content === null) {
-          await fs.rm(abs, { force: true });
-        } else {
-          await fs.mkdir(path.dirname(abs), { recursive: true });
-          await fs.writeFile(abs, content, 'utf8');
-        }
-      } catch {
-        // best effort
-      }
-    }
-    this.staging.clear();
   }
 
   /**

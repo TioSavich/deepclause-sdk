@@ -30,7 +30,7 @@ export interface MetaToolContext {
   hostToolsCatalog?: string;
   /** Emit meta-tool lifecycle events so results appear in sequence. */
   onEvent?: (event: DMLEvent) => void;
-  /** Workspace-scoped, staging-aware file tools for the author. */
+  /** Workspace-scoped file tools for the author (writes land on disk immediately). */
   fileTools?: {
     read: (path: string) => Promise<string | null>;
     write: (path: string, content: string) => Promise<void>;
@@ -212,7 +212,7 @@ export function createMetaTools(ctx: MetaToolContext): Map<string, ToolDefinitio
   if (ctx.fileTools) {
     const fileTools = ctx.fileTools;
     tools.set('read_file', {
-      description: 'Read a workspace file. Paths are workspace-relative; staged edits are visible. Use this to inspect generated scripts.',
+      description: 'Read a workspace file. Paths are workspace-relative. Use this to inspect generated scripts.',
       parameters: {
         type: 'object',
         properties: { path: { type: 'string', description: 'Workspace-relative file path.' } },
@@ -236,7 +236,7 @@ export function createMetaTools(ctx: MetaToolContext): Map<string, ToolDefinitio
     });
 
     tools.set('write_file', {
-      description: 'Write a workspace file (staged until the turn commits). Paths are workspace-relative. Use this to author script files; link them with a script_file/2 fact and run them with exec(bash(...)).',
+      description: 'Write a workspace file. Paths are workspace-relative; the write lands on disk immediately, so bash can run it in the same turn. Use this to author script files; link them with a script_file/2 fact and run them with exec(bash(...)).',
       parameters: {
         type: 'object',
         properties: {
@@ -260,7 +260,7 @@ export function createMetaTools(ctx: MetaToolContext): Map<string, ToolDefinitio
     });
 
     tools.set('list_files', {
-      description: 'List a workspace directory (staged files included).',
+      description: 'List a workspace directory.',
       parameters: {
         type: 'object',
         properties: { path: { type: 'string', description: 'Workspace-relative directory (default ".").' } },
@@ -280,7 +280,7 @@ export function createMetaTools(ctx: MetaToolContext): Map<string, ToolDefinitio
     });
 
     tools.set('delete_file', {
-      description: 'Delete a workspace file (staged until the turn commits).',
+      description: 'Delete a workspace file.',
       parameters: {
         type: 'object',
         properties: { path: { type: 'string', description: 'Workspace-relative file path.' } },
@@ -339,7 +339,7 @@ export function describeMetaTools(): string {
     '- assert(clause) / assert_many(clauses) — write DML clauses into the scratch harness.',
     '- retract(clause) — remove matching clauses from the scratch harness.',
     '- execute(goal, limit?) — run a DML goal against the scratch harness; returns bindings/output.',
-    '- read_file / write_file / list_files / delete_file — workspace-scoped file I/O (staged until commit).',
+    '- read_file / write_file / list_files / delete_file — workspace-scoped file I/O (writes land immediately).',
     '- ask_user(prompt, options?) — ask the human a clarifying question.',
     '- bash — the capability host tool, available to probe the environment and run commands.',
   ].join('\n');

@@ -141,7 +141,7 @@ exits the REPL. The same applies to `goal:` queries and `-g` runs.
 
 A meta task that ends **without producing DML** — iteration cap, exhausted
 model-call budget, or a model error — is treated the same way: the transaction
-is discarded, the scratch module + staged scripts are written to a temp bundle,
+is discarded, the scratch module + linked scripts are written to a temp bundle,
 and the error reports the path, e.g.
 `ERROR: the meta task returned no DML source or answer (current harness saved to /tmp/deepclause-repl-….zip)`.
 So a long debugging turn is never lost even when the turn itself fails.
@@ -234,8 +234,8 @@ tool(url_text(Url, Text), "Fetch a URL and strip HTML.") :-
 
 The untrusted URL is passed through a file rather than interpolated into the
 shell command. `script_file/2` has no runtime semantics — it tells the exporter
-which files belong to the harness. File edits are staged and committed with the
-turn.
+which files belong to the harness. `write_file` lands on disk immediately, so
+the meta task can run a script with `bash` in the same turn.
 
 `export harness.zip` writes the self-contained bundle (`harness.dml` + every
 linked file + a manifest); `-l harness.zip` extracts and loads it.

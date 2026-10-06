@@ -42,8 +42,8 @@ and you also have the `read_file`/`write_file`/`list_files`/`delete_file` and
 ## 2. Scripts are files, linked from the harness
 
 Write each program to a file with `write_file`, link it with `script_file/2`,
-and run it with `bash`. The file is **staged** and committed with the turn; no
-DML string escaping is involved.
+and run it with `bash`. The write lands on disk immediately, so you can run the
+script in the same turn; no DML string escaping is involved.
 
 ```prolog
 script_file(count_words, ".dc-repl/scripts/count_words.py").

@@ -193,13 +193,16 @@ describe('prompt mode', () => {
     expect(toolNames).toContain('delete_file');
   });
 
-  it('stages write_file edits and promotes them on commit', async () => {
+  it('write_file lands on disk immediately (the same turn can read it)', async () => {
     backend = new CannedBackend([{
       text: '',
       toolCalls: [
         { name: 'write_file', arguments: { path: 'scripts/hello.txt', content: 'hi-from-meta' } },
-        { name: 'set_result', arguments: { variable: 'DMLCode', value: 'repl_entry(demo).\ndemo :- read_file("scripts/hello.txt", C), output(C).' } },
-        { name: 'set_result', arguments: { variable: 'EntryGoal', value: 'demo' } },
+        // DML file I/O reads the workspace, so this only works when the write is
+        // immediate (it used to be invisible until commit).
+        { name: 'execute', arguments: { goal: 'read_file("scripts/hello.txt", C), output(C)' } },
+        { name: 'set_result', arguments: { variable: 'DMLCode', value: 'kept(1).' } },
+        { name: 'set_result', arguments: { variable: 'EntryGoal', value: '' } },
         { name: 'set_result', arguments: { variable: 'Answer', value: '' } },
         { name: 'finish', arguments: { success: true } },
       ],

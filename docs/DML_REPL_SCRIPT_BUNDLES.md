@@ -17,7 +17,6 @@ A session-owned harness directory, configurable as `repl.dir` (default
 ```text
 <workspace>/.dc-repl/
 ├── scripts/              # linked script files
-├── .staging/             # per-turn staging (discarded on failure/abort)
 └── imported/             # extracted bundles
 ```
 
@@ -54,10 +53,10 @@ plain string argument, never as escaped DML:
 
 | Tool | Behavior |
 |---|---|
-| `read_file(path)` | reads a workspace file (staging overlay first) |
-| `write_file(path, content)` | writes into the turn's staging area |
-| `list_files(path?)` | lists a workspace directory (staging overlay) |
-| `delete_file(path)` | stages a deletion |
+| `read_file(path)` | reads a workspace file |
+| `write_file(path, content)` | writes a workspace file (lands on disk immediately) |
+| `list_files(path?)` | lists a workspace directory |
+| `delete_file(path)` | deletes a workspace file |
 
 Rules:
 
@@ -70,20 +69,19 @@ Rules:
 There are deliberately **no** `write_script`/`list_scripts` tools: scripts are
 just files.
 
-## 4. Transaction
+## 4. File writes
 
-File writes participate in the prompt transaction:
+File writes are **not** buffered. `write_file`/`delete_file` land on disk
+immediately, so the meta task can write a script and run it with `bash` in the
+same turn. (The earlier in-memory staging overlay made `bash` see a stale view,
+so the author would fight the filesystem instead of the problem.)
 
-1. At turn start, a staging dir is created and the harness manifests
-   (module + scripts) are snapshotted.
-2. `write_file`/`delete_file` operate on staging; `read_file`/`list_files` see
-   staging overlaid on the harness.
-3. On commit, the committed source is authoritative: staged files are promoted
-   into the harness, and harness script files no longer referenced by a
-   `script_file/2` fact in the committed module are garbage-collected.
-4. On failure/abort, staging is discarded and the previous harness is intact.
-   The abort safety net writes a **bundle zip** (module + scripts) to a temp
-   file instead of a lone `.dml`.
+The prompt turn is still a transaction for the **module**: the living module is
+snapshotted before the meta task and restored on failure/abort, and the commit
+is replace-by-predicate. On commit, harness script files no longer referenced by
+a `script_file/2` fact are garbage-collected. The abort safety net writes a
+**bundle zip** (module + scripts) to a temp file, so a long debugging turn is
+recoverable — workspace file edits simply stay on disk.
 
 ## 5. Export
 
@@ -136,10 +134,11 @@ to files.
 
 ## 9. Tests
 
-* `write_file` stages; commit promotes; the script runs; export zip; reload in a
-  clean workspace; run again.
+* `write_file` writes immediately and `bash` can run the script in the same
+  turn; export zip; reload in a clean workspace; run again.
 * `.dml` auto-inline round-trips (embedded file materialized on load).
-* A failing turn/abort leaves the previous scripts intact; abort writes a zip.
+* A failing turn/abort restores the module and writes a bundle zip (workspace
+  file edits stay on disk).
 * Frozen: `write_file`/`delete_file` refused, reads and runs still work.
 * Traversal (`../x`, absolute paths) rejected for both file tools and bundle
   entries.
