@@ -745,15 +745,17 @@ DML skills can also be grown interactively in a persistent **living module**.
 - Declare entry points with `repl_entry/1`. There is **no implicit `agent_main`
   requirement** in the REPL; `export --skill` adds a thin `agent_main/0`
   wrapper when a file must also run with `deepclause run` / `/dc-run`.
-- `freeze.` makes the harness read-only; `export <file>.` serializes it into a
-  self-contained `.dml`.
+- `freeze.` makes the harness read-only; `export <file>.` serializes it.
+  `export harness.zip` bundles the module with its linked script files;
+  `export harness.dml` inlines them into one portable file.
 - `ask_user` (meta task) and `input/2` / `exec(ask_user(...))` (harness) ask the
   human. They never block in non-interactive runs (`-g`, piped stdin, CI).
 
-**Self-containment.** Anything a tool needs must live inside the harness. Embed
-Python/JS/shell/SQL as a string fact (`script_body/2`, `python_source/2`,
-`js_source/2`, `shell_source/2`) and materialize it at run time with the MI's
-`write_file/2`. Never leave it only as a side file, because `export` captures
-the module, not stray files.
+**Self-containment.** The harness is the `.dml` **plus the files it links**.
+Write each program to a file (the meta task has `write_file`/`read_file` tools),
+link it with `script_file(Name, Path)`, and run it with `exec(bash(...))`. The
+exporter bundles the linked files, so they travel with the harness. Pass
+untrusted data through files or stdin, never interpolated into the shell
+command.
 
 See [`docs/REPL.md`](../../../../docs/REPL.md) for the full guide.

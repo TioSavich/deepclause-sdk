@@ -45,6 +45,17 @@ export function toPrologTerm(value: unknown): string {
   return 'null';
 }
 
+/** Quote a string as a single-line Prolog string literal. */
+export function quotePrologString(value: string): string {
+  const escaped = value
+    .replace(/\\/g, '\\\\')
+    .replace(/"/g, '\\"')
+    .replace(/\r/g, '\\r')
+    .replace(/\n/g, '\\n')
+    .replace(/\t/g, '\\t');
+  return `"${escaped}"`;
+}
+
 /** Quote a string as a Prolog atom when needed. */
 export function quoteAtom(value: string): string {
   if (/^[a-z][a-zA-Z0-9_]*$/.test(value)) {

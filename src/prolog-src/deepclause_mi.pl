@@ -47,6 +47,8 @@
     repl_try_unfreeze/2,
     export_harness/3,
     export_stats/4,
+    repl_script_files/2,
+    repl_materialize_embedded/1,
     % Prompt mode (M3)
     repl_meta_prompt/2,
     repl_meta_prompt/3,
@@ -1118,7 +1120,6 @@ export_harness_output(SessionId, Header) :-
     ),
     export_directives(SessionId),
     export_tools(SessionId),
-    export_scripts(SessionId),
     export_clauses(SessionId).
 
 export_directives(SessionId) :-
@@ -1139,18 +1140,6 @@ export_tools(SessionId) :-
         ;   true
         )).
 
-export_scripts(SessionId) :-
-    findall(Name/Arity,
-        (   script_predicate_name(Name, Arity),
-            current_predicate(SessionId:Name/Arity)
-        ),
-        Preds0),
-    sort(Preds0, Preds),
-    forall(member(Name/Arity, Preds),
-        (   functor(Head, Name, Arity),
-            forall(clause(SessionId:Head, Body), export_clause(Head, Body))
-        )).
-
 export_clauses(SessionId) :-
     findall(Name/Arity,
         (   current_predicate(SessionId:Name/Arity),
@@ -1169,8 +1158,7 @@ export_user_predicate(SessionId, repl_entry, Arity) :-
     !.
 export_user_predicate(SessionId, Name, Arity) :-
     repl_user_predicate(SessionId, Name, Arity),
-    \+ tool_predicate_name(Name),
-    \+ script_predicate_name(Name, Arity).
+    \+ tool_predicate_name(Name).
 
 %% export_clause(+Head, +Body)
 %% Copy + numbervars the clause so variable names are deterministic (A, B, …),
@@ -1193,19 +1181,12 @@ export_stats(SessionId, Clauses, Tools, Scripts) :-
     findall(Name, session_user_tool_schema(SessionId, Name, _), ToolNames0),
     sort(ToolNames0, ToolNames),
     length(ToolNames, Tools),
-    findall(ScriptName/ScriptArity,
-        (   script_predicate_name(ScriptName, ScriptArity),
-            current_predicate(SessionId:ScriptName/ScriptArity)
-        ),
-        ScriptPreds0),
-    sort(ScriptPreds0, ScriptPreds),
-    findall(Count,
-        (   member(ScriptName2/ScriptArity2, ScriptPreds),
-            functor(ScriptHead, ScriptName2, ScriptArity2),
-            aggregate_all(count, clause(SessionId:ScriptHead, _), Count)
-        ),
-        ScriptCounts),
-    sum_list(ScriptCounts, Scripts).
+    (   current_predicate(SessionId:script_file/2)
+    ->  findall(Path, SessionId:script_file(_, Path), ScriptPaths0),
+        sort(ScriptPaths0, ScriptPaths),
+        length(ScriptPaths, Scripts)
+    ;   Scripts = 0
+    ).
 
 export_clause(Head, Body) :-
     copy_term(Head-Body, NumberedHead-NumberedBody),
@@ -1219,10 +1200,36 @@ export_clause(Head, Body) :-
 tool_predicate_name(tool).
 tool_predicate_name(tool_source).
 
-script_predicate_name(script_body, 2).
-script_predicate_name(python_source, 2).
-script_predicate_name(js_source, 2).
-script_predicate_name(shell_source, 2).
+%% repl_script_files(+SessionId, -Paths)
+%% Workspace-relative files linked by script_file/2 facts; the host bundles them.
+repl_script_files(SessionId, Paths) :-
+    (   current_predicate(SessionId:script_file/2)
+    ->  findall(Path, SessionId:script_file(_, Path), Paths0),
+        sort(Paths0, Paths)
+    ;   Paths = []
+    ).
+
+%% repl_materialize_embedded(+SessionId)
+%% Writes every embedded_file(Path, Content) fact to its workspace path. Used
+%% after loading a single-file .dml export (where linked scripts are inlined).
+repl_materialize_embedded(SessionId) :-
+    (   current_predicate(SessionId:embedded_file/2)
+    ->  forall(SessionId:embedded_file(Path, Content),
+            (   resolve_workspace_path(Path, Full),
+                catch(
+                    (   file_directory_name(Full, Dir),
+                        make_directory_path(Dir),
+                        setup_call_cleanup(
+                            open(Full, write, Stream),
+                            format(Stream, "~s", [Content]),
+                            close(Stream))
+                    ),
+                    _,
+                    true
+                )
+            ))
+    ;   true
+    ).
 
 %% ============================================================
 %% Prompt Mode (M3)
@@ -1440,9 +1447,10 @@ repl_meta_prompt(SessionId, Request, Prompt) :-
             format("- Define facts with head. and rules with 'head :- body.'.~n"),
             format("- Use task(Desc, ...Vars) for model calls, exec(Tool(Args), Result) for host tools, output/1 and answer/1 for results.~n"),
             format("- Prefer CLP(FD)/CLP(Q) for arithmetic constraints. File I/O uses the MI predicates open/3, close/1, read_string/3, write/2, write_file/2, read_file/2, append_file/2 (paths resolve under the workspace).~n"),
-            format("- SELF-CONTAINMENT: any Python/JS/shell/SQL code a tool needs must be embedded in the harness as a string fact (script_body/2, python_source/2, js_source/2, shell_source/2) and materialized at run time with write_file/2. Never leave it only as a side file.~n"),
+            format("- SELF-CONTAINMENT: the harness is the .dml PLUS the files it links. Write each program to a file with write_file (staging is committed with the turn), link it with script_file(Name, Path) (path is workspace-relative), and run it with exec(bash(...)). export bundles the linked files into a .zip, so they travel with the harness.~n"),
             format("- Naming: there is no agent_main requirement. Name predicates descriptively and declare entries with repl_entry/1. To delete a predicate, emit repl_delete(Name/Arity) as a directive fact.~n"),
             format("- READ FIRST: call the listing tool before writing so you build on the current harness.~n"),
+            format("- You have workspace file tools (read_file, write_file, list_files, delete_file) and the bash host tool; use bash to probe what the system has (python3 --version, which curl, ...) before relying on it.~n"),
             format("- CLAUSE ORDER MATTERS: a predicate's clauses are tried in order, so a base case must come before a recursive rule. Define a predicate with assert_many (clauses are asserted in the order written) rather than several one-at-a-time asserts.~n"),
             format("- After changing a predicate, call listing(Name/Arity) to confirm the clauses are present and in the right order.~n"),
             format("- BOUNDED ITERATION: do not loop, assert, or execute unboundedly. Use finite recursion, CLP(FD)/CLP(Q), or plain iteration with a known bound; execute is gas-limited and the turn has a model-call budget. Stop when the task is done.~n"),

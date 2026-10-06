@@ -84,7 +84,6 @@ describe('export and reload', () => {
       'repl_entry(demo).',
       'greet(Name, Out) :- format(string(Out), "hi ~w", [Name]).',
       'tool(greet_tool(Name, Out), "Greet someone") :- greet(Name, Out).',
-      'script_body(body_1, "print(1)").',
       'demo :- greet("world", X), output(X).',
       '',
     ].join('\n'));
@@ -103,7 +102,7 @@ describe('export and reload', () => {
       expect(secondText).toBe(firstText);
       expect(second.clauses).toBe(first.clauses);
       expect(second.tools).toBe(1);
-      expect(second.scripts).toBe(1);
+      expect(second.scripts).toBe(0);
 
       // Prolog strings render quoted (write_term quoted(true)).
       const events = await collect(reloaded.query('greet("bob", X)'));
@@ -139,32 +138,61 @@ describe('export and reload', () => {
     }
   });
 
-  it('keeps an embedded script fact inside the exported harness and runs it after workspace cleanup', async () => {
+  it('bundles linked script files and runs them after workspace cleanup', async () => {
+    await fs.mkdir(path.join(workspace, '.dc-repl/scripts'), { recursive: true });
+    await fs.writeFile(path.join(workspace, '.dc-repl/scripts/writer.txt'), 'hello-from-script', 'utf8');
     await repl.session.loadCode([
-      'script_body(writer, "hello-from-script").',
-      'materialize(Out) :-',
-      '    script_body(writer, Script),',
-      '    write_file("materialized.txt", Script),',
-      '    read_file("materialized.txt", Out).',
-      'repl_entry(materialize_demo).',
-      'materialize_demo :- materialize(X), output(X).',
+      'script_file(writer, ".dc-repl/scripts/writer.txt").',
+      'read_writer(Out) :- script_file(writer, Path), read_file(Path, Out).',
+      'repl_entry(read_writer).',
+      'read_writer :- read_writer(Out), output(Out).',
       '',
     ].join('\n'));
 
-    const exported = await repl.export('selfcontained.dml', { header: 'h' });
-    const text = await fs.readFile(exported.path, 'utf8');
-    expect(text).toContain('script_body(writer,"hello-from-script")');
+    const exported = await repl.export('harness.zip', { header: 'h' });
+    expect(exported.path.endsWith('.zip')).toBe(true);
+    expect(exported.scripts).toBe(1);
 
-    // Load into a clean workspace that has none of the materialized side files.
+    // Reload in a clean workspace (no .dc-repl) from the bundle alone.
     const cleanWorkspace = await fs.mkdtemp(path.join(os.tmpdir(), 'deepclause-repl-clean-'));
     const reloaded = await openRepl(cleanWorkspace);
     try {
-      await fs.copyFile(exported.path, path.join(cleanWorkspace, 'selfcontained.dml'));
-      expect((await reloaded.load('selfcontained.dml')).error).toBeUndefined();
-      const events = await collect(reloaded.query('materialize(X)'));
-      expect(values(events, 'X')).toEqual(['"hello-from-script"']);
-      const sideFile = path.join(cleanWorkspace, 'materialized.txt');
-      expect((await fs.readFile(sideFile, 'utf8'))).toBe('hello-from-script');
+      await fs.copyFile(exported.path, path.join(cleanWorkspace, 'harness.zip'));
+      expect((await reloaded.load('harness.zip')).error).toBeUndefined();
+      expect(await fs.readFile(path.join(cleanWorkspace, '.dc-repl/scripts/writer.txt'), 'utf8'))
+        .toBe('hello-from-script');
+      const events = await collect(reloaded.query('read_writer'));
+      expect(events.filter((event) => event.type === 'output').map((event) => event.content))
+        .toContain('hello-from-script');
+    } finally {
+      await reloaded.dispose();
+      await fs.rm(cleanWorkspace, { recursive: true, force: true });
+    }
+  });
+
+  it('auto-inlines linked files into a single .dml and materializes them on load', async () => {
+    await fs.writeFile(path.join(workspace, 'note.txt'), 'inline-me', 'utf8');
+    await repl.session.loadCode([
+      'script_file(note, "note.txt").',
+      'read_note(Out) :- script_file(note, Path), read_file(Path, Out).',
+      'repl_entry(read_note).',
+      'read_note :- read_note(Out), output(Out).',
+      '',
+    ].join('\n'));
+
+    const exported = await repl.export('harness.dml', { header: 'h' });
+    const text = await fs.readFile(exported.path, 'utf8');
+    expect(text).toContain('embedded_file("note.txt"');
+
+    const cleanWorkspace = await fs.mkdtemp(path.join(os.tmpdir(), 'deepclause-repl-inline-'));
+    const reloaded = await openRepl(cleanWorkspace);
+    try {
+      await fs.copyFile(exported.path, path.join(cleanWorkspace, 'harness.dml'));
+      expect((await reloaded.load('harness.dml')).error).toBeUndefined();
+      expect(await fs.readFile(path.join(cleanWorkspace, 'note.txt'), 'utf8')).toBe('inline-me');
+      const events = await collect(reloaded.query('read_note'));
+      expect(events.filter((event) => event.type === 'output').map((event) => event.content))
+        .toContain('inline-me');
     } finally {
       await reloaded.dispose();
       await fs.rm(cleanWorkspace, { recursive: true, force: true });

@@ -30,6 +30,13 @@ export interface MetaToolContext {
   hostToolsCatalog?: string;
   /** Emit meta-tool lifecycle events so results appear in sequence. */
   onEvent?: (event: DMLEvent) => void;
+  /** Workspace-scoped, staging-aware file tools for the author. */
+  fileTools?: {
+    read: (path: string) => Promise<string | null>;
+    write: (path: string, content: string) => Promise<void>;
+    list: (path?: string) => Promise<string[]>;
+    remove: (path: string) => Promise<void>;
+  };
 }
 
 function quoteString(value: string): string {
@@ -202,6 +209,97 @@ export function createMetaTools(ctx: MetaToolContext): Map<string, ToolDefinitio
     }),
   });
 
+  if (ctx.fileTools) {
+    const fileTools = ctx.fileTools;
+    tools.set('read_file', {
+      description: 'Read a workspace file. Paths are workspace-relative; staged edits are visible. Use this to inspect generated scripts.',
+      parameters: {
+        type: 'object',
+        properties: { path: { type: 'string', description: 'Workspace-relative file path.' } },
+        required: ['path'],
+      },
+      execute: (args) => serialized(async () => {
+        const filePath = String(args.path ?? '');
+        try {
+          const content = await fileTools.read(filePath);
+          if (content === null) {
+            notify('read_file', { path: filePath }, 'failed', 'not found');
+            return { error: `not found: ${filePath}` };
+          }
+          notify('read_file', { path: filePath }, 'completed', `${content.length} chars`);
+          return { path: filePath, content };
+        } catch (error) {
+          notify('read_file', { path: filePath }, 'failed', String(error));
+          return { error: String(error) };
+        }
+      }),
+    });
+
+    tools.set('write_file', {
+      description: 'Write a workspace file (staged until the turn commits). Paths are workspace-relative. Use this to author script files; link them with a script_file/2 fact and run them with exec(bash(...)).',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'Workspace-relative file path.' },
+          content: { type: 'string', description: 'The full file content.' },
+        },
+        required: ['path', 'content'],
+      },
+      execute: (args) => serialized(async () => {
+        const filePath = String(args.path ?? '');
+        const content = String(args.content ?? '');
+        try {
+          await fileTools.write(filePath, content);
+          notify('write_file', { path: filePath }, 'completed', `${content.length} chars`);
+          return { ok: true, path: filePath };
+        } catch (error) {
+          notify('write_file', { path: filePath }, 'failed', String(error));
+          return { ok: false, error: String(error) };
+        }
+      }),
+    });
+
+    tools.set('list_files', {
+      description: 'List a workspace directory (staged files included).',
+      parameters: {
+        type: 'object',
+        properties: { path: { type: 'string', description: 'Workspace-relative directory (default ".").' } },
+        required: [],
+      },
+      execute: (args) => serialized(async () => {
+        const dir = args.path ? String(args.path) : '.';
+        try {
+          const entries = await fileTools.list(dir);
+          notify('list_files', { path: dir }, 'completed', `${entries.length} entries`);
+          return { path: dir, entries };
+        } catch (error) {
+          notify('list_files', { path: dir }, 'failed', String(error));
+          return { error: String(error) };
+        }
+      }),
+    });
+
+    tools.set('delete_file', {
+      description: 'Delete a workspace file (staged until the turn commits).',
+      parameters: {
+        type: 'object',
+        properties: { path: { type: 'string', description: 'Workspace-relative file path.' } },
+        required: ['path'],
+      },
+      execute: (args) => serialized(async () => {
+        const filePath = String(args.path ?? '');
+        try {
+          await fileTools.remove(filePath);
+          notify('delete_file', { path: filePath }, 'completed', 'deleted');
+          return { ok: true };
+        } catch (error) {
+          notify('delete_file', { path: filePath }, 'failed', String(error));
+          return { ok: false, error: String(error) };
+        }
+      }),
+    });
+  }
+
   if (ctx.askUser) {
     tools.set('ask_user', {
       description: 'Ask the human a clarifying question before writing the harness.',
@@ -238,10 +336,11 @@ export function createMetaTools(ctx: MetaToolContext): Map<string, ToolDefinitio
 export function describeMetaTools(): string {
   return [
     '- listing(filter) — read-only list of predicates (all), Name/Arity, tools, or scripts.',
-    '- assert(clause) — parse and assert a single clause/tool/script fact into the scratch harness.',
-    '- assert_many(clauses) — parse and assert a block of clauses in order (prefer this for a whole predicate).',
+    '- assert(clause) / assert_many(clauses) — write DML clauses into the scratch harness.',
     '- retract(clause) — remove matching clauses from the scratch harness.',
     '- execute(goal, limit?) — run a DML goal against the scratch harness; returns bindings/output.',
-    '- ask_user(prompt, options?) — ask the human a clarifying question (non-interactive runs return cancelled).',
+    '- read_file / write_file / list_files / delete_file — workspace-scoped file I/O (staged until commit).',
+    '- ask_user(prompt, options?) — ask the human a clarifying question.',
+    '- bash — the capability host tool, available to probe the environment and run commands.',
   ].join('\n');
 }

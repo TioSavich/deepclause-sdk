@@ -112,10 +112,11 @@ exits the REPL. The same applies to `goal:` queries and `-g` runs.
 ### Meta tools and guard rails
 
 The code-writing meta task is restricted to `listing`, `assert`, `assert_many`,
-`retract`, `execute`, and `ask_user`. The meta prompt embeds the full bundled
-`DML_REFERENCE.md`, a curated set of **idiomatic harness patterns** (a `tool/2`
-wrapping `exec(bash(...))` + a `task(...)` chain + `repl_entry/1`; a
-self-contained `script_body/2` materialized with `write_file/2`; a
+`retract`, `execute`, `read_file`, `write_file`, `list_files`, `delete_file`,
+`ask_user`, plus the capability host tools (**`bash`** by default). The meta
+prompt embeds the full bundled `DML_REFERENCE.md`, a curated set of **idiomatic
+harness patterns** (a `tool/2` wrapping `exec(bash(...))` + a `task(...)` chain
++ `repl_entry/1`; a script file linked with `script_file/2`; a
 `task → task → output/answer` pipeline), the live host tool catalog, and the
 current harness manifest. It also states the catalog pairing rule explicitly:
 **only the `exec(...)` names in the catalog exist — by default just `bash`** —
@@ -177,32 +178,33 @@ predicate directly with `goal: <name>(…)`. `export --skill` adds a thin
 `agent_main/0` wrapper when you need to run the same file with
 `deepclause run` / `/dc-run`.
 
-### Self-containment
+### Self-containment and bundles
 
-The harness is the `.dml` file. If a generated tool needs Python, JavaScript,
-shell, or SQL, the **entire program** is stored in the harness as a string fact
-(`script_body/2`, `python_source/2`, `js_source/2`, `shell_source/2`) and
-materialized at run time with the MI's `write_file/2`. Never leave it only as a
-side file: `export` captures the module, not stray files.
+The harness is the `.dml` **plus the files it links**. Write each program to a
+file (the meta task has `write_file`/`read_file` tools), link it with a
+`script_file/2` fact, and run it with `exec(bash(...))`:
 
 ```prolog
-script_body(url_reader, "\
-import sys, urllib.request, re\n\
-url = open(sys.argv[1]).read().strip()\n\
-html = urllib.request.urlopen(url).read().decode('utf-8', 'replace')\n\
-print(re.sub(r'<[^>]+>', ' ', html))\n").
+script_file(url_reader, ".dc-repl/scripts/url_reader.py").
 
 tool(url_text(Url, Text), "Fetch a URL and strip HTML.") :-
-    script_body(url_reader, Script),
-    write_file(".deepclause.tmp/url_reader.py", Script),
-    write_file(".deepclause.tmp/url.txt", Url),
-    exec(bash(command: "python3 .deepclause.tmp/url_reader.py .deepclause.tmp/url.txt"), Result),
+    script_file(url_reader, Script),
+    write_file(".dc-tmp/url.txt", Url),
+    format(atom(Cmd), "python3 '~w' '.dc-tmp/url.txt'", [Script]),
+    exec(bash(command: Cmd), Result),
     get_dict(stdout, Result, Text).
 ```
 
-Two details are deliberate: the script is materialized with `write_file/2` (a
-DML/Prolog predicate, not a host tool), and the untrusted URL is passed through
-a file rather than interpolated into the shell command.
+The untrusted URL is passed through a file rather than interpolated into the
+shell command. `script_file/2` has no runtime semantics — it tells the exporter
+which files belong to the harness. File edits are staged and committed with the
+turn.
+
+`export harness.zip` writes the self-contained bundle (`harness.dml` + every
+linked file + a manifest); `-l harness.zip` extracts and loads it.
+`export harness.dml` auto-inlines the linked files as `embedded_file/2` facts so
+a single file stays portable. See
+[`DML_REPL_SCRIPT_BUNDLES.md`](./DML_REPL_SCRIPT_BUNDLES.md).
 
 ## Memory: two levels
 
@@ -426,33 +428,35 @@ The SDK also exports `DMLSession`, `createPiBackend`/`createPiAdapter`,
 
 ## Self-hosting demo
 
-A harness whose only tooling is an embedded script survives a clean workspace,
-because the script is part of the `.dml`:
+A harness whose only tooling is a linked script file survives a clean
+workspace, because the file travels inside the bundle:
 
 ```bash
-# 1. Build a harness that embeds its script as a fact and materializes it.
+# 1. Author a harness whose program is a linked file.
+mkdir -p .dc-repl/scripts
+printf 'the script file ran\n' > .dc-repl/scripts/writer.sh
 cat > seed.dml <<'DML'
-script_body(writer, "the embedded script ran").
-materialize(Out) :-
-    script_body(writer, Script),
-    write_file("materialized.txt", Script),
-    read_file("materialized.txt", Out).
-repl_entry(materialize_demo).
-materialize_demo :- materialize(X), output(X).
+script_file(writer, ".dc-repl/scripts/writer.sh").
+repl_entry(run_writer).
+run_writer :-
+    script_file(writer, Script),
+    format(atom(Cmd), "sh '~w'", [Script]),
+    exec(bash(command: Cmd), R),
+    get_dict(stdout, R, Out),
+    output(Out).
 DML
 
-# 2. Export a self-contained harness.
-deepclause repl -l seed.dml --export harness.dml --no-ask -g "true"
+# 2. Export the self-contained bundle.
+deepclause repl -l seed.dml --export harness.zip --no-ask -g "true"
 
-# 3. Delete the side files / start from a clean directory, then run it immutably.
-deepclause repl -l harness.dml -f -g "materialize(X)"
+# 3. Clean the workspace and run from the bundle.
+rm -rf .dc-repl seed.dml
+deepclause repl -l harness.zip -f -g "run_writer"
 ```
 
-The second run prints the embedded script's contents even though
-`seed.dml`/`materialized.txt` are gone: `export` captured the `script_body/2`
-fact, and `freeze` guarantees the loaded harness cannot rewrite itself.
+The second run prints the script's output even though `.dc-repl/` and `seed.dml`
+are gone: `export` bundled the linked file, and `freeze` guarantees the loaded
+harness cannot rewrite itself.
 
 The equivalent automated round-trip lives in
-`tests/repl-freeze-export.test.ts`
-("keeps an embedded script fact inside the exported harness and runs it after
-workspace cleanup").
+`tests/repl-freeze-export.test.ts` (script-file bundle round-trip).

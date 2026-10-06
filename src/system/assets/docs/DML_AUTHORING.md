@@ -7,49 +7,51 @@ Idiomatic shapes for a REPL harness. Keep harnesses small and concrete.
 The HOST TOOL CATALOG above is the complete set of `exec(...)` capability tools.
 Do not invent names — there is no `calculator`, `fetch_url`, `web_search`, or
 `vm_exec` unless the catalog lists it. By default the only capability tool is
-**`bash`**. File I/O is language, not a tool (`write_file/2`, `read_file/2`, …).
+**`bash`**. File I/O is language, not a tool (`write_file/2`, `read_file/2`, …),
+and you also have the `read_file`/`write_file`/`list_files`/`delete_file` and
+`bash` tools directly.
 
-## 2. A bash-backed tool, a task chain, and an entry
+## 2. Scripts are files, linked from the harness
 
-The common shape: define a `tool/2` the model can call during `task(...)`, give
-it a description, and wrap a host `exec(...)` in it.
-
-```prolog
-tool(run_python(Script, Output), "Run a Python snippet and return stdout.") :-
-    write_file(".dc-tmp/snippet.py", Script),
-    exec(bash(command: "python3 .dc-tmp/snippet.py"), Result),
-    get_dict(stdout, Result, Output).
-
-repl_entry(summarize).
-summarize :-
-    task("Write Python that prints the first 10 Fibonacci numbers.", Script),
-    run_python(Script, Output),
-    format(string(Desc), "Summarize this output in one sentence: ~w", [Output]),
-    task(Desc, Summary),
-    output(Summary).
-```
-
-## 3. Self-contained tools: embed the script as a fact
-
-The harness must carry everything it needs. Store the program as a
-`script_body/2` fact and materialize it at run time with `write_file/2`; never
-leave the code only as a side file.
+Write each program to a file with `write_file`, link it with `script_file/2`,
+and run it with `bash`. The file is **staged** and committed with the turn; no
+DML string escaping is involved.
 
 ```prolog
-script_body(word_count, "import sys\nprint(len(open(sys.argv[1]).read().split()))").
+script_file(count_words, ".dc-repl/scripts/count_words.py").
 
-tool(count_words(File, Count), "Count words in a workspace file (embedded script).") :-
-    script_body(word_count, Script),
-    write_file(".dc-tmp/word_count.py", Script),
-    format(atom(Cmd), "python3 .dc-tmp/word_count.py '~w'", [File]),
+tool(count_words(File, Count), "Count words in a workspace file.") :-
+    script_file(count_words, Script),
+    format(atom(Cmd), "python3 '~w' '~w'", [Script, File]),
     exec(bash(command: Cmd), Result),
     get_dict(stdout, Result, Count).
+
+repl_entry(report).
+report :-
+    task("Suggest a short sentence to count. Store it in Sentence.", Sentence),
+    write_file(".dc-tmp/sentence.txt", Sentence),
+    count_words(".dc-tmp/sentence.txt", Count),
+    format(string(Msg), "That sentence has ~w words.", [Count]),
+    answer(Msg).
 ```
 
-Untrusted data (URLs, file contents, user text) goes through a file or
-`stdin`, never interpolated into the shell command string.
+`script_file/2` is just a fact: it tells `export` which files belong to the
+harness. `export harness.zip` bundles the `.dml` plus every linked file;
+`export harness.dml` inlines them so the single file stays portable.
 
-## 4. A multi-step pipeline: task -> task -> output/answer
+Other files are ordinary workspace paths. There is no fixed extension.
+
+```prolog
+tool(list_files(Dir, Listing), "List files in a directory.") :-
+    format(atom(Cmd), "ls -la '~w' 2>/dev/null || echo empty", [Dir]),
+    exec(bash(command: Cmd), Result),
+    get_dict(stdout, Result, Listing).
+```
+
+Untrusted data (URLs, file contents, user text) goes through a file or `stdin`,
+never interpolated into the shell command string.
+
+## 3. A multi-step pipeline: task -> task -> output/answer
 
 Sequence model calls and symbolic steps; use `task/2` for each reasoning step.
 
@@ -63,7 +65,7 @@ report :-
     answer(Msg).
 ```
 
-## 5. Guard rails
+## 4. Guard rails
 
 - Read first: call `listing`.
 - Clause order matters: base case before a recursive rule; assert a whole
@@ -71,5 +73,7 @@ report :-
 - Verify after changing a predicate: `listing(Name/Arity)`.
 - Bounded iteration only: finite recursion, CLP(FD)/CLP(Q), or an explicit
   bound. `execute` is gas-limited.
+- Use `bash` to probe the environment before relying on a program (`python3
+  --version`, `which curl`, …).
 - Declare entries with `repl_entry/1`. Do **not** use `agent_main` unless the
   user asks for a `deepclause run` / `/dc-run` skill.

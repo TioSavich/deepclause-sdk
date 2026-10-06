@@ -9,6 +9,7 @@
 import * as fs from 'fs/promises';
 import * as os from 'os';
 import * as path from 'path';
+import { strFromU8, strToU8, unzipSync, zipSync } from 'fflate';
 
 import { loadProlog, mountWorkspace, type SWIPLModule } from '../prolog/loader.js';
 import { getWorkspaceDocAssetPath } from '../system/assets/index.js';
@@ -20,7 +21,7 @@ import type {
   ToolDefinition,
   ToolPolicy,
 } from '../types.js';
-import { buildParamsTerm, plainValue } from './frames.js';
+import { buildParamsTerm, plainValue, quotePrologString } from './frames.js';
 import {
   applySkillWrapper,
   buildHarnessHeader,
@@ -100,6 +101,12 @@ export class DMLSession {
   private modelCallBudget: number;
   private dmlReference?: string;
   private dmlAuthoring?: string;
+  /**
+   * Per-turn file staging. Maps a workspace-relative path to its new content,
+   * or to null for a staged deletion. Promoted on commit, discarded on failure
+   * so file edits participate in the prompt transaction.
+   */
+  private staging = new Map<string, string | null>();
   private disposed = false;
 
   private constructor(swipl: SWIPLModule, options: DMLSessionOptions) {
@@ -172,18 +179,70 @@ export class DMLSession {
     return error === 'none' ? {} : { error: String(error) };
   }
 
-  /** Load a DML file into the living module (relative paths use the workspace). */
+  /**
+   * Load a DML file (or a `.zip` bundle) into the living module.
+   *
+   * A `.zip` bundle extracts its script files into the workspace and loads
+   * `harness.dml`; a single-file `.dml` export materializes any inlined
+   * `embedded_file/2` facts back into the workspace.
+   */
   async load(file: string): Promise<{ error?: string }> {
     const target = path.isAbsolute(file)
       ? file
       : path.resolve(this.workspacePath ?? process.cwd(), file);
     try {
+      if (target.toLowerCase().endsWith('.zip')) {
+        return await this.loadBundle(target);
+      }
       const code = await fs.readFile(target, 'utf8');
-      return await this.loadCode(code);
+      const result = await this.loadCode(code);
+      if (!result.error) {
+        this.prologQuery(`deepclause_mi:repl_materialize_embedded('${this.sessionId}')`);
+      }
+      return result;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       return { error: `Failed to read ${file}: ${message}` };
     }
+  }
+
+  /** Workspace-relative files linked by `script_file/2` facts. */
+  private scriptFiles(): string[] {
+    const result = this.prologQuery(
+      `deepclause_mi:repl_script_files('${this.sessionId}', Paths)`
+    );
+    const paths = plainValue(result?.Paths);
+    if (!Array.isArray(paths)) return [];
+    return paths.map((value) => String(plainValue(value) ?? '')).filter(Boolean);
+  }
+
+  /** Extract a `.zip` bundle and load its harness.dml. */
+  private async loadBundle(zipPath: string): Promise<{ error?: string }> {
+    const data = new Uint8Array(await fs.readFile(zipPath));
+    const entries = unzipSync(data);
+    const harnessName = Object.keys(entries).find((name) => name === 'harness.dml' || name.endsWith('/harness.dml'));
+    if (!harnessName) {
+      return { error: 'bundle does not contain harness.dml' };
+    }
+
+    const files: Array<{ rel: string; bytes: Uint8Array }> = [];
+    for (const [name, bytes] of Object.entries(entries)) {
+      if (name === harnessName || name === 'manifest.json') continue;
+      const rel = name.replace(/^\.\//, '');
+      if (path.isAbsolute(rel) || rel.split('/').includes('..')) {
+        return { error: `unsafe bundle entry: ${name}` };
+      }
+      this.resolveWorkspacePath(rel);
+      files.push({ rel, bytes });
+    }
+
+    for (const file of files) {
+      const abs = this.resolveWorkspacePath(file.rel);
+      await fs.mkdir(path.dirname(abs), { recursive: true });
+      await fs.writeFile(abs, Buffer.from(file.bytes));
+    }
+
+    return this.loadCode(strFromU8(entries[harnessName]));
   }
 
   /** Read-only listing of the living module (`all`, `Name/Arity`, or `tools`). */
@@ -295,11 +354,13 @@ export class DMLSession {
     if (!text.trim()) {
       return null;
     }
+    // A bundle (module + current scripts, staged edits included) so an aborted
+    // turn's work is fully recoverable, not just the module source.
     const file = path.join(
       os.tmpdir(),
-      `deepclause-repl-${this.sessionId}-${Date.now()}.dml`,
+      `deepclause-repl-${this.sessionId}-${Date.now()}.zip`,
     );
-    await fs.writeFile(file, text, 'utf8');
+    await this.writeBundle(file, text, this.scriptFiles(), `aborted turn: ${reason}`);
     return file;
   }
 
@@ -342,7 +403,13 @@ export class DMLSession {
 
   // ---- Export (M2) ----
 
-  /** Serialize the living module to a self-contained .dml file. */
+  /**
+   * Serialize the living module.
+   *
+   * `.zip` produces the self-contained bundle (harness.dml + linked script
+   * files + manifest.json). Any other extension produces a single `.dml` with
+   * the linked scripts auto-inlined as `embedded_file/2` facts.
+   */
   async export(file?: string, options: HarnessExportOptions = {}): Promise<HarnessExportResult> {
     const header = options.header ?? buildHarnessHeader({
       timestamp: new Date().toISOString(),
@@ -352,16 +419,22 @@ export class DMLSession {
     const result = this.prologQuery(
       `deepclause_mi:export_harness('${this.sessionId}', ${quoteString(header)}, Text)`
     );
-    let text = String(plainValue(result?.Text) ?? '');
+    let moduleText = String(plainValue(result?.Text) ?? '');
     if (options.skill) {
-      text = applySkillWrapper(text);
+      moduleText = applySkillWrapper(moduleText);
     }
 
     const target = path.resolve(
       this.workspacePath ?? process.cwd(),
       file ?? options.path ?? 'harness.dml',
     );
-    await fs.writeFile(target, text, 'utf8');
+    const scripts = this.scriptFiles();
+
+    if (target.toLowerCase().endsWith('.zip')) {
+      await this.writeBundle(target, moduleText, scripts, header);
+    } else {
+      await fs.writeFile(target, await this.inlineScripts(moduleText, scripts), 'utf8');
+    }
 
     const stats = this.prologQuery(
       `deepclause_mi:export_stats('${this.sessionId}', Clauses, Tools, Scripts)`
@@ -372,6 +445,47 @@ export class DMLSession {
       tools: Number(plainValue(stats?.Tools) ?? 0),
       scripts: Number(plainValue(stats?.Scripts) ?? 0),
     };
+  }
+
+  /** Inline linked script files as `embedded_file/2` facts on a single .dml. */
+  private async inlineScripts(moduleText: string, scripts: string[]): Promise<string> {
+    const facts: string[] = [];
+    for (const rel of [...scripts].sort()) {
+      const content = await this.readWorkspaceFile(rel);
+      if (content === null) continue;
+      facts.push(`embedded_file(${quotePrologString(rel)}, ${quotePrologString(content)}).`);
+    }
+    if (facts.length === 0) return moduleText;
+    return `% inlined script files (materialized on load)\n${facts.join('\n')}\n\n${moduleText}`;
+  }
+
+  /** Write a `.zip` bundle: harness.dml + linked files + manifest.json. */
+  private async writeBundle(
+    target: string,
+    moduleText: string,
+    scripts: string[],
+    header: string,
+  ): Promise<void> {
+    const entries: Record<string, Uint8Array> = { 'harness.dml': strToU8(moduleText) };
+    const manifestFiles: Array<{ path: string; bytes: number }> = [];
+    for (const rel of [...scripts].sort()) {
+      const content = await this.readWorkspaceFile(rel);
+      if (content === null) continue;
+      const bytes = strToU8(content);
+      entries[rel] = bytes;
+      manifestFiles.push({ path: rel, bytes: bytes.length });
+    }
+    entries['manifest.json'] = strToU8(`${JSON.stringify({
+      version: 1,
+      header,
+      model: this.model,
+      provider: this.provider,
+      timestamp: new Date().toISOString(),
+      files: manifestFiles,
+    }, null, 2)}\n`);
+
+    await fs.mkdir(path.dirname(target), { recursive: true });
+    await fs.writeFile(target, Buffer.from(zipSync(entries, { level: 6 })));
   }
 
   /**
@@ -461,7 +575,9 @@ export class DMLSession {
 
     try {
       for (let attempt = 0; attempt <= this.repairRounds && !succeeded; attempt += 1) {
-        // 1. Snapshot the living module + bookkeeping + harness memory.
+        // 1. Snapshot the living module + bookkeeping + harness memory. File
+        //    edits are staged per turn and promoted only on a successful commit.
+        this.staging.clear();
         this.prologQuery(`deepclause_mi:repl_snapshot_save('${this.sessionId}')`);
 
         const catalog = this.hostToolsCatalog
@@ -518,6 +634,12 @@ export class DMLSession {
           },
           hostToolsCatalog: this.hostToolsCatalog,
           onEvent: emit,
+          fileTools: {
+            read: (filePath) => this.readWorkspaceFile(filePath),
+            write: async (filePath, content) => { this.writeWorkspaceFile(filePath, content); },
+            list: (dir) => this.listWorkspaceDir(dir),
+            remove: async (filePath) => { this.writeWorkspaceFile(filePath, null); },
+          },
         });
 
         let code = '';
@@ -555,6 +677,7 @@ export class DMLSession {
         // the committed harness (the turn stays atomic).
         if (options.signal?.aborted) {
           const saved = await this.saveCurrentHarness('cancelled');
+          this.staging.clear();
           this.prologQuery(`deepclause_mi:repl_snapshot_restore('${this.sessionId}')`);
           yield {
             type: 'error',
@@ -568,6 +691,7 @@ export class DMLSession {
         this.prologQuery(`deepclause_mi:repl_snapshot_restore('${this.sessionId}')`);
 
         if (metaFailed) {
+          this.staging.clear();
           lastError = `meta task failed: ${metaFailed}`;
           break;
         }
@@ -585,6 +709,7 @@ export class DMLSession {
           break;
         }
         if (!code.trim()) {
+          this.staging.clear();
           lastError = 'the meta task returned no DML source or answer';
           break;
         }
@@ -604,6 +729,9 @@ export class DMLSession {
           continue;
         }
         succeeded = true;
+        // Promote staged script/file edits into the workspace now that the
+        // returned source is the authoritative module.
+        await this.promoteStaging();
 
         // 6. Run the declared entry (EntryGoal or repl_entry/1), if any.
         const start = this.prologQuery(
@@ -677,6 +805,85 @@ export class DMLSession {
       signal: options.signal,
       onModelCall: () => this.reserveModelCall(),
     };
+  }
+
+  // ---- Workspace file tools (meta task) ----
+
+  /** Resolve a workspace-relative path, rejecting traversal/absolute paths. */
+  private resolveWorkspacePath(relPath: string): string {
+    const workspace = path.resolve(this.workspacePath ?? process.cwd());
+    if (path.isAbsolute(relPath)) {
+      throw new Error(`path must be workspace-relative: ${relPath}`);
+    }
+    const abs = path.resolve(workspace, relPath);
+    if (abs !== workspace && !abs.startsWith(workspace + path.sep)) {
+      throw new Error(`path escapes the workspace: ${relPath}`);
+    }
+    return abs;
+  }
+
+  private normalizeRel(relPath: string): string {
+    return path.relative(path.resolve(this.workspacePath ?? process.cwd()), this.resolveWorkspacePath(relPath))
+      .split(path.sep).join('/');
+  }
+
+  /** Read a file, preferring the turn's staging overlay. */
+  private async readWorkspaceFile(relPath: string): Promise<string | null> {
+    const key = this.normalizeRel(relPath);
+    if (this.staging.has(key)) {
+      return this.staging.get(key) ?? null;
+    }
+    try {
+      return await fs.readFile(this.resolveWorkspacePath(key), 'utf8');
+    } catch {
+      return null;
+    }
+  }
+
+  /** Stage a file write (or deletion when content is null). */
+  private writeWorkspaceFile(relPath: string, content: string | null): void {
+    if (this.isFrozen()) {
+      throw new Error('harness is frozen; file writes are disabled');
+    }
+    this.staging.set(this.normalizeRel(relPath), content);
+  }
+
+  /** List a workspace directory, overlaying staged files. */
+  private async listWorkspaceDir(relPath = '.'): Promise<string[]> {
+    const dir = this.normalizeRel(relPath);
+    const prefix = dir === '.' || dir === '' ? '' : `${dir}/`;
+    const entries = new Set<string>();
+    try {
+      for (const entry of await fs.readdir(this.resolveWorkspacePath(dir))) {
+        entries.add(entry);
+      }
+    } catch {
+      // missing dir
+    }
+    for (const [key, value] of this.staging) {
+      if (value === null || !key.startsWith(prefix)) continue;
+      const rest = key.slice(prefix.length);
+      if (rest && !rest.includes('/')) entries.add(rest);
+    }
+    return [...entries].sort();
+  }
+
+  /** Apply staged writes/deletions to the workspace and clear the staging. */
+  private async promoteStaging(): Promise<void> {
+    for (const [rel, content] of this.staging) {
+      const abs = this.resolveWorkspacePath(rel);
+      try {
+        if (content === null) {
+          await fs.rm(abs, { force: true });
+        } else {
+          await fs.mkdir(path.dirname(abs), { recursive: true });
+          await fs.writeFile(abs, content, 'utf8');
+        }
+      } catch {
+        // best effort
+      }
+    }
+    this.staging.clear();
   }
 
   /**

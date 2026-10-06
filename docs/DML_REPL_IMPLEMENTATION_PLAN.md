@@ -88,6 +88,7 @@ Update the `Status` column as work lands. One milestone at a time.
 | **M5** | Backends + host tools (`set-backend pi`, `bash`) | §13.5, §14.4, §14.5 | ✅ |
 | **M6** | `ask_user` at both levels + non-interactive policy | §9.4, §13.6 | ✅ |
 | **M7** | Polish, docs, optional pi embedding | §14.3, §17, §18 | ✅ |
+| **M8** | Script files + harness `.zip` bundles (replaces `script_body/2`) | [`DML_REPL_SCRIPT_BUNDLES.md`](./DML_REPL_SCRIPT_BUNDLES.md) | ✅ |
 
 ---
 

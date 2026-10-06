@@ -987,8 +987,11 @@ export class DMLRunner {
     // code-writing model. For all other frames only DML tool/2 predicates are
     // offered, and registered TS tools remain reachable via exec/2.
     const isMetaFrame = frame?.kind === 'meta';
+    // The meta frame gets the meta tools plus the capability host tools (bash by
+    // default) so the author can probe the environment and run commands. Harness
+    // tool/2 predicates stay hidden. Meta tools win on name collisions.
     const availableTools = isMetaFrame && options.metaTools
-      ? options.metaTools(emitToolEvent)
+      ? new Map([...options.tools, ...options.metaTools(emitToolEvent)])
       : this.buildAgentTools(
         userTools,
         options.toolPolicy,

@@ -12,6 +12,7 @@ import type {
   LLMBackend,
   LLMBackendRequest,
   LLMBackendResponse,
+  ToolDefinition,
 } from '../src/types.js';
 
 interface CannedResponse {
@@ -61,6 +62,16 @@ let workspace: string;
 let repl: HarnessRepl;
 let backend: CannedBackend;
 
+const STUB_BASH: ToolDefinition = {
+  description: 'Run a shell command (stub).',
+  parameters: {
+    type: 'object',
+    properties: { command: { type: 'string' } },
+    required: ['command'],
+  },
+  execute: async () => ({ success: true, stdout: '', stderr: '', exitCode: 0 }),
+};
+
 async function openRepl(): Promise<HarnessRepl> {
   return createHarnessRepl({
     workspacePath: workspace,
@@ -68,6 +79,7 @@ async function openRepl(): Promise<HarnessRepl> {
     provider: 'openai',
     streaming: true,
     llmBackend: backend,
+    tools: new Map([['bash', STUB_BASH]]),
   });
 }
 
@@ -133,8 +145,8 @@ describe('prompt mode', () => {
     expect(promptText).toContain('DML LANGUAGE REFERENCE');
     expect(promptText).toContain('# DML Language Reference');
     expect(promptText).toContain('IDIOMATIC HARNESS PATTERNS');
-    expect(promptText).toContain('tool(run_python(Script, Output)');
-    expect(promptText).toContain('script_body(word_count');
+    expect(promptText).toContain('script_file(');
+    expect(promptText).toContain('tool(count_words(File, Count)');
     expect(promptText).toContain('BOUNDED ITERATION');
     expect(promptText).toContain('CLAUSE ORDER MATTERS');
   });
@@ -159,6 +171,60 @@ describe('prompt mode', () => {
     expect(persisted).not.toContain('You are the DeepClause REPL harness author');
     expect(persisted).toContain('first request alpha');
     expect(persisted).toContain('committed p1/1');
+  });
+
+  it('offers bash plus the file meta tools to the meta task', async () => {
+    backend = new CannedBackend([finalResponse('kept(1).', '')]);
+    repl = await openRepl();
+    await collect(repl.prompt('anything'));
+
+    const toolNames = (backend.calls[0].tools ?? []).map((tool) => tool.name);
+    expect(toolNames).toContain('bash');
+    expect(toolNames).toContain('listing');
+    expect(toolNames).toContain('write_file');
+    expect(toolNames).toContain('read_file');
+    expect(toolNames).toContain('list_files');
+    expect(toolNames).toContain('delete_file');
+  });
+
+  it('stages write_file edits and promotes them on commit', async () => {
+    backend = new CannedBackend([{
+      text: '',
+      toolCalls: [
+        { name: 'write_file', arguments: { path: 'scripts/hello.txt', content: 'hi-from-meta' } },
+        { name: 'set_result', arguments: { variable: 'DMLCode', value: 'repl_entry(demo).\ndemo :- read_file("scripts/hello.txt", C), output(C).' } },
+        { name: 'set_result', arguments: { variable: 'EntryGoal', value: 'demo' } },
+        { name: 'set_result', arguments: { variable: 'Answer', value: '' } },
+        { name: 'finish', arguments: { success: true } },
+      ],
+    }]);
+    repl = await openRepl();
+
+    const events = await collect(repl.prompt('write a script file'));
+    expect(events.some((event) => event.type === 'error')).toBe(false);
+    expect(await fs.readFile(path.join(workspace, 'scripts/hello.txt'), 'utf8')).toBe('hi-from-meta');
+    expect(events.some((event) => event.type === 'output' && event.content === 'hi-from-meta')).toBe(true);
+  });
+
+  it('rejects file writes that escape the workspace', async () => {
+    backend = new CannedBackend([{
+      text: '',
+      toolCalls: [
+        { name: 'write_file', arguments: { path: '../escape.txt', content: 'nope' } },
+        { name: 'set_result', arguments: { variable: 'DMLCode', value: 'kept(1).' } },
+        { name: 'set_result', arguments: { variable: 'EntryGoal', value: '' } },
+        { name: 'set_result', arguments: { variable: 'Answer', value: '' } },
+        { name: 'finish', arguments: { success: true } },
+      ],
+    }]);
+    repl = await openRepl();
+
+    const events = await collect(repl.prompt('try to escape'));
+    expect(events.some((event) => (
+      event.type === 'tool_call' && event.toolName === 'write_file' && event.toolState === 'failed'
+    ))).toBe(true);
+    const escaped = path.join(path.dirname(workspace), 'escape.txt');
+    expect(await fs.access(escaped).then(() => true).catch(() => false)).toBe(false);
   });
 
   it('extracts and commits a fenced dml block', async () => {
@@ -266,8 +332,10 @@ describe('prompt mode', () => {
     // ...but preserved in the temp file.
     const savedPath = abortEvent!.content!.match(/saved to (.+)$/)?.[1]?.trim();
     expect(savedPath).toBeTruthy();
-    const text = await fs.readFile(savedPath!, 'utf8');
-    expect(text).toContain('scratch_from_abort');
+    expect(savedPath!.endsWith('.zip')).toBe(true);
+    const { unzipSync, strFromU8 } = await import('fflate');
+    const entries = unzipSync(new Uint8Array(await fs.readFile(savedPath!)));
+    expect(strFromU8(entries['harness.dml'])).toContain('scratch_from_abort');
     await fs.rm(savedPath!, { force: true });
   });
 
