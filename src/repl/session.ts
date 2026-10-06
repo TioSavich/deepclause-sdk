@@ -47,7 +47,7 @@ export interface DMLSessionOptions {
   repairRounds?: number;
   /** Maximum nested frame depth (meta -> execute -> object task). Default 3. */
   maxDepth?: number;
-  /** Maximum model calls across all frames for one turn (default 24; 0 = unlimited). */
+  /** Maximum model calls across all frames for one turn (default 100; 0 = unlimited). */
   maxModelCalls?: number;
   /** Host tool catalog text injected into the meta prompt (M5). */
   hostToolsCatalog?: string;
@@ -94,6 +94,8 @@ export class DMLSession {
   private frameDepth = 0;
   /** Model calls made in the current turn (shared across all frames). */
   private modelCallsThisTurn = 0;
+  /** Current budget; grows by maxModelCalls when the user extends it. */
+  private modelCallBudget: number;
   private disposed = false;
 
   private constructor(swipl: SWIPLModule, options: DMLSessionOptions) {
@@ -111,7 +113,8 @@ export class DMLSession {
       ?? undefined;
     this.repairRounds = options.repairRounds ?? 1;
     this.maxDepth = options.maxDepth ?? 3;
-    this.maxModelCalls = options.maxModelCalls ?? 24;
+    this.maxModelCalls = options.maxModelCalls ?? 100;
+    this.modelCallBudget = this.maxModelCalls;
     this.hostToolsCatalog = options.hostToolsCatalog;
     this.runner = new DMLRunner(swipl, options.runnerOptions);
     this.runner.bindSession(this.sessionId);
@@ -203,6 +206,7 @@ export class DMLSession {
       return;
     }
     this.modelCallsThisTurn = 0;
+    this.modelCallBudget = this.maxModelCalls;
     const frameKind = options.frameKind ?? 'object';
     const start = this.prologQuery(
       `deepclause_mi:repl_initial_state('${this.sessionId}', ${frameKind}, State), `
@@ -307,7 +311,11 @@ export class DMLSession {
    * Used by the meta `execute` tool. The child frame uses the living scratch
    * module and may itself call task() (RLM-style recursion).
    */
-  async executeGoal(goal: string, limit = 5): Promise<ExecuteResult> {
+  async executeGoal(
+    goal: string,
+    limit = 5,
+    onEvent?: (event: DMLEvent) => void,
+  ): Promise<ExecuteResult> {
     const childDepth = this.frameDepth + 1;
     if (childDepth > this.maxDepth) {
       return {
@@ -337,6 +345,7 @@ export class DMLSession {
     this.frameDepth = childDepth;
     try {
       for await (const event of this.runner.runFrame(frame.id, this.buildRunOptions({}))) {
+        onEvent?.(event);
         if (event.type === 'solution' && solutions.length < limit) {
           solutions.push(event.solution?.bindings ?? []);
         } else if (event.type === 'output' || event.type === 'answer') {
@@ -375,6 +384,7 @@ export class DMLSession {
 
     const runOptions = this.buildRunOptions(options);
     this.modelCallsThisTurn = 0;
+    this.modelCallBudget = this.maxModelCalls;
     let succeeded = false;
     let lastError: string | undefined;
     let currentRequest = request;
@@ -415,16 +425,19 @@ export class DMLSession {
 
         // 3. Run the meta task, streaming its events.
         const metaFrame = this.runner.registerFrame(String(plainValue(meta.FrameId)), 'meta', 0);
-        const metaTools = createMetaTools({
+        // Build meta tools per agent-loop so nested `execute` output streams
+        // into the meta frame's event sequence.
+        const metaTools = (emit: (event: DMLEvent) => void) => createMetaTools({
           sessionId: this.sessionId,
           prologQuery: (goal) => this.prologQuery(goal),
           isFrozen: () => this.isFrozen(),
-          executeGoal: (goal, limit) => this.executeGoal(goal, limit),
+          executeGoal: (goal, limit) => this.executeGoal(goal, limit, emit),
           askUser: async (prompt, choices) => {
             const answer = await this.requireInput(prompt, choices);
             return answer === undefined ? { cancelled: true } : { answer };
           },
           hostToolsCatalog: this.hostToolsCatalog,
+          onEvent: emit,
         });
 
         let code = '';
@@ -560,13 +573,35 @@ export class DMLSession {
     return this.inputHandler(prompt, options);
   }
 
-  /** Reserve one model call for the current turn; false when exhausted. */
-  private reserveModelCall(): boolean {
-    if (this.maxModelCalls > 0 && this.modelCallsThisTurn >= this.maxModelCalls) {
-      return false;
+  /**
+   * Reserve one model call for the current turn. When the budget is reached,
+   * the human is asked whether to extend it by another `maxModelCalls`
+   * (interactive runs); autonomous runs abort. `0` means unlimited.
+   */
+  private async reserveModelCall(): Promise<boolean> {
+    if (this.maxModelCalls <= 0) {
+      this.modelCallsThisTurn += 1;
+      return true;
+    }
+    if (this.modelCallsThisTurn >= this.modelCallBudget) {
+      const extend = await this.askBudgetExtension();
+      if (!extend) {
+        return false;
+      }
+      this.modelCallBudget += this.maxModelCalls;
     }
     this.modelCallsThisTurn += 1;
     return true;
+  }
+
+  private async askBudgetExtension(): Promise<boolean> {
+    if (!this.inputHandler) {
+      return false;
+    }
+    const answer = await this.inputHandler(
+      `Max model-call budget reached (${this.modelCallBudget}). Continue for another ${this.maxModelCalls} calls? (yes/no)`,
+    );
+    return /^(y|yes)$/i.test((answer ?? '').trim());
   }
 
   private prologQuery(goal: string): Record<string, unknown> | null {

@@ -268,7 +268,7 @@ deepclause repl [options]
       --interactive-input  allow input requests in non-TTY/--json mode
       --gas-limit <n>      per-frame step limit
       --depth <n>          maximum nested frame depth (default 3)
-      --max-model-calls <n> maximum model calls per turn (default 24)
+      --max-model-calls <n> maximum model calls per turn (default 100; 0 = unlimited)
       --param key=value    session parameter (repeatable)
       --verbose / --debug
       --no-color
@@ -283,6 +283,24 @@ In JSON mode each runtime event is emitted as one JSON object:
 {"type":"tool_call","toolName":"listing","toolArgs":{"filter":"all"}}
 {"type":"solution","solution":{"bindings":[{"name":"F","value":"120"}],"deterministic":false}}
 {"type":"answer","content":"120"}
+```
+
+### Budgets
+
+A prompt turn is bounded by `--max-model-calls` (default 100) and `--depth`
+(default 3 nested frames). When the model-call budget is exhausted the turn
+aborts with `ERROR: model-call budget exhausted for this turn`, the harness is
+left unchanged, and the counter resets on the next prompt.
+
+```bash
+deepclause repl --max-model-calls 100        # raise it for a turn
+deepclause repl --max-model-calls 0          # unlimited
+```
+
+Or persistently in `.deepclause/config.json` (`0` = unlimited):
+
+```json
+"repl": { "maxModelCalls": 100 }
 ```
 
 ### Scripted sessions
@@ -304,7 +322,7 @@ block.
   "locked": false,
   "editMode": "transactional",
   "maxDepth": 3,
-  "maxModelCalls": 24,
+  "maxModelCalls": 100,
   "writeDepth": 20,
   "repairRounds": 1,
   "promptPrefix": "dml> ",

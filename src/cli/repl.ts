@@ -577,7 +577,7 @@ export function registerReplCommand(program: Command): void {
     .option('--temperature <number>', 'override temperature (0.0-2.0)', parseFloat)
     .option('--gas-limit <number>', 'per-frame step limit', parseInt)
     .option('--depth <number>', 'maximum nested frame depth (default 3)', parseInt)
-    .option('--max-model-calls <number>', 'maximum model calls per turn (default 24)', parseInt)
+    .option('--max-model-calls <number>', 'maximum model calls per turn (default 100)', parseInt)
     .option('--backend <kind>', 'override the configured backend (env|pi)')
     .option('--tools <list>', 'comma-separated capability host tools (default: bash)')
     .option('--no-tools', 'register no capability host tools')

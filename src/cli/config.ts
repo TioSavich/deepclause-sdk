@@ -131,7 +131,8 @@ const ReplConfigSchema = z.object({
   locked: z.boolean().optional().default(false),
   editMode: z.enum(['transactional', 'direct']).optional().default('transactional'),
   maxDepth: z.number().int().positive().optional().default(3),
-  maxModelCalls: z.number().int().positive().optional().default(24),
+  // 0 means unlimited.
+  maxModelCalls: z.number().int().nonnegative().optional().default(100),
   writeDepth: z.number().int().positive().optional().default(20),
   repairRounds: z.number().int().nonnegative().optional().default(1),
   promptPrefix: z.string().optional().default('dml> '),
@@ -222,7 +223,7 @@ const DEFAULT_CONFIG: Config = {
     locked: false,
     editMode: 'transactional',
     maxDepth: 3,
-    maxModelCalls: 24,
+    maxModelCalls: 100,
     writeDepth: 20,
     repairRounds: 1,
     promptPrefix: 'dml> ',

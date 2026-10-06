@@ -31,11 +31,16 @@ function formatArgs(args: Record<string, unknown> | undefined): string {
     return '';
   }
   const parts = Object.entries(args).map(([key, value]) => {
-    const text = typeof value === 'string' ? value : JSON.stringify(value);
+    const text = (typeof value === 'string' ? value : JSON.stringify(value)).replace(/\s+/g, ' ').trim();
     const compact = text.length > 60 ? `${text.slice(0, 57)}…` : text;
     return `${key}=${compact}`;
   });
   return `(${parts.join(', ')})`;
+}
+
+function truncate(text: string, max: number): string {
+  const singleLine = text.replace(/\s+/g, ' ').trim();
+  return singleLine.length > max ? `${singleLine.slice(0, max - 1)}…` : singleLine;
 }
 
 const ANSI = {
@@ -61,6 +66,9 @@ export class ReplRenderer {
   private readonly verbose: boolean;
   private readonly sink: (text: string) => void;
   private readonly errorSink: (text: string) => void;
+  /** Frame key of the currently open streamed-text region, or null. */
+  private lastStreamFrame: string | null = null;
+  private atLineStart = true;
 
   constructor(options: ReplRendererOptions = {}) {
     this.mode = options.mode ?? 'plain';
@@ -78,6 +86,8 @@ export class ReplRenderer {
   /** Write a line to the normal sink. */
   writeLine(text = ''): void {
     this.sink(`${text}\n`);
+    this.lastStreamFrame = null;
+    this.atLineStart = true;
   }
 
   writeErrorLine(text: string): void {
@@ -91,49 +101,50 @@ export class ReplRenderer {
       return;
     }
 
+    if (event.type !== 'stream' && event.type !== 'reasoning') {
+      this.flushStream();
+    }
+    const prefix = this.frameLabel(event);
+
     switch (event.type) {
       case 'solution':
-        this.solution(event.solution?.bindings ?? []);
+        this.solution(event.solution?.bindings ?? [], undefined, prefix);
         break;
       case 'output':
-        this.writeLine(`${this.indentFor(event)}${event.content ?? ''}`);
+        this.writeLine(`${prefix}${event.content ?? ''}`);
         break;
       case 'answer':
-        this.writeLine(`${this.indentFor(event)}${this.paint(event.content ?? '', ANSI.bold)}`);
+        this.writeLine(`${prefix}${this.paint(event.content ?? '', ANSI.bold)}`);
         break;
       case 'stream':
-        this.sink(event.content ?? '');
+        this.writeStream(event, event.content ?? '', 'text');
         break;
       case 'reasoning':
         if (event.content) {
-          this.sink(this.paint(event.content, ANSI.dim));
+          this.writeStream(event, this.paint(event.content, ANSI.dim), 'reasoning');
         }
         break;
       case 'log':
         if (this.verbose) {
-          this.writeLine(this.paint(`${this.indentFor(event)}[log] ${event.content ?? ''}`, ANSI.dim));
+          this.writeLine(this.paint(`${prefix}[log] ${event.content ?? ''}`, ANSI.dim));
         }
         break;
       case 'task_activity':
-        if (this.verbose && event.taskState && event.taskDescription) {
-          this.writeLine(this.paint(`${this.indentFor(event)}[task ${event.taskState}] ${event.taskDescription}`, ANSI.dim));
-        }
+        this.renderTaskActivity(event, prefix);
         break;
       case 'tool_call':
-        if (event.toolName) {
-          this.writeLine(this.paint(`${this.indentFor(event)}  ⚙ ${event.toolName}${formatArgs(event.toolArgs)}`, ANSI.dim));
-        }
+        this.renderToolCall(event, prefix);
         break;
       case 'input_required':
-        this.writeLine(this.paint(`${this.indentFor(event)}? ${event.prompt ?? ''}`, ANSI.bold));
+        this.writeLine(this.paint(`${prefix}? ${event.prompt ?? ''}`, ANSI.bold));
         break;
       case 'error':
-        this.writeErrorLine(this.paint(`${this.indentFor(event)}ERROR: ${event.content ?? ''}`, ANSI.red));
+        this.writeErrorLine(this.paint(`${prefix}ERROR: ${event.content ?? ''}`, ANSI.red));
         break;
       case 'usage':
         if (this.verbose && event.usage) {
           this.writeLine(this.paint(
-            `[usage] in=${event.usage.inputTokens} out=${event.usage.outputTokens} total=${event.usage.totalTokens}`,
+            `${prefix}[usage] in=${event.usage.inputTokens} out=${event.usage.outputTokens} total=${event.usage.totalTokens}`,
             ANSI.dim,
           ));
         }
@@ -146,33 +157,95 @@ export class ReplRenderer {
     }
   }
 
+  private renderTaskActivity(event: DMLEvent, prefix: string): void {
+    const state = event.taskState ?? 'started';
+    if (state === 'started') {
+      this.writeLine(this.paint(`${prefix}⠋ ${this.describeTask(event)}`, ANSI.dim));
+      return;
+    }
+    const ok = state === 'completed';
+    this.writeLine(this.paint(`${prefix}${ok ? '✔' : '✖'} task ${ok ? 'done' : 'failed'}`, ok ? ANSI.dim : ANSI.red));
+  }
+
+  private describeTask(event: DMLEvent): string {
+    if (event.frameKind === 'meta') {
+      return 'meta task (writing the harness)';
+    }
+    const description = (event.taskDescription ?? '').replace(/\s+/g, ' ').trim();
+    if (!description) return 'task';
+    return description.length > 72 ? `${description.slice(0, 69)}…` : description;
+  }
+
+  private renderToolCall(event: DMLEvent, prefix: string): void {
+    const name = event.toolName ?? 'tool';
+    const args = formatArgs(event.toolArgs);
+    const state = event.toolState;
+    if (state === 'completed') {
+      const summary = event.toolSummary ? ` — ${truncate(event.toolSummary, 80)}` : '';
+      this.writeLine(this.paint(`${prefix}  ✔ ${name}${args}${summary}`, ANSI.dim));
+    } else if (state === 'failed') {
+      const reason = event.toolError ?? event.toolSummary ?? 'failed';
+      this.writeLine(this.paint(`${prefix}  ✖ ${name}${args} — ${truncate(reason, 120)}`, ANSI.red));
+    } else {
+      this.writeLine(this.paint(`${prefix}  ⚙ ${name}${args}`, ANSI.dim));
+    }
+  }
+
+  /** Write a streamed chunk, prefixing it with its frame label on first use. */
+  private writeStream(event: DMLEvent, chunk: string, kind: 'text' | 'reasoning'): void {
+    // Include the kind so switching reasoning <-> text starts a fresh region.
+    const key = `${event.frameKind ?? 'plain'}@${event.depth ?? 0}:${kind}`;
+    if (key !== this.lastStreamFrame) {
+      if (!this.atLineStart) {
+        this.sink('\n');
+      }
+      const prefix = this.frameLabel(event);
+      if (prefix) this.sink(prefix);
+      this.lastStreamFrame = key;
+      this.atLineStart = false;
+    }
+    this.sink(chunk);
+    this.atLineStart = chunk.endsWith('\n');
+  }
+
+  /** Close an open streamed-text region before writing a line. */
+  private flushStream(): void {
+    if (this.lastStreamFrame !== null) {
+      if (!this.atLineStart) this.sink('\n');
+      this.lastStreamFrame = null;
+      this.atLineStart = true;
+    }
+  }
+
+  /** `meta │ `, `run │ `, or indented `nested │ ` for a frame's events. */
+  private frameLabel(event: DMLEvent): string {
+    if (!event.frameKind) return '';
+    const label = event.frameKind === 'object' ? 'run' : event.frameKind;
+    return `${'  '.repeat(event.depth ?? 0)}${label} │ `;
+  }
+
   /**
    * Render one solution's bindings. `terminator` is appended after the last
    * binding line ('.' for the final answer, ' ' while more may follow).
    */
-  solution(bindings: DMLBinding[], terminator?: string): void {
+  solution(bindings: DMLBinding[], terminator?: string, prefix = ''): void {
     if (this.mode === 'json') {
       this.sink(`${JSON.stringify({ type: 'solution', solution: { bindings, deterministic: false } })}\n`);
       return;
     }
+    this.flushStream();
     if (bindings.length === 0) {
-      this.writeLine(`true${terminator ?? '.'}`);
+      this.writeLine(`${prefix}true${terminator ?? '.'}`);
       return;
     }
     const lines = bindings.map((binding) => {
       const name = this.paint(binding.name, ANSI.cyan);
-      return `${name} = ${binding.value}`;
+      return `${prefix}${name} = ${binding.value}`;
     });
     const last = lines.length - 1;
     lines.forEach((line, index) => {
       this.writeLine(index === last ? `${line}${terminator ?? '.'}` : line);
     });
-  }
-
-  /** Indent nested frame activity (execute children run at depth >= 1). */
-  private indentFor(event: DMLEvent): string {
-    const depth = event.depth ?? 0;
-    return depth > 0 ? '  '.repeat(depth) : '';
   }
 
   private paint(text: string, code: string): string {

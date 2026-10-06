@@ -265,4 +265,41 @@ describe('budgets', () => {
     expect(events.some((event) => event.type === 'error' && event.content?.includes('budget'))).toBe(true);
     expect(hasSolution(await collect(repl.query('kept(_)')))).toBe(false);
   });
+
+  it('asks to extend the model-call budget and continues when the user agrees', async () => {
+    const prompts: string[] = [];
+    backend = new CannedBackend((_request, index) => {
+      if (index === 0) {
+        return { text: '', toolCalls: [{ name: 'listing', arguments: { filter: 'all' } }] };
+      }
+      return finalResponse('kept(1).', '');
+    });
+    repl = await openRepl({
+      maxModelCalls: 1,
+      onInput: async (prompt: string) => {
+        prompts.push(prompt);
+        return 'yes';
+      },
+    });
+
+    const events = await collect(repl.prompt('extend the budget'));
+    expect(events.some((event) => event.type === 'error')).toBe(false);
+    expect(prompts.some((prompt) => /budget/.test(prompt))).toBe(true);
+    expect(hasSolution(await collect(repl.query('kept(_)')))).toBe(true);
+  });
+
+  it('aborts when the user declines to extend the budget', async () => {
+    let calls = 0;
+    backend = new CannedBackend(() => {
+      calls += 1;
+      if (calls === 1) {
+        return { text: '', toolCalls: [{ name: 'listing', arguments: { filter: 'all' } }] };
+      }
+      return finalResponse('kept(1).', '');
+    });
+    repl = await openRepl({ maxModelCalls: 1, onInput: async () => 'no' });
+
+    const events = await collect(repl.prompt('decline the budget'));
+    expect(events.some((event) => event.type === 'error' && event.content?.includes('budget'))).toBe(true);
+  });
 });

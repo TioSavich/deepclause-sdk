@@ -8,7 +8,7 @@
  * M3 ships listing/assert/retract/execute; M6 adds ask_user.
  */
 
-import type { ToolDefinition } from '../types.js';
+import type { DMLEvent, ToolDefinition } from '../types.js';
 import { plainValue } from './frames.js';
 
 export interface ExecuteResult {
@@ -28,6 +28,8 @@ export interface MetaToolContext {
   askUser?: (prompt: string, options?: string[]) => Promise<{ answer: string } | { cancelled: true }>;
   /** Catalog of capability host tools, returned by listing(tools). */
   hostToolsCatalog?: string;
+  /** Emit meta-tool lifecycle events so results appear in sequence. */
+  onEvent?: (event: DMLEvent) => void;
 }
 
 function quoteString(value: string): string {
@@ -59,6 +61,15 @@ export function createMetaTools(ctx: MetaToolContext): Map<string, ToolDefinitio
     return run;
   };
 
+  const notify = (
+    toolName: string,
+    toolArgs: Record<string, unknown>,
+    state: 'completed' | 'failed',
+    toolSummary: string,
+  ): void => {
+    ctx.onEvent?.({ type: 'tool_call', toolName, toolArgs, toolState: state, toolSummary });
+  };
+
   tools.set('listing', {
     description: 'Read-only listing of the living harness: predicates, a Name/Arity, tools, or scripts.',
     parameters: {
@@ -80,7 +91,9 @@ export function createMetaTools(ctx: MetaToolContext): Map<string, ToolDefinitio
         `deepclause_mi:repl_listing('${ctx.sessionId}', ${listingFilterTerm(filter)}, Text)`
       );
       const text = plainValue(result?.Text);
-      return textResult(typeof text === 'string' ? text : '');
+      const output = typeof text === 'string' ? text : '';
+      notify('listing', { filter }, 'completed', `${output.trim() ? output.trim().split('\n').length : 0} line(s)`);
+      return textResult(output);
     }),
   });
 
@@ -103,8 +116,10 @@ export function createMetaTools(ctx: MetaToolContext): Map<string, ToolDefinitio
       );
       const outcome = plainValue(result?.Result);
       if (outcome === 'ok') {
+        notify('assert', { clause }, 'completed', 'ok');
         return { ok: true };
       }
+      notify('assert', { clause }, 'failed', String(outcome));
       return { ok: false, error: String(outcome) };
     }),
   });
@@ -128,8 +143,10 @@ export function createMetaTools(ctx: MetaToolContext): Map<string, ToolDefinitio
       );
       const outcome = plainValue(result?.Result);
       if (outcome === 'ok') {
+        notify('retract', { clause }, 'completed', 'ok');
         return { ok: true };
       }
+      notify('retract', { clause }, 'failed', String(outcome));
       return { ok: false, error: String(outcome) };
     }),
   });
@@ -147,7 +164,14 @@ export function createMetaTools(ctx: MetaToolContext): Map<string, ToolDefinitio
     execute: (args) => serialized(async () => {
       const goal = String(args.goal ?? '');
       const limit = typeof args.limit === 'number' ? args.limit : undefined;
-      return ctx.executeGoal(goal, limit);
+      const result = await ctx.executeGoal(goal, limit);
+      notify(
+        'execute',
+        { goal },
+        result.error ? 'failed' : 'completed',
+        result.error ?? `${result.solutions.length} solution(s)`,
+      );
+      return result;
     }),
   });
 
@@ -165,7 +189,14 @@ export function createMetaTools(ctx: MetaToolContext): Map<string, ToolDefinitio
       execute: (args) => serialized(async () => {
         const prompt = String(args.prompt ?? '');
         const options = Array.isArray(args.options) ? args.options.map(String) : undefined;
-        return ctx.askUser!(prompt, options);
+        const result = await ctx.askUser!(prompt, options);
+        notify(
+          'ask_user',
+          { prompt },
+          'completed',
+          'cancelled' in result ? 'cancelled' : result.answer,
+        );
+        return result;
       }),
     });
   }

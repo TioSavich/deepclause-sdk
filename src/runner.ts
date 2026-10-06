@@ -237,14 +237,16 @@ export interface InternalRunOptions {
   /**
    * Host-backed meta tools for `meta` frames. When set, a meta frame's agent
    * tool set is replaced with exactly these tools (the harness's DML tools are
-   * hidden from the code-writing model).
+   * hidden from the code-writing model). The factory receives an `emit`
+   * callback so nested work (e.g. the `execute` tool) can stream its events
+   * into the meta frame's output in sequence.
    */
-  metaTools?: Map<string, ToolDefinition>;
+  metaTools?: (emit: (event: DMLEvent) => void) => Map<string, ToolDefinition>;
   /**
-   * Called before each agent loop (model call). Return false to abort the
-   * turn when a budget is exhausted.
+   * Called before each model call. Return false to abort the turn when a
+   * budget is exhausted; may be async (e.g. to ask the user to continue).
    */
-  onModelCall?: () => boolean;
+  onModelCall?: () => boolean | Promise<boolean>;
 }
 
 interface RunnerExecutionContext {
@@ -252,7 +254,7 @@ interface RunnerExecutionContext {
   signal?: AbortSignal;
   compaction?: CompactionOptions;
   toolPolicy?: ToolPolicy | null;
-  onModelCall?: () => boolean;
+  onModelCall?: () => boolean | Promise<boolean>;
 }
 
 interface ParsedJudgment {
@@ -419,11 +421,13 @@ export class DMLRunner {
    */
   private async *stepLoop(frame: Frame, options: InternalRunOptions): AsyncGenerator<DMLEvent> {
     for await (const event of this.stepLoopInner(frame, options)) {
+      // Preserve frame metadata already attached by a nested frame; otherwise
+      // stamp this frame so the renderer can attribute output correctly.
       yield {
         ...event,
-        frameId: frame.id,
-        depth: frame.depth,
-        frameKind: frame.kind,
+        frameId: event.frameId ?? frame.id,
+        depth: event.depth ?? frame.depth,
+        frameKind: event.frameKind ?? frame.kind,
       };
     }
   }
@@ -485,13 +489,19 @@ export class DMLRunner {
         case 'request_agent_loop':
           // Run agent loop for task() predicate. The frame kind decides the
           // tool set: `meta` frames get the host meta tools and hide the
-          // harness's own DML tools (proposal §9.2).
-          yield* this.handleAgentLoop(
-            step.payload,
-            '',
-            options,
-            frame
-          );
+          // harness's own DML tools (proposal §9.2). Budget exhaustion (and any
+          // other agent-loop error) is surfaced as an error event.
+          try {
+            yield* this.handleAgentLoop(
+              step.payload,
+              '',
+              options,
+              frame
+            );
+          } catch (error) {
+            yield { type: 'error', content: error instanceof Error ? error.message : String(error) };
+            return;
+          }
           break;
 
         case 'meta_result': {
@@ -858,12 +868,8 @@ export class DMLRunner {
     let stepSucceeded: boolean | null = null;
 
     try {
-    // Enforce the per-turn model-call budget before spending a call.
-    if (options.onModelCall && !options.onModelCall()) {
-      yield { type: 'error', content: 'model-call budget exhausted for this turn' };
-      this.postAgentResult({ success: false, outputs: [], variables: {}, messages: [] });
-      return;
-    }
+    // The per-model-call budget is enforced inside the agent loop (before each
+    // model call) so it also covers multi-iteration turns.
 
     // Ensure outputVars is an array of either strings or TypedVar objects
     const outputVars = decodeAgentOutputVars(rawPayload.outputVars);
@@ -981,7 +987,7 @@ export class DMLRunner {
     // offered, and registered TS tools remain reachable via exec/2.
     const isMetaFrame = frame?.kind === 'meta';
     const availableTools = isMetaFrame && options.metaTools
-      ? new Map(options.metaTools)
+      ? options.metaTools(emitToolEvent)
       : this.buildAgentTools(
         userTools,
         options.toolPolicy,

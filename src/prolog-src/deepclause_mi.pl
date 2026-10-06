@@ -3634,6 +3634,8 @@ is_mi_special_predicate(require_judgment(_,_)).
 is_mi_special_predicate(get_memory(_)).
 is_mi_special_predicate(format(_,_)).
 is_mi_special_predicate(writeln(_)).
+is_mi_special_predicate(input(_,_)).
+is_mi_special_predicate(call(_)).
 is_mi_special_predicate(push_context).
 is_mi_special_predicate(push_context(_)).
 is_mi_special_predicate(pop_context).
