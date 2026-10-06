@@ -19,6 +19,12 @@ import type {
   ToolPolicy,
 } from '../types.js';
 import { buildParamsTerm, plainValue } from './frames.js';
+import {
+  applySkillWrapper,
+  buildHarnessHeader,
+  type HarnessExportOptions,
+  type HarnessExportResult,
+} from './export.js';
 
 export interface DMLSessionOptions {
   /** Optional explicit session id; generated when omitted. */
@@ -58,6 +64,8 @@ export class DMLSession {
   private sessionId: string;
   private workspacePath?: string;
   private gasLimit?: number;
+  private model: string;
+  private provider: string;
   private tools: Map<string, ToolDefinition>;
   private toolPolicy: ToolPolicy | null;
   private onInputRequired: (prompt: string) => Promise<string>;
@@ -68,6 +76,8 @@ export class DMLSession {
     this.sessionId = options.sessionId ?? nextSessionId();
     this.workspacePath = options.workspacePath;
     this.gasLimit = options.gasLimit;
+    this.model = options.runnerOptions.model;
+    this.provider = String(options.runnerOptions.provider);
     this.tools = options.tools ?? new Map();
     this.toolPolicy = options.toolPolicy ?? null;
     this.onInputRequired = options.onInputRequired ?? (async () => '');
@@ -190,8 +200,73 @@ export class DMLSession {
 
   /** Clear the living module and memories (the `reset.` command). */
   async reset(): Promise<void> {
+    if (this.isFrozen()) {
+      throw new Error('harness is frozen; reset is disabled');
+    }
     this.prologQuery(`deepclause_mi:clear_session('${this.sessionId}')`);
     this.runner.clearFrames();
+  }
+
+  // ---- Freeze lock (M2) ----
+
+  /** Make the living module read-only (assert/retract/load/commit refused). */
+  async freeze(): Promise<void> {
+    this.prologQuery(`deepclause_mi:repl_freeze('${this.sessionId}')`);
+  }
+
+  /** Like freeze(), but `unfreeze.` is refused for the rest of the process. */
+  async lock(): Promise<void> {
+    this.prologQuery(`deepclause_mi:repl_lock('${this.sessionId}')`);
+  }
+
+  /** Clear the lock list. Throws when the harness is irreversibly locked. */
+  async unfreeze(): Promise<void> {
+    const result = this.prologQuery(
+      `deepclause_mi:repl_try_unfreeze('${this.sessionId}', Error)`
+    );
+    const error = plainValue(result?.Error);
+    if (error !== undefined && error !== null && error !== 'none') {
+      throw new Error(String(error));
+    }
+  }
+
+  isFrozen(): boolean {
+    const result = this.prologQuery(`deepclause_mi:repl_is_frozen('${this.sessionId}')`);
+    return result?.success === true;
+  }
+
+  // ---- Export (M2) ----
+
+  /** Serialize the living module to a self-contained .dml file. */
+  async export(file?: string, options: HarnessExportOptions = {}): Promise<HarnessExportResult> {
+    const header = options.header ?? buildHarnessHeader({
+      timestamp: new Date().toISOString(),
+      backend: options.skill ? 'skill' : this.provider,
+      model: this.model,
+    });
+    const result = this.prologQuery(
+      `deepclause_mi:export_harness('${this.sessionId}', ${quoteString(header)}, Text)`
+    );
+    let text = String(plainValue(result?.Text) ?? '');
+    if (options.skill) {
+      text = applySkillWrapper(text);
+    }
+
+    const target = path.resolve(
+      this.workspacePath ?? process.cwd(),
+      file ?? options.path ?? 'harness.dml',
+    );
+    await fs.writeFile(target, text, 'utf8');
+
+    const stats = this.prologQuery(
+      `deepclause_mi:export_stats('${this.sessionId}', Clauses, Tools, Scripts)`
+    );
+    return {
+      path: target,
+      clauses: Number(plainValue(stats?.Clauses) ?? 0),
+      tools: Number(plainValue(stats?.Tools) ?? 0),
+      scripts: Number(plainValue(stats?.Scripts) ?? 0),
+    };
   }
 
   async dispose(): Promise<void> {

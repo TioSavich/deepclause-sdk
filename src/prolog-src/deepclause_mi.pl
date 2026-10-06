@@ -39,6 +39,14 @@
     repl_listing/2,
     repl_listing/3,
     repl_reserved/1,
+    % Freeze lock and export (M2)
+    repl_freeze/1,
+    repl_unfreeze/1,
+    repl_lock/1,
+    repl_is_frozen/1,
+    repl_try_unfreeze/2,
+    export_harness/3,
+    export_stats/4,
     post_agent_result/4,
     post_exec_result/3,
     post_sample_token_result/3,
@@ -68,6 +76,9 @@
 :- dynamic session_repl_memory/2.   % session_repl_memory(SessionId, HarnessMemory) - object/entry memory
 :- dynamic session_meta_memory/2.   % session_meta_memory(SessionId, MetaMemory) - code-writing task memory
 :- dynamic session_repl_mode/2.     % session_repl_mode(SessionId, true/false) - gates format/writeln output shims
+:- dynamic session_frozen/2.        % session_frozen(SessionId, true/false) - read-only lock
+:- dynamic session_locked/2.        % session_locked(SessionId, true/false) - irreversibly frozen (--locked)
+:- dynamic session_directive/2.     % session_directive(SessionId, Directive) - recorded :- directives for export
 :- dynamic session_params/2.       % session_params(SessionId, ParamsDict)
 :- dynamic session_user_tools/2.   % session_user_tools(SessionId, ToolName)
 :- dynamic session_user_tool_schema/3. % session_user_tool_schema(SessionId, ToolName, Schema)
@@ -306,8 +317,11 @@ process_clause((tool(ToolHead, Description) :- Body), SessionId) :-
     extract_tool_schema(ToolHead, Description, ToolName, Schema),
     assertz(session_user_tools(SessionId, ToolName)),
     assertz(session_user_tool_schema(SessionId, ToolName, Schema)),
-    % Store the source code for the tool description
-    format(string(SourceCode), "tool(~w, ~q) :-~n    ~w.", [ToolHead, Description, Body]),
+    % Store the source code for the tool description. Normalize variables with
+    % numbervars/3 so export is deterministic across loads.
+    copy_term(ToolHead-Description-Body, NH-ND-NB),
+    numbervars(NH-ND-NB, 0, _),
+    format(string(SourceCode), "tool(~q, ~q) :-~n    ~q.", [NH, ND, NB]),
     assertz(SessionId:tool_source(ToolName, SourceCode)),
     % Assert the tool implementation (use just ToolHead for execution)
     assertz(SessionId:(tool(ToolHead) :- ExpandedBody)).
@@ -319,8 +333,10 @@ process_clause((tool(ToolHead) :- Body), SessionId) :-
     extract_tool_schema(ToolHead, none, ToolName, Schema),
     assertz(session_user_tools(SessionId, ToolName)),
     assertz(session_user_tool_schema(SessionId, ToolName, Schema)),
-    % Store the source code for the tool description
-    format(string(SourceCode), "tool(~w) :-~n    ~w.", [ToolHead, Body]),
+    % Store the source code for the tool description (deterministic variables).
+    copy_term(ToolHead-Body, NH-NB),
+    numbervars(NH-NB, 0, _),
+    format(string(SourceCode), "tool(~q) :-~n    ~q.", [NH, NB]),
     assertz(SessionId:tool_source(ToolName, SourceCode)),
     % Assert the tool implementation
     assertz(SessionId:(tool(ToolHead) :- ExpandedBody)).
@@ -333,6 +349,15 @@ process_clause((Head :- Body), SessionId) :-
     ;   ExpandedBody = Body
     ),
     assertz(SessionId:(Head :- ExpandedBody)).
+
+%% repl_delete/1 is a load-time directive that removes a predicate. It must
+%% be handled before the generic fact clause so it is never asserted itself.
+process_clause(repl_delete(Name/Arity), SessionId) :-
+    !,
+    (   atom(Name), integer(Arity)
+    ->  catch(abolish(SessionId:Name/Arity), _, true)
+    ;   true
+    ).
 
 process_clause(Fact, SessionId) :-
     % Simple fact
@@ -479,9 +504,17 @@ process_directive(consult(File), SessionId) :-
 %% Handle use_module directive
 process_directive(use_module(Module), SessionId) :-
     !,
+    (   workspace_module_reference(Module)
+    ->  true
+    ;   record_directive(SessionId, use_module(Module))
+    ),
     process_use_module_directive(Module, SessionId).
 process_directive(use_module(Module, Exports), SessionId) :-
     !,
+    (   workspace_module_reference(Module)
+    ->  true
+    ;   record_directive(SessionId, use_module(Module, Exports))
+    ),
     process_use_module_directive(Module, Exports, SessionId).
 %% Handle list-style consult: :- [File] or :- [File1, File2, ...]
 process_directive([File|Files], SessionId) :-
@@ -638,7 +671,11 @@ create_session(SessionId, Params, HarnessMemory, MetaMemory) :-
     retractall(session_meta_memory(SessionId, _)),
     assertz(session_meta_memory(SessionId, MetaMemory)),
     retractall(session_repl_mode(SessionId, _)),
-    assertz(session_repl_mode(SessionId, true)).
+    assertz(session_repl_mode(SessionId, true)),
+    retractall(session_frozen(SessionId, _)),
+    assertz(session_frozen(SessionId, false)),
+    retractall(session_locked(SessionId, _)),
+    assertz(session_locked(SessionId, false)).
 
 %% clear_session(+SessionId)
 %% Empties the living module, ends all frames, and resets memories. Session
@@ -681,6 +718,9 @@ destroy_session(SessionId) :-
     retractall(session_repl_memory(SessionId, _)),
     retractall(session_meta_memory(SessionId, _)),
     retractall(session_repl_mode(SessionId, _)),
+    retractall(session_frozen(SessionId, _)),
+    retractall(session_locked(SessionId, _)),
+    retractall(session_directive(SessionId, _)),
     retractall(session_params(SessionId, _)),
     retractall(session_trace_enabled(SessionId, _)),
     retractall(session_trace_log(SessionId, _)).
@@ -690,7 +730,8 @@ destroy_session(SessionId) :-
 %% preprocessing (task/prompt rewrite, interpolation, expand_term).
 load_code(SessionId, Code, Error) :-
     catch(
-        (   parse_dml_string(Code, SessionId),
+        (   guard_not_frozen(SessionId),
+            parse_dml_string(Code, SessionId),
             Error = none
         ),
         LoadError,
@@ -868,11 +909,13 @@ repl_user_predicate(_SessionId, Name, _Arity) :-
     fail.
 repl_user_predicate(SessionId, Name, Arity) :-
     % User DML clauses are asserted (interpreted) into the session module.
-    % Builtins/imports are not, so this filters them out without also
-    % tripping over module inheritance. Build a callable head rather than a
-    % predicate indicator: predicate_property/2 wants a goal (Module:Goal).
+    % Exclude predicates imported via use_module (e.g. library(clpfd)) and
+    % foreign/builtin predicates. Build a callable head rather than a predicate
+    % indicator: predicate_property/2 wants a goal (Module:Goal).
     functor(Head, Name, Arity),
-    predicate_property(SessionId:Head, interpreted).
+    predicate_property(SessionId:Head, interpreted),
+    \+ predicate_property(SessionId:Head, imported_from(_)),
+    \+ predicate_property(SessionId:Head, foreign).
 
 internal_session_predicate(param).
 internal_session_predicate(param_decl).
@@ -928,6 +971,185 @@ repl_reserved(Term) :-
     compound(Term),
     functor(Term, Name, _),
     repl_reserved_name(Name).
+
+%% ============================================================
+%% Freeze Lock and Export (M2)
+%% ============================================================
+
+%% repl_freeze(+SessionId)
+%% Makes the living module read-only. Queries, `execute`, and nested task()
+%% calls still work; only mutation is refused.
+repl_freeze(SessionId) :-
+    retractall(session_frozen(SessionId, _)),
+    assertz(session_frozen(SessionId, true)).
+
+%% repl_lock(+SessionId)
+%% Irreversibly freezes: repl_unfreeze/1 refuses. Used by --locked.
+repl_lock(SessionId) :-
+    repl_freeze(SessionId),
+    retractall(session_locked(SessionId, _)),
+    assertz(session_locked(SessionId, true)).
+
+%% repl_unfreeze(+SessionId)
+repl_unfreeze(SessionId) :-
+    (   session_locked(SessionId, true)
+    ->  throw(error(permission_error(modify, locked_harness, SessionId),
+                context(repl_unfreeze/1, 'harness is locked; unfreeze is disabled')))
+    ;   retractall(session_frozen(SessionId, _)),
+        assertz(session_frozen(SessionId, false))
+    ).
+
+%% repl_is_frozen(+SessionId)
+repl_is_frozen(SessionId) :-
+    session_frozen(SessionId, true),
+    !.
+
+%% repl_try_unfreeze(+SessionId, -Error)
+%% Non-throwing wrapper so the host can report a locked harness cleanly.
+repl_try_unfreeze(SessionId, Error) :-
+    catch(repl_unfreeze(SessionId), UnfreezeError,
+        format(atom(Error), '~w', [UnfreezeError])),
+    (   var(Error)
+    ->  Error = none
+    ;   true
+    ).
+
+%% guard_not_frozen(+SessionId)
+%% Shared mutation guard for assert/retract/consult/load.
+guard_not_frozen(SessionId) :-
+    (   session_frozen(SessionId, true)
+    ->  throw(error(permission_error(modify, frozen_harness, SessionId),
+                context(mi_call/3, 'harness is frozen; assert/retract/load are disabled')))
+    ;   true
+    ).
+
+%% record_directive(+SessionId, +Directive)
+record_directive(SessionId, Directive) :-
+    (   session_directive(SessionId, Directive)
+    ->  true
+    ;   assertz(session_directive(SessionId, Directive))
+    ).
+
+%% ---- Export (serialization) ----
+
+%% export_harness(+SessionId, +Header, -Text)
+%% Deterministically serialize the living module into self-contained DML:
+%% directives, tools, embedded scripts, then user predicates sorted name/arity.
+export_harness(SessionId, Header, Text) :-
+    with_output_to(string(Text), export_harness_output(SessionId, Header)).
+
+export_harness_output(SessionId, Header) :-
+    (   Header == none
+    ->  true
+    ;   format("% ~w~n", [Header])
+    ),
+    export_directives(SessionId),
+    export_tools(SessionId),
+    export_scripts(SessionId),
+    export_clauses(SessionId).
+
+export_directives(SessionId) :-
+    findall(Directive, session_directive(SessionId, Directive), Directives0),
+    sort(Directives0, Directives),
+    forall(member(Directive, Directives), format(":- ~q.~n", [Directive])),
+    (   Directives == []
+    ->  true
+    ;   nl
+    ).
+
+export_tools(SessionId) :-
+    findall(Name, session_user_tool_schema(SessionId, Name, _), Names0),
+    sort(Names0, Names),
+    forall(member(Name, Names),
+        (   SessionId:tool_source(Name, Source)
+        ->  format("~w~n~n", [Source])
+        ;   true
+        )).
+
+export_scripts(SessionId) :-
+    findall(Name/Arity,
+        (   script_predicate_name(Name, Arity),
+            current_predicate(SessionId:Name/Arity)
+        ),
+        Preds0),
+    sort(Preds0, Preds),
+    forall(member(Name/Arity, Preds),
+        (   functor(Head, Name, Arity),
+            forall(clause(SessionId:Head, Body), export_clause(Head, Body))
+        )).
+
+export_clauses(SessionId) :-
+    findall(Name/Arity,
+        (   current_predicate(SessionId:Name/Arity),
+            export_user_predicate(SessionId, Name, Arity)
+        ),
+        Preds0),
+    sort(Preds0, Preds),
+    forall(member(Name/Arity, Preds),
+        (   functor(Head, Name, Arity),
+            forall(clause(SessionId:Head, Body), export_clause(Head, Body))
+        )).
+
+%% repl_entry/1 must survive export even though repl_* is otherwise reserved.
+export_user_predicate(SessionId, repl_entry, Arity) :-
+    current_predicate(SessionId:repl_entry/Arity),
+    !.
+export_user_predicate(SessionId, Name, Arity) :-
+    repl_user_predicate(SessionId, Name, Arity),
+    \+ tool_predicate_name(Name),
+    \+ script_predicate_name(Name, Arity).
+
+%% export_clause(+Head, +Body)
+%% Copy + numbervars the clause so variable names are deterministic (A, B, …),
+%% which is required for byte-stable export → reload → export.
+%% export_stats(+SessionId, -Clauses, -Tools, -Scripts)
+export_stats(SessionId, Clauses, Tools, Scripts) :-
+    findall(Name/Arity,
+        (   current_predicate(SessionId:Name/Arity),
+            export_user_predicate(SessionId, Name, Arity)
+        ),
+        Preds0),
+    sort(Preds0, Preds),
+    findall(Count,
+        (   member(PredName/PredArity, Preds),
+            functor(PredHead, PredName, PredArity),
+            aggregate_all(count, clause(SessionId:PredHead, _), Count)
+        ),
+        PredCounts),
+    sum_list(PredCounts, Clauses),
+    findall(Name, session_user_tool_schema(SessionId, Name, _), ToolNames0),
+    sort(ToolNames0, ToolNames),
+    length(ToolNames, Tools),
+    findall(ScriptName/ScriptArity,
+        (   script_predicate_name(ScriptName, ScriptArity),
+            current_predicate(SessionId:ScriptName/ScriptArity)
+        ),
+        ScriptPreds0),
+    sort(ScriptPreds0, ScriptPreds),
+    findall(Count,
+        (   member(ScriptName2/ScriptArity2, ScriptPreds),
+            functor(ScriptHead, ScriptName2, ScriptArity2),
+            aggregate_all(count, clause(SessionId:ScriptHead, _), Count)
+        ),
+        ScriptCounts),
+    sum_list(ScriptCounts, Scripts).
+
+export_clause(Head, Body) :-
+    copy_term(Head-Body, NumberedHead-NumberedBody),
+    numbervars(NumberedHead-NumberedBody, 0, _),
+    (   NumberedBody == true
+    ->  format("~q.~n", [NumberedHead])
+    ;   format("~q :-~n    ~q.~n", [NumberedHead, NumberedBody])
+    ),
+    nl.
+
+tool_predicate_name(tool).
+tool_predicate_name(tool_source).
+
+script_predicate_name(script_body, 2).
+script_predicate_name(python_source, 2).
+script_predicate_name(js_source, 2).
+script_predicate_name(shell_source, 2).
 
 %% determine_agent_goal(+SessionId, +Args, -Goal)
 %% Args is a list of positional arguments - passed directly to agent_main
@@ -2331,18 +2553,22 @@ mi_call(false, _StateIn, _StateOut) :-
 %% (draft/4, claim/3, ...) are asserted/retracted in the right module.
 mi_call(assertz(Head), StateIn, StateIn) :-
     get_session_id(SessionId),
+    guard_not_frozen(SessionId),
     assertz(SessionId:Head).
 
 mi_call(asserta(Head), StateIn, StateIn) :-
     get_session_id(SessionId),
+    guard_not_frozen(SessionId),
     asserta(SessionId:Head).
 
 mi_call(retract(Head), StateIn, StateIn) :-
     get_session_id(SessionId),
+    guard_not_frozen(SessionId),
     retract(SessionId:Head).
 
 mi_call(retractall(Head), StateIn, StateIn) :-
     get_session_id(SessionId),
+    guard_not_frozen(SessionId),
     retractall(SessionId:Head).
 
 %% ============================================================
@@ -2551,6 +2777,7 @@ resolve_workspace_path(RelPath, FullPath) :-
 mi_call(consult(File), StateIn, StateIn) :-
     !,
     get_session_id(SessionId),
+    guard_not_frozen(SessionId),
     resolve_workspace_path(File, FullPath),
     readutil:read_file_to_string(FullPath, Code, []),
     consult_string(Code, SessionId).

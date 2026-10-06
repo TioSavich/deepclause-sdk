@@ -30,6 +30,9 @@ export interface ReplCliOptions {
   param?: Record<string, string>;
   verbose?: boolean;
   color?: boolean;
+  freeze?: boolean;
+  locked?: boolean;
+  exportPath?: string;
 }
 
 export type ReplInput =
@@ -178,7 +181,7 @@ export async function createReplRuntime(options: ReplCliOptions): Promise<ReplRu
 export async function dispatchReplInput(
   runtime: ReplRuntime,
   input: ReplInput,
-  options: { first?: boolean; print?: (text: string) => void } = {},
+  options: { first?: boolean; print?: (text: string) => void; exportPath?: string } = {},
 ): Promise<boolean> {
   const { repl, renderer } = runtime;
   const print = options.print ?? ((text: string) => renderer.writeLine(text));
@@ -197,17 +200,34 @@ export async function dispatchReplInput(
       return true;
     }
     case 'reset':
+      if (repl.isFrozen()) {
+        print('ERROR: harness is frozen; reset is disabled. Use \'unfreeze.\' first.');
+        return true;
+      }
       await repl.reset();
       print('harness reset');
       return true;
-    case 'export':
-      print('export is not available yet (M2)');
+    case 'export': {
+      const target = input.path ?? options.exportPath ?? 'harness.dml';
+      try {
+        const result = await repl.export(target);
+        print(`exported ${result.clauses} clauses, ${result.tools} tools, ${result.scripts} scripts → ${result.path}`);
+      } catch (error) {
+        print(`ERROR: ${(error as Error).message}`);
+      }
       return true;
+    }
     case 'freeze':
-      print('freeze is not available yet (M2)');
+      await repl.freeze();
+      print(`harness frozen: assert/retract/load disabled. Use 'unfreeze.' to re-enable.`);
       return true;
     case 'unfreeze':
-      print('unfreeze is not available yet (M2)');
+      try {
+        await repl.unfreeze();
+        print('harness unfrozen');
+      } catch (error) {
+        print(`ERROR: ${(error as Error).message}`);
+      }
       return true;
     case 'trace':
       print('trace enabled');
@@ -236,9 +256,9 @@ function helpText(runtime: ReplRuntime): string {
     '  <english text>      build the harness from a prompt (M3)',
     '  listing.            list the living module',
     '  listing(Name/Arity). list one predicate',
-    `  reset.              empty the harness`,
-    '  export <file>.      write a self-contained harness (M2)',
-    '  freeze. / unfreeze. read-only lock (M2)',
+    '  reset.              empty the harness',
+    '  export <file>.      write a self-contained harness',
+    '  freeze. / unfreeze. read-only lock',
     '  params.             show session parameters',
     '  trace. / notrace.   toggle verbose logging',
     '  halt.               exit',
@@ -267,7 +287,7 @@ async function runNonInteractive(runtime: ReplRuntime, options: ReplCliOptions):
     for await (const line of rl) {
       const input = classifyReplInput(line);
       if (input.kind === 'halt') break;
-      const keepGoing = await dispatchReplInput(runtime, input, { first: options.first });
+      const keepGoing = await dispatchReplInput(runtime, input, { first: options.first, exportPath: options.exportPath });
       if (!keepGoing) break;
     }
   } finally {
@@ -301,7 +321,7 @@ async function runInteractive(runtime: ReplRuntime, options: ReplCliOptions): Pr
       if (input.kind === 'goal') {
         await runInteractiveGoal(runtime, input.goal, options, nextLine);
       } else {
-        const keepGoing = await dispatchReplInput(runtime, input, { first: options.first });
+        const keepGoing = await dispatchReplInput(runtime, input, { first: options.first, exportPath: options.exportPath });
         if (!keepGoing) break;
       }
     }
@@ -364,6 +384,13 @@ export async function startRepl(options: ReplCliOptions): Promise<number> {
       return loadExit;
     }
 
+    // Freeze/lock only after all `-l` loads succeed (load before lock).
+    if (options.locked) {
+      await runtime.repl.lock();
+    } else if (options.freeze) {
+      await runtime.repl.freeze();
+    }
+
     const goals = options.goal ?? [];
     if (goals.length > 0) {
       let exitCode = 0;
@@ -382,6 +409,16 @@ export async function startRepl(options: ReplCliOptions): Promise<number> {
     }
     return await runInteractive(runtime, options);
   } finally {
+    if (options.exportPath) {
+      try {
+        const result = await runtime.repl.export(options.exportPath);
+        runtime.renderer.writeLine(
+          `exported ${result.clauses} clauses, ${result.tools} tools, ${result.scripts} scripts → ${result.path}`,
+        );
+      } catch (error) {
+        runtime.renderer.writeErrorLine(`ERROR: ${(error as Error).message}`);
+      }
+    }
     await runtime.repl.dispose();
   }
 }
@@ -402,6 +439,9 @@ export function registerReplCommand(program: Command): void {
     .option('--temperature <number>', 'override temperature (0.0-2.0)', parseFloat)
     .option('--gas-limit <number>', 'per-frame step limit', parseInt)
     .option('-P, --param <key=value>', 'session parameter (repeatable)', collectParams, {})
+    .option('-f, --freeze', 'start with the harness frozen (read-only lock)')
+    .option('--locked', 'like --freeze, but forbid unfreeze for this process')
+    .option('--export <file>', 'export the harness on exit')
     .option('--verbose', 'show debug output')
     .option('--debug', 'show debug output')
     .option('--no-color', 'disable ANSI color')
@@ -420,6 +460,9 @@ export function registerReplCommand(program: Command): void {
         param: options.param,
         verbose: Boolean(options.verbose || options.debug),
         color: options.color,
+        freeze: options.freeze,
+        locked: options.locked,
+        exportPath: options.export,
       });
       if (exitCode !== 0) {
         process.exit(exitCode);

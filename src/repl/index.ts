@@ -15,6 +15,7 @@ import type {
 } from '../types.js';
 import type { FrameKind } from '../types.js';
 import { DMLSession, type DMLQueryOptions } from './session.js';
+import type { HarnessExportOptions, HarnessExportResult } from './export.js';
 
 export type RunOpts = DMLQueryOptions;
 
@@ -49,9 +50,11 @@ export interface HarnessRepl {
   list(filter?: string): Promise<string>;
   /** Read-only lock (M2). */
   freeze(): Promise<void>;
+  /** Irreversible freeze: `unfreeze.` is refused (--locked). */
+  lock(): Promise<void>;
   unfreeze(): Promise<void>;
   /** Write the harness to a self-contained .dml file (M2). */
-  export(file?: string): Promise<{ path: string; clauses: number; tools: number; scripts: number }>;
+  export(file?: string, options?: HarnessExportOptions): Promise<HarnessExportResult>;
   isFrozen(): boolean;
   reset(): Promise<void>;
   dispose(): Promise<void>;
@@ -83,20 +86,24 @@ class HarnessReplImpl implements HarnessRepl {
     return this.session.listing(filter);
   }
 
-  async freeze(): Promise<void> {
-    throw new Error('freeze is not available yet (M2)');
+  freeze(): Promise<void> {
+    return this.session.freeze();
   }
 
-  async unfreeze(): Promise<void> {
-    throw new Error('unfreeze is not available yet (M2)');
+  lock(): Promise<void> {
+    return this.session.lock();
   }
 
-  async export(): Promise<{ path: string; clauses: number; tools: number; scripts: number }> {
-    throw new Error('export is not available yet (M2)');
+  unfreeze(): Promise<void> {
+    return this.session.unfreeze();
+  }
+
+  export(file?: string, options?: HarnessExportOptions): Promise<HarnessExportResult> {
+    return this.session.export(file, options);
   }
 
   isFrozen(): boolean {
-    return false;
+    return this.session.isFrozen();
   }
 
   reset(): Promise<void> {
