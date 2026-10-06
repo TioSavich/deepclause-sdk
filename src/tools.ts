@@ -64,6 +64,12 @@ export function checkToolPolicy(
   toolName: string,
   policy: ToolPolicy | null
 ): { allowed: boolean; reason?: string } {
+  // ask_user is the human-in-the-loop channel, not a capability. It only
+  // relays a question and is exempt from the capability whitelist/blacklist.
+  if (toolName === 'ask_user') {
+    return { allowed: true };
+  }
+
   // No policy means all tools are allowed
   if (!policy) {
     return { allowed: true };

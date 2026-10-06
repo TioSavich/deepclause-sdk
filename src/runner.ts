@@ -227,7 +227,8 @@ export interface InternalRunOptions {
   gasLimit?: number;
   tools: Map<string, ToolDefinition>;
   toolPolicy: ToolPolicy | null;
-  onInputRequired: (prompt: string) => Promise<string>;
+  /** Returns the answer, or undefined to cancel/fail the input request. */
+  onInputRequired: (prompt: string) => Promise<string | undefined>;
   signal?: AbortSignal;
   initialMessages?: MemoryMessage[];
   compaction?: CompactionOptions;
@@ -525,12 +526,17 @@ export class DMLRunner {
           yield* this.handleJudgment(step.payload, options);
           break;
 
-        case 'wait_input':
+        case 'wait_input': {
           // Request user input
           yield { type: 'input_required', prompt: step.prompt };
           const input = await options.onInputRequired(step.prompt ?? '');
-          this.provideInput(input);
+          if (input === undefined || input === null) {
+            this.cancelInput();
+          } else {
+            this.provideInput(input);
+          }
           break;
+        }
 
         case 'finished':
           // Include trace data if trace mode was enabled
@@ -951,6 +957,9 @@ export class DMLRunner {
           try {
             emitToolEvent({ type: 'input_required', prompt });
             const response = await options.onInputRequired(prompt);
+            if (response === undefined || response === null) {
+              return { cancelled: true };
+            }
             return { user_response: response };
           } catch (err) {
             return { error: String(err) };
@@ -1397,7 +1406,7 @@ export class DMLRunner {
       args: unknown[];
     };
 
-    // Check tool policy
+    // Check tool policy (ask_user is the human channel and is exempt).
     const policyCheck = checkToolPolicy(toolName, options.toolPolicy);
     if (!policyCheck.allowed) {
       yield { type: 'log', content: `Tool '${toolName}' blocked by policy: ${policyCheck.reason}` };
@@ -1405,8 +1414,11 @@ export class DMLRunner {
       return;
     }
 
-    // Get tool definition
-    const tool = options.tools.get(toolName);
+    // Get tool definition. `ask_user` is SDK-internal so exec(ask_user(...))
+    // works in DML even when no capability tools are registered.
+    const tool = toolName === 'ask_user'
+      ? this.internalAskUserTool(options)
+      : options.tools.get(toolName);
     if (!tool) {
       yield { type: 'log', content: `Tool '${toolName}' not found` };
       this.postExecResult({ success: false, error: `Tool not found: ${toolName}` });
@@ -2446,6 +2458,31 @@ export class DMLRunner {
     );
   }
 
+  /** SDK-internal ask_user tool used by exec(ask_user(...)) in DML. */
+  private internalAskUserTool(options: InternalRunOptions): ToolDefinition {
+    return {
+      description: 'Ask the user for input or clarification',
+      parameters: {
+        type: 'object',
+        properties: {
+          prompt: { type: 'string', description: 'The question or prompt to show the user' },
+        },
+        required: ['prompt'],
+      },
+      execute: async (args) => {
+        const prompt = String(args.prompt ?? args.arg1 ?? '');
+        if (!prompt) {
+          return { error: 'No prompt provided to ask_user' };
+        }
+        const response = await options.onInputRequired(prompt);
+        if (response === undefined || response === null) {
+          return { cancelled: true };
+        }
+        return { user_response: response };
+      },
+    };
+  }
+
   /**
    * Provide user input to waiting Prolog
    */
@@ -2454,6 +2491,11 @@ export class DMLRunner {
     this.query(
       `deepclause_mi:provide_input('${this.sessionId}', "${escaped}")`
     );
+  }
+
+  /** Signal a waiting input/2 that no human is available. */
+  private cancelInput(): void {
+    this.query(`deepclause_mi:provide_input_cancelled('${this.sessionId}')`);
   }
 
   /**

@@ -38,7 +38,10 @@ export interface DMLSessionOptions {
   runnerOptions: RunnerOptions;
   tools?: Map<string, ToolDefinition>;
   toolPolicy?: ToolPolicy | null;
+  /** Legacy harness-only input handler (prefer onInput). */
   onInputRequired?: (prompt: string) => Promise<string>;
+  /** Unified human-in-the-loop channel for meta ask_user and harness input/2. */
+  onInput?: (prompt: string, options?: string[]) => Promise<string | undefined>;
   initialHarnessMemory?: MemoryMessage[];
   /** Prompt-mode repair attempts after an invalid commit (default 1). */
   repairRounds?: number;
@@ -56,6 +59,8 @@ export interface DMLQueryOptions {
   tools?: Map<string, ToolDefinition>;
   toolPolicy?: ToolPolicy | null;
   onInputRequired?: (prompt: string) => Promise<string>;
+  /** Per-run override of the unified input channel. */
+  onInput?: (prompt: string, options?: string[]) => Promise<string | undefined>;
   signal?: AbortSignal;
   gasLimit?: number;
   /** Frame kind for the query (defaults to `object`). */
@@ -79,12 +84,12 @@ export class DMLSession {
   private provider: string;
   private tools: Map<string, ToolDefinition>;
   private toolPolicy: ToolPolicy | null;
-  private onInputRequired: (prompt: string) => Promise<string>;
+  private inputHandler?: (prompt: string, options?: string[]) => Promise<string | undefined>;
   private repairRounds: number;
   private maxDepth: number;
   private maxModelCalls: number;
   private hostToolsCatalog?: string;
-  private askUser?: (prompt: string, options?: string[]) => Promise<{ answer: string } | { cancelled: true }>;
+
   /** Current nested frame depth (used for the depth budget). */
   private frameDepth = 0;
   /** Model calls made in the current turn (shared across all frames). */
@@ -100,12 +105,14 @@ export class DMLSession {
     this.provider = String(options.runnerOptions.provider);
     this.tools = options.tools ?? new Map();
     this.toolPolicy = options.toolPolicy ?? null;
-    this.onInputRequired = options.onInputRequired ?? (async () => '');
+    this.inputHandler = options.onInput
+      ?? (options.askUser ? (prompt, choices) => options.askUser!(prompt, choices).then((r) => ('cancelled' in r ? undefined : r.answer)) : undefined)
+      ?? options.onInputRequired
+      ?? undefined;
     this.repairRounds = options.repairRounds ?? 1;
     this.maxDepth = options.maxDepth ?? 3;
     this.maxModelCalls = options.maxModelCalls ?? 24;
     this.hostToolsCatalog = options.hostToolsCatalog;
-    this.askUser = options.askUser;
     this.runner = new DMLRunner(swipl, options.runnerOptions);
     this.runner.bindSession(this.sessionId);
   }
@@ -413,7 +420,10 @@ export class DMLSession {
           prologQuery: (goal) => this.prologQuery(goal),
           isFrozen: () => this.isFrozen(),
           executeGoal: (goal, limit) => this.executeGoal(goal, limit),
-          askUser: this.askUser,
+          askUser: async (prompt, choices) => {
+            const answer = await this.requireInput(prompt, choices);
+            return answer === undefined ? { cancelled: true } : { answer };
+          },
           hostToolsCatalog: this.hostToolsCatalog,
         });
 
@@ -528,15 +538,26 @@ export class DMLSession {
   }
 
   private buildRunOptions(options: DMLQueryOptions): InternalRunOptions {
+    const inputHandler = options.onInput ?? this.inputHandler;
     return {
       workspacePath: this.workspacePath,
       gasLimit: options.gasLimit ?? this.gasLimit,
       tools: options.tools ?? this.tools,
       toolPolicy: options.toolPolicy ?? this.toolPolicy,
-      onInputRequired: options.onInputRequired ?? this.onInputRequired,
+      onInputRequired: inputHandler
+        ? (prompt) => this.requireInput(prompt)
+        : async () => undefined,
       signal: options.signal,
       onModelCall: () => this.reserveModelCall(),
     };
+  }
+
+  /** Resolve a human answer, or undefined when no channel is configured. */
+  private async requireInput(prompt: string, options?: string[]): Promise<string | undefined> {
+    if (!this.inputHandler) {
+      return undefined;
+    }
+    return this.inputHandler(prompt, options);
   }
 
   /** Reserve one model call for the current turn; false when exhausted. */

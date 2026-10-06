@@ -69,6 +69,7 @@
     post_llm_result/3,
     post_judgment_result/3,
     provide_input/2,
+    provide_input_cancelled/1,
     mi/3,
     % Tool engine predicates for isolated tool execution
     create_tool_engine/4,
@@ -111,6 +112,7 @@
 :- dynamic session_trace_enabled/2. % session_trace_enabled(SessionId, true/false)
 :- dynamic session_pending_signal/2. % session_pending_signal(SessionId, Signal) - fallback for engine_fetch
 :- dynamic session_user_input/2.   % session_user_input(SessionId, Input) - for ask_user tool
+:- dynamic session_input_cancelled/1. % session_input_cancelled(SessionId) - input/2 should fail (non-interactive)
 
 %% ============================================================
 %% DML Parsing
@@ -1379,7 +1381,8 @@ repl_meta_prompt(SessionId, Request, Prompt) :-
             format("- Prefer CLP(FD)/CLP(Q) for arithmetic constraints. File I/O uses the MI predicates open/3, close/1, read_string/3, write/2, write_file/2, read_file/2, append_file/2 (paths resolve under the workspace).~n"),
             format("- SELF-CONTAINMENT: any Python/JS/shell/SQL code a tool needs must be embedded in the harness as a string fact (script_body/2, python_source/2, js_source/2, shell_source/2) and materialized at run time with write_file/2. Never leave it only as a side file.~n"),
             format("- Naming: there is no agent_main requirement. Name predicates descriptively and declare entries with repl_entry/1. To delete a predicate, emit repl_delete(Name/Arity) as a directive fact.~n"),
-            format("- Call the listing tool before writing so you build on the current harness.~n~n"),
+            format("- Call the listing tool before writing so you build on the current harness.~n"),
+            format("- If the request is ambiguous, call the ask_user tool to ask a clarifying question before writing code.~n~n"),
             format("HOST TOOL CATALOG (only these names may be called through exec/2; listing(tools) has full schemas)~n~w~n~n", [Catalog]),
             format("CURRENT HARNESS MANIFEST~n~w~n~n", [Manifest]),
             format("RECENT PROMPTS~n~w~n~n", [MemoryText]),
@@ -1748,6 +1751,7 @@ destroy_engine(SessionId) :-
     retractall(session_user_tools(SessionId, _)),
     retractall(session_user_tool_schema(SessionId, _, _)),
     retractall(session_pending_input(SessionId, _)),
+    retractall(session_input_cancelled(SessionId)),
     retractall(session_agent_result(SessionId, _)),
     retractall(session_exec_result(SessionId, _)),
     retractall(session_sample_token_result(SessionId, _)),
@@ -1819,6 +1823,13 @@ post_llm_result(SessionId, Status, TextOrError) :-
 %% provide_input(+SessionId, +Input)
 provide_input(SessionId, Input) :-
     assertz(session_pending_input(SessionId, Input)),
+    post_signal_to_engine(SessionId, input_provided).
+
+%% provide_input_cancelled(+SessionId)
+%% Non-interactive runs have no human. Signal the waiting input/2 to fail
+%% instead of blocking.
+provide_input_cancelled(SessionId) :-
+    assertz(session_input_cancelled(SessionId)),
     post_signal_to_engine(SessionId, input_provided).
 
 %% post_signal_to_engine(+SessionId, +Signal)
@@ -2879,8 +2890,11 @@ mi_call(input(Prompt, Input), StateIn, StateIn) :-
     engine_yield(wait_input(InterpPrompt)),
     % Use get_next_signal helper which handles both dynamic predicate and engine_fetch
     get_next_signal(SessionId, _Signal),
-    % Retrieve the input provided via provide_input/2
-    (   session_pending_input(SessionId, Input)
+    % A cancelled input request fails the goal (non-interactive policy).
+    (   session_input_cancelled(SessionId)
+    ->  retractall(session_input_cancelled(SessionId)),
+        fail
+    ;   session_pending_input(SessionId, Input)
     ->  retract(session_pending_input(SessionId, Input)),
         add_trace_with_result(SessionId, exit, input, [InterpPrompt], Input, Depth)
     ;   Input = "",  % Default to empty if no input provided

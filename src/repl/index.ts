@@ -37,7 +37,10 @@ export interface HarnessReplOptions {
   llmBackend?: LLMBackend;
   tools?: Map<string, ToolDefinition>;
   toolPolicy?: ToolPolicy | null;
+  /** Legacy harness-only input handler (prefer onInput). */
   onInputRequired?: (prompt: string) => Promise<string>;
+  /** Unified human-in-the-loop channel for meta ask_user and harness input/2. */
+  onInput?: (prompt: string, options?: string[]) => Promise<string | undefined>;
   initialHarnessMemory?: MemoryMessage[];
   /** Prompt-mode repair attempts after an invalid commit (default 1). */
   repairRounds?: number;
@@ -136,6 +139,7 @@ export async function createHarnessRepl(options: HarnessReplOptions): Promise<Ha
     tools: options.tools,
     toolPolicy: options.toolPolicy,
     onInputRequired: options.onInputRequired,
+    onInput: options.onInput,
     repairRounds: options.repairRounds,
     maxDepth: options.maxDepth,
     maxModelCalls: options.maxModelCalls,

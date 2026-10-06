@@ -41,6 +41,9 @@ export interface ReplCliOptions {
   tools?: string;
   noTools?: boolean;
   sandbox?: boolean;
+  noAsk?: boolean;
+  answer?: string;
+  interactiveInput?: boolean;
 }
 
 export type ReplInput =
@@ -137,6 +140,36 @@ function selectRenderMode(options: ReplCliOptions): RenderMode {
   return process.stdout.isTTY ? 'rich' : 'plain';
 }
 
+/**
+ * Build the unified input channel from CLI flags (proposal §13.6):
+ *  - `--answer` supplies a canned reply; `--no-ask` fails immediately;
+ *  - a TTY (or `--interactive-input`) prompts;
+ *  - everything else returns undefined so autonomous runs never block.
+ */
+export function buildCliOnInput(
+  options: ReplCliOptions,
+): ((prompt: string, choices?: string[]) => Promise<string | undefined>) | undefined {
+  if (options.answer !== undefined) {
+    return async () => options.answer;
+  }
+  if (options.noAsk) {
+    return async () => undefined;
+  }
+  const interactive = Boolean(process.stdin.isTTY) || Boolean(options.interactiveInput);
+  if (!interactive) {
+    return async () => undefined;
+  }
+  return async (prompt, choices) => {
+    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+    try {
+      const suffix = choices && choices.length > 0 ? ` (${choices.join('/')})` : '';
+      return await new Promise<string>((resolve) => rl.question(`${prompt}${suffix}\n> `, resolve));
+    } finally {
+      rl.close();
+    }
+  };
+}
+
 function resolveModel(modelId: string): { provider: Provider; model: string } {
   try {
     const parsed = parseModelId(modelId);
@@ -211,8 +244,7 @@ export async function createReplRuntime(options: ReplCliOptions): Promise<ReplRu
     tools: toolset.tools,
     hostToolsCatalog: toolset.catalog,
     llmBackend,
-    onInputRequired: async () => '',
-    askUser: async () => ({ cancelled: true }),
+    onInput: buildCliOnInput(options),
   });
 
   return {
@@ -495,6 +527,9 @@ export function registerReplCommand(program: Command): void {
     .option('--tools <list>', 'comma-separated capability host tools (default: bash)')
     .option('--no-tools', 'register no capability host tools')
     .option('--sandbox', 'run shell tools in AgentVM')
+    .option('--no-ask', 'make ask_user / input/2 fail instead of prompting')
+    .option('--answer <text>', 'canned answer for any input request')
+    .option('--interactive-input', 'allow input requests to read stdin in non-TTY/--json mode')
     .option('-P, --param <key=value>', 'session parameter (repeatable)', collectParams, {})
     .option('-f, --freeze', 'start with the harness frozen (read-only lock)')
     .option('--locked', 'like --freeze, but forbid unfreeze for this process')
@@ -517,9 +552,12 @@ export function registerReplCommand(program: Command): void {
         depth: options.depth,
         maxModelCalls: options.maxModelCalls,
         backend: options.backend,
-        tools: options.tools,
+        tools: typeof options.tools === 'string' ? options.tools : undefined,
         noTools: options.tools === false,
         sandbox: options.sandbox,
+        noAsk: options.ask === false,
+        answer: options.answer,
+        interactiveInput: options.interactiveInput,
         param: options.param,
         verbose: Boolean(options.verbose || options.debug),
         color: options.color,

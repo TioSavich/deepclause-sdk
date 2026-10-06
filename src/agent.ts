@@ -80,7 +80,7 @@ export interface AgentLoopOptions {
   onBeforeModelCall?: (messages: MemoryMessage[], lastInputTokens?: number) => Promise<MemoryMessage[]>;
   /** Returns false to abort the turn when the model-call budget is exhausted. */
   onModelCall?: () => boolean;
-  onAskUser: (prompt: string) => Promise<string>;
+  onAskUser: (prompt: string) => Promise<string | undefined>;
   signal?: AbortSignal;
   streaming?: boolean;
   debug?: boolean;
