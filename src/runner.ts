@@ -7,6 +7,7 @@ import * as path from 'path';
 import type { SWIPLModule } from './prolog/loader.js';
 import type {
   CompactionOptions,
+  DMLBinding,
   DMLEvent,
   FrameKind,
   MemoryMessage,
@@ -135,6 +136,48 @@ function createChildAbortController(
       }
     },
   };
+}
+
+/**
+ * Decode the `bindings` payload of a goal-mode `solution` event.
+ *
+ * `collect_bindings/2` yields a list of `Name-Text` pairs. swipl-wasm encodes
+ * that compound as `{ '$t': 't', '-': [[Name, Text]] }`; a dict/array form is
+ * also accepted for forward compatibility.
+ */
+export function decodeSolutionBindings(raw: unknown): DMLBinding[] {
+  const normalized = toJsValue(raw);
+  if (!Array.isArray(normalized)) {
+    return [];
+  }
+
+  const bindings: DMLBinding[] = [];
+  for (const item of normalized) {
+    const decoded = toJsValue(item);
+    if (decoded && typeof decoded === 'object') {
+      const compound = decoded as Record<string, unknown>;
+      const args = compound['-'];
+      if (Array.isArray(args) && Array.isArray(args[0]) && args[0].length >= 2) {
+        const [name, text] = args[0] as unknown[];
+        bindings.push({ name: String(toJsValue(name) ?? ''), value: String(toJsValue(text) ?? '') });
+        continue;
+      }
+      if ('name' in compound || 'value' in compound) {
+        bindings.push({
+          name: String(toJsValue(compound.name) ?? ''),
+          value: String(toJsValue(compound.value) ?? ''),
+        });
+        continue;
+      }
+    }
+    if (Array.isArray(decoded) && decoded.length >= 2) {
+      bindings.push({
+        name: String(toJsValue(decoded[0]) ?? ''),
+        value: String(toJsValue(decoded[1]) ?? ''),
+      });
+    }
+  }
+  return bindings;
 }
 
 export function decodeAgentOutputVars(rawOutputVars: unknown): (string | TypedVar)[] {
@@ -403,6 +446,18 @@ export class DMLRunner {
           yield { type: 'answer', content: step.content };
           break;
 
+        case 'solution': {
+          const payload = (step.payload ?? {}) as Record<string, unknown>;
+          yield {
+            type: 'solution',
+            solution: {
+              bindings: decodeSolutionBindings(payload.bindings),
+              deterministic: String(toJsValue(payload.deterministic) ?? 'false') === 'true',
+            },
+          };
+          break;
+        }
+
         case 'request_agent_loop':
           // Run agent loop for task() predicate
           yield* this.handleAgentLoop(
@@ -647,6 +702,41 @@ export class DMLRunner {
     if (this.defaultFrameId === frameId) {
       this.defaultFrameId = null;
     }
+  }
+
+  /**
+   * Bind this runner to an existing session id. Used by the REPL's
+   * DMLSession, whose session outlives a single `run()`.
+   */
+  bindSession(sessionId: string): void {
+    this.sessionId = sessionId;
+  }
+
+  /**
+   * Adopt the session's default frame (for example one created by the REPL's
+   * `query_start/5`) into the runner's frame table so `runFrame` can drive it.
+   */
+  registerDefaultFrame(kind: FrameKind, depth = 0): Frame | null {
+    const result = this.query(
+      `deepclause_mi:default_frame('${this.sessionId}', FrameId)`
+    );
+    if (!result || !result.FrameId) {
+      return null;
+    }
+    const id = String(toJsValue(result.FrameId));
+    const frame: Frame = { id, kind, depth };
+    this.frames.set(id, { frame, engine: null });
+    this.defaultFrameId = id;
+    return frame;
+  }
+
+  /**
+   * Drop all runner-side frame bookkeeping without touching Prolog. Used after
+   * the REPL clears a session (the Prolog side already ended every frame).
+   */
+  clearFrames(): void {
+    this.frames.clear();
+    this.defaultFrameId = null;
   }
 
   /**

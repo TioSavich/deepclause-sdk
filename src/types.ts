@@ -209,9 +209,37 @@ export interface LLMUsage {
   reasoningTokens?: number;
 }
 
-export interface DMLEvent {
-  type: 'output' | 'log' | 'answer' | 'input_required' | 'error' | 'finished' | 'stream' | 'tool_call' | 'usage' | 'memory_compaction' | 'task_activity';
+/**
+ * A single rendered variable binding from a goal-mode solution.
+ * `value` is the Prolog text of the binding ('_' when unbound).
+ */
+export interface DMLBinding {
+  name: string;
+  value: string;
+}
+
+/**
+ * One goal-mode answer. A goal with N solutions yields N solution events.
+ * `deterministic` is an optimization hint only; the pager can always offer
+ * the next solution.
+ */
+export interface DMLSolution {
+  bindings: DMLBinding[];
+  deterministic: boolean;
+}
+
+/** Frame metadata attached to events emitted by a nested/reentrant run. */
+export interface FrameEventMeta {
+  frameId?: string;
+  depth?: number;
+  frameKind?: FrameKind;
+}
+
+export interface DMLEvent extends FrameEventMeta {
+  type: 'output' | 'log' | 'answer' | 'input_required' | 'error' | 'finished' | 'stream' | 'tool_call' | 'usage' | 'memory_compaction' | 'task_activity' | 'solution';
   content?: string;
+  /** Goal-mode solution (only for 'solution' events). */
+  solution?: DMLSolution;
   prompt?: string;
   /** Execution trace (only present in 'finished' event when trace mode enabled) */
   trace?: TraceEntry[];

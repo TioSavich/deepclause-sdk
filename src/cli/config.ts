@@ -121,6 +121,28 @@ const ModelOptionsSchema = z.object({
   compile: ModelSlotOverridesSchema.optional(),
 }).optional().default({});
 
+/**
+ * DML REPL settings. All optional; see docs/DML_REPL_PROPOSAL.md §13.4.
+ */
+const ReplConfigSchema = z.object({
+  exportOnExit: z.boolean().optional().default(false),
+  exportPath: z.string().optional().default('harness.dml'),
+  frozen: z.boolean().optional().default(false),
+  locked: z.boolean().optional().default(false),
+  editMode: z.enum(['transactional', 'direct']).optional().default('transactional'),
+  maxDepth: z.number().int().positive().optional().default(3),
+  maxModelCalls: z.number().int().positive().optional().default(24),
+  writeDepth: z.number().int().positive().optional().default(20),
+  repairRounds: z.number().int().nonnegative().optional().default(1),
+  promptPrefix: z.string().optional().default('dml> '),
+  render: z.enum(['rich', 'plain', 'json']).optional(),
+  showReasoning: z.enum(['off', 'summary', 'full']).optional().default('summary'),
+  showToolArgs: z.boolean().optional().default(true),
+  maxToolResultChars: z.number().int().positive().optional().default(2000),
+  color: z.boolean().optional().default(true),
+  tools: z.array(z.string()).nullish(),
+}).optional().default({});
+
 export const ConfigSchema = z.object({
   models: ModelsSchema.default(DEFAULT_MODEL_IDS),
   temperatures: TemperaturesSchema.default(DEFAULT_TEMPERATURES),
@@ -130,6 +152,7 @@ export const ConfigSchema = z.object({
   agentvm: AgentVMConfigSchema,
   shell: ShellConfigSchema,
   compaction: CompactionConfigSchema,
+  repl: ReplConfigSchema,
   dmlBase: z.string().optional().default('.deepclause/tools'),
   workspace: z.string().optional().default('./'),
   model: z.string().optional(),
@@ -177,6 +200,22 @@ const DEFAULT_CONFIG: Config = {
         },
       },
     ],
+  },
+  repl: {
+    exportOnExit: false,
+    exportPath: 'harness.dml',
+    frozen: false,
+    locked: false,
+    editMode: 'transactional',
+    maxDepth: 3,
+    maxModelCalls: 24,
+    writeDepth: 20,
+    repairRounds: 1,
+    promptPrefix: 'dml> ',
+    showReasoning: 'summary',
+    showToolArgs: true,
+    maxToolResultChars: 2000,
+    color: true,
   },
   dmlBase: '.deepclause/tools',
   workspace: './'
@@ -584,6 +623,7 @@ export function getDefaultConfig(): Config {
     mcp: { servers: {} },
     agentvm: { network: DEFAULT_CONFIG.agentvm?.network ?? false },
     shell: { ...DEFAULT_CONFIG.shell },
+    repl: { ...DEFAULT_CONFIG.repl },
     compaction: DEFAULT_CONFIG.compaction
       ? {
         ...DEFAULT_CONFIG.compaction,
@@ -767,6 +807,22 @@ export function resolveCompactionConfig(
 /**
  * Check if configuration exists
  */
+export type ReplConfig = Config['repl'];
+
+/**
+ * Load configuration for the REPL without requiring `.deepclause/` to exist.
+ *
+ * The REPL is a goal-mode-capable tool that must run from a clean checkout
+ * (see the plan's smoke test), so a missing config falls back to defaults
+ * rather than creating the workspace directory.
+ */
+export async function loadReplConfig(workspaceRoot: string): Promise<Config> {
+  if (await configExists(workspaceRoot)) {
+    return loadConfig(workspaceRoot);
+  }
+  return getDefaultConfig();
+}
+
 export async function configExists(workspaceRoot: string): Promise<boolean> {
   try {
     await fs.access(getConfigPath(workspaceRoot));

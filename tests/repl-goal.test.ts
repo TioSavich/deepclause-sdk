@@ -1,0 +1,123 @@
+/**
+ * M1 — session + goal mode.
+ *
+ * Covers goal enumeration, loading DML, `[file].` consult, reset, and error
+ * handling through the public HarnessRepl facade.
+ */
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import * as fs from 'fs/promises';
+import * as os from 'os';
+import * as path from 'path';
+
+import { createHarnessRepl, type HarnessRepl } from '../src/repl/index.js';
+import type { DMLEvent } from '../src/types.js';
+
+let workspace: string;
+let repl: HarnessRepl;
+
+async function openRepl(): Promise<HarnessRepl> {
+  return createHarnessRepl({
+    workspacePath: workspace,
+    model: 'test-model',
+    provider: 'openai',
+  });
+}
+
+async function collect(gen: AsyncGenerator<DMLEvent>): Promise<DMLEvent[]> {
+  const events: DMLEvent[] = [];
+  for await (const event of gen) {
+    events.push(event);
+  }
+  return events;
+}
+
+function solutionValues(events: DMLEvent[], name: string): string[] {
+  return events
+    .filter((event) => event.type === 'solution')
+    .map((event) => event.solution?.bindings.find((binding) => binding.name === name)?.value ?? '');
+}
+
+beforeEach(async () => {
+  workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'deepclause-repl-'));
+  repl = await openRepl();
+});
+
+afterEach(async () => {
+  await repl.dispose();
+  await fs.rm(workspace, { recursive: true, force: true });
+});
+
+describe('goal mode', () => {
+  it('enumerates every solution of member/2', async () => {
+    const events = await collect(repl.query('member(X, [a, b, c])'));
+    expect(events.filter((event) => event.type === 'solution')).toHaveLength(3);
+    expect(solutionValues(events, 'X')).toEqual(['a', 'b', 'c']);
+    expect(events.at(-1)?.type).toBe('finished');
+  });
+
+  it('binds variables after loading DML code', async () => {
+    const loaded = await repl.session.loadCode(
+      'fact(0, 1).\nfact(N, F) :- N > 0, N1 is N - 1, fact(N1, F1), F is N * F1.\n',
+    );
+    expect(loaded.error).toBeUndefined();
+
+    const events = await collect(repl.query('fact(5, F)'));
+    expect(solutionValues(events, 'F')).toEqual(['120']);
+  });
+
+  it('reports undefined predicates as an error event instead of hanging', async () => {
+    const events = await collect(repl.query('no_such_predicate(X)'));
+    expect(events.some((event) => event.type === 'error')).toBe(true);
+    expect(events.at(-1)?.type).toBe('error');
+  });
+
+  it('reports a syntax error without treating the input as a prompt', async () => {
+    const events = await collect(repl.query('member(X, [a,b'));
+    const error = events.find((event) => event.type === 'error');
+    expect(error?.content).toContain('syntax_error');
+  });
+
+  it('captures format/2 output as an output event', async () => {
+    const events = await collect(repl.query('format("value=~w~n", [42])'));
+    expect(events.some((event) => event.type === 'output' && event.content === 'value=42\n')).toBe(true);
+  });
+
+  it('commits at answer/1 and stops enumeration', async () => {
+    const events = await collect(repl.query('answer("done")'));
+    expect(events.some((event) => event.type === 'answer' && event.content === 'done')).toBe(true);
+    expect(events.at(-1)?.type).toBe('finished');
+  });
+
+  it('merges multiple loaded files in order', async () => {
+    await fs.writeFile(path.join(workspace, 'a.dml'), 'from_a(1).\n');
+    await fs.writeFile(path.join(workspace, 'b.dml'), 'from_b(2).\n');
+    expect((await repl.load('a.dml')).error).toBeUndefined();
+    expect((await repl.load('b.dml')).error).toBeUndefined();
+
+    const events = await collect(repl.query('from_a(A), from_b(B)'));
+    const solution = events.find((event) => event.type === 'solution');
+    expect(solution?.solution?.bindings).toEqual([
+      { name: 'A', value: '1' },
+      { name: 'B', value: '2' },
+    ]);
+  });
+
+  it('loads a file through [file]. consult', async () => {
+    await fs.writeFile(path.join(workspace, 'extra.dml'), 'consulted(7).\n');
+    const events = await collect(repl.query('["extra.dml"]'));
+    expect(events.some((event) => event.type === 'error')).toBe(false);
+
+    const result = await collect(repl.query('consulted(X)'));
+    expect(solutionValues(result, 'X')).toEqual(['7']);
+  });
+
+  it('empties the living module on reset', async () => {
+    await repl.session.loadCode('temp(1).\n');
+    expect(solutionValues(await collect(repl.query('temp(X)')), 'X')).toEqual(['1']);
+
+    await repl.reset();
+    const after = await collect(repl.query('temp(X)'));
+    expect(after.some((event) => event.type === 'error')).toBe(true);
+    expect(after.some((event) => event.type === 'solution')).toBe(false);
+  });
+});

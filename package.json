@@ -6,7 +6,8 @@
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "bin": {
-    "deepclause": "./dist/cli/index.js"
+    "deepclause": "./dist/cli/index.js",
+    "deepclause-repl": "./dist/cli/repl-bin.js"
   },
   "exports": {
     ".": {

@@ -22,10 +22,23 @@
     destroy_engine/1,
     % Frame predicates (M0: reentrant, frame-aware execution)
     create_frame/6,
+    create_frame_raw/5,
     step_frame/4,
     end_frame/1,
     frame_info/4,
     default_frame/2,
+    % REPL session and query mode (M1)
+    create_session/4,
+    clear_session/1,
+    destroy_session/1,
+    load_code/3,
+    repl_initial_state/3,
+    query_start/5,
+    repl_solve/4,
+    collect_bindings/2,
+    repl_listing/2,
+    repl_listing/3,
+    repl_reserved/1,
     post_agent_result/4,
     post_exec_result/3,
     post_sample_token_result/3,
@@ -52,6 +65,9 @@
 :- dynamic session_frame/4.        % session_frame(FrameId, SessionId, Kind, Depth)
 :- dynamic session_frame_engine/2. % session_frame_engine(FrameId, Engine)
 :- dynamic session_default_frame/2. % session_default_frame(SessionId, FrameId)
+:- dynamic session_repl_memory/2.   % session_repl_memory(SessionId, HarnessMemory) - object/entry memory
+:- dynamic session_meta_memory/2.   % session_meta_memory(SessionId, MetaMemory) - code-writing task memory
+:- dynamic session_repl_mode/2.     % session_repl_mode(SessionId, true/false) - gates format/writeln output shims
 :- dynamic session_params/2.       % session_params(SessionId, ParamsDict)
 :- dynamic session_user_tools/2.   % session_user_tools(SessionId, ToolName)
 :- dynamic session_user_tool_schema/3. % session_user_tool_schema(SessionId, ToolName, Schema)
@@ -523,6 +539,16 @@ default_frame(SessionId, FrameId) :-
 frame_info(FrameId, SessionId, Kind, Depth) :-
     session_frame(FrameId, SessionId, Kind, Depth).
 
+%% create_frame_raw(+SessionId, +Kind, +Depth, +EngineGoal, -FrameId)
+%% Registers a frame whose engine runs EngineGoal verbatim. Most callers want
+%% create_frame/6, which wraps the goal in the mi/3 meta-interpreter; goal mode
+%% uses this to run repl_solve/4 directly (mi/3 cuts after the first solution).
+create_frame_raw(SessionId, Kind, Depth, EngineGoal, FrameId) :-
+    gensym(frame_, FrameId),
+    engine_create(_, EngineGoal, Engine),
+    assertz(session_frame(FrameId, SessionId, Kind, Depth)),
+    assertz(session_frame_engine(FrameId, Engine)).
+
 %% create_frame(+SessionId, +Kind, +Depth, +Goal, +InitialState, -FrameId)
 %% Kind = query | meta | nested | object
 %% Creates an engine running deepclause_mi:mi(Goal, InitialState, SessionId)
@@ -530,12 +556,9 @@ frame_info(FrameId, SessionId, Kind, Depth) :-
 %% stepping: a parent frame is suspended while a child frame runs, so the
 %% per-session result/signal slots are never concurrently pending.
 create_frame(SessionId, Kind, Depth, Goal, InitialState, FrameId) :-
-    gensym(frame_, FrameId),
-    engine_create(_,
+    create_frame_raw(SessionId, Kind, Depth,
         deepclause_mi:mi(Goal, InitialState, SessionId),
-        Engine),
-    assertz(session_frame(FrameId, SessionId, Kind, Depth)),
-    assertz(session_frame_engine(FrameId, Engine)).
+        FrameId).
 
 %% step_frame(+FrameId, -Status, -Content, -Payload)
 step_frame(FrameId, Status, Content, Payload) :-
@@ -588,6 +611,323 @@ end_frame(FrameId) :-
     ),
     retractall(session_frame_engine(FrameId, _)),
     retractall(session_frame(FrameId, _, _, _)).
+
+%% ============================================================
+%% REPL Session and Goal Mode (M1)
+%% ============================================================
+%%
+%% A REPL session owns a persistent living module. Unlike create_engine/6,
+%% which is tied to a single run and destroyed by destroy_engine/1, a session
+%% lives across inputs; reset/clear_session empties it without tearing down the
+%% process-level SWI instance.
+
+%% create_session(+SessionId, +Params, +HarnessMemory, +MetaMemory)
+create_session(SessionId, Params, HarnessMemory, MetaMemory) :-
+    retractall(session_params(SessionId, _)),
+    assertz(session_params(SessionId, Params)),
+    (   get_dict(trace, Params, true)
+    ->  TraceEnabled = true
+    ;   TraceEnabled = false
+    ),
+    retractall(session_trace_enabled(SessionId, _)),
+    assertz(session_trace_enabled(SessionId, TraceEnabled)),
+    retractall(session_trace_log(SessionId, _)),
+    assertz(session_trace_log(SessionId, [])),
+    retractall(session_repl_memory(SessionId, _)),
+    assertz(session_repl_memory(SessionId, HarnessMemory)),
+    retractall(session_meta_memory(SessionId, _)),
+    assertz(session_meta_memory(SessionId, MetaMemory)),
+    retractall(session_repl_mode(SessionId, _)),
+    assertz(session_repl_mode(SessionId, true)).
+
+%% clear_session(+SessionId)
+%% Empties the living module, ends all frames, and resets memories. Session
+%% params (workspace/gas limit) are preserved so the REPL stays configured.
+clear_session(SessionId) :-
+    (   findall(FrameId, session_frame(FrameId, SessionId, _, _), FrameIds)
+    ->  forall(member(FrameId, FrameIds), end_frame(FrameId))
+    ;   true
+    ),
+    (   session_engine(SessionId, Engine)
+    ->  catch(engine_destroy(Engine), _, true)
+    ;   true
+    ),
+    retractall(session_engine(SessionId, _)),
+    retractall(session_default_frame(SessionId, _)),
+    retractall(session_repl_memory(SessionId, _)),
+    assertz(session_repl_memory(SessionId, [])),
+    retractall(session_meta_memory(SessionId, _)),
+    assertz(session_meta_memory(SessionId, [])),
+    retractall(session_user_tools(SessionId, _)),
+    retractall(session_user_tool_schema(SessionId, _, _)),
+    (   current_module(SessionId)
+    ->  % Retract only user predicates so imported builtins are never touched.
+        findall(Name/Arity,
+            (   current_predicate(SessionId:Name/Arity),
+                repl_user_predicate(SessionId, Name, Arity)
+            ),
+            UserPreds0),
+        sort(UserPreds0, UserPreds),
+        forall(member(Name/Arity, UserPreds),
+            catch(abolish(SessionId:Name/Arity), _, true))
+    ;   true
+    ).
+
+%% destroy_session(+SessionId)
+%% Tears a REPL session down completely: clears the module/frames and removes
+%% the session's dynamic bookkeeping so the process can host another session.
+destroy_session(SessionId) :-
+    clear_session(SessionId),
+    retractall(session_repl_memory(SessionId, _)),
+    retractall(session_meta_memory(SessionId, _)),
+    retractall(session_repl_mode(SessionId, _)),
+    retractall(session_params(SessionId, _)),
+    retractall(session_trace_enabled(SessionId, _)),
+    retractall(session_trace_log(SessionId, _)).
+
+%% load_code(+SessionId, +Code, -Error)
+%% Parses DML source into the session module, running the normal source
+%% preprocessing (task/prompt rewrite, interpolation, expand_term).
+load_code(SessionId, Code, Error) :-
+    catch(
+        (   parse_dml_string(Code, SessionId),
+            Error = none
+        ),
+        LoadError,
+        format(atom(Error), '~w', [LoadError])
+    ).
+
+%% repl_initial_state(+SessionId, +FrameKind, -InitialState)
+%% Builds the state{} threaded through a REPL frame. M1 seeds harness memory
+%% from session_repl_memory/2; M4 adds the meta/scratch slots.
+repl_initial_state(SessionId, _FrameKind, InitialState) :-
+    session_params(SessionId, Params),
+    (   get_dict(gas_limit, Params, GasLimit)
+    ->  true
+    ;   GasLimit = -1
+    ),
+    (   session_repl_memory(SessionId, Memory)
+    ->  true
+    ;   Memory = []
+    ),
+    InitialState = state{
+        memory: Memory,
+        params: Params,
+        context_stack: [],
+        depth: 0,
+        gas_remaining: GasLimit
+    }.
+
+%% query_start(+SessionId, +Text, +FrameKind, +InitialState, -Error)
+%% Parses and preprocesses a goal string, then creates a frame running
+%% repl_solve/4. The frame becomes the session's default frame so that
+%% step_engine/4 and the runner can drive it.
+query_start(SessionId, Text, FrameKind, InitialState, Error) :-
+    catch(
+        (   read_repl_goal(SessionId, Text, Goal, Names),
+            create_frame_raw(SessionId, FrameKind, 0,
+                deepclause_mi:repl_solve(Goal, Names, SessionId, InitialState),
+                FrameId),
+            retractall(session_default_frame(SessionId, _)),
+            assertz(session_default_frame(SessionId, FrameId)),
+            session_frame_engine(FrameId, Engine),
+            retractall(session_engine(SessionId, _)),
+            assertz(session_engine(SessionId, Engine)),
+            Error = none
+        ),
+        QueryError,
+        format(atom(Error), '~w', [QueryError])
+    ).
+
+%% ensure_full_stop(+Text, -TextWithStop)
+%% Appends a terminating full stop + newline when the goal text lacks one, so
+%% both `goal: p(X).` and `-g "p(X)"` read cleanly.
+ensure_full_stop(Text, Text1) :-
+    atom_string(TextAtom, Text),
+    (   sub_atom(TextAtom, _, _, 0, '.')
+    ->  atom_concat(TextAtom, '\n', Text1)
+    ;   atom_concat(TextAtom, '.\n', Text1)
+    ).
+
+%% read_repl_goal(+SessionId, +Text, -Goal, -Names)
+%% Names is the read_term variable_names list (Name=Var), used to render
+%% bindings for solution events.
+read_repl_goal(SessionId, Text, Goal, Names) :-
+    % read_term/3 requires a full stop; REPL callers may omit it (`-g "p(X)"`).
+    ensure_full_stop(Text, Text1),
+    open_string(Text1, Stream),
+    read_term(Stream, RawGoal, [module(SessionId), variable_names(Names0)]),
+    close(Stream),
+    (   RawGoal == end_of_file
+    ->  throw(error(syntax_error('empty goal'), _))
+    ;   true
+    ),
+    % Apply only the goal-relevant source transforms. Do NOT run
+    % preprocess_loaded_term/3 here: its file-load term expansion flattens a
+    % list goal such as ["file.dml"] into its elements.
+    transform_task_calls(RawGoal, Names0, Transformed),
+    expand_interpolations(Transformed, Names0, Goal),
+    Names = Names0.
+
+%% repl_solve(+Goal, +Names, +SessionId, +State)
+%% Enumerating goal-mode solver. Yields one solution(Bindings, Deterministic)
+%% per answer and fails so engine_next/2 backtracks for the next solution.
+%% answer/1 commits (throws '$answer_commit') and stops enumeration.
+%% mi/3 is deliberately not used: it cuts after the first solution.
+repl_solve(Goal, Names, SessionId, State) :-
+    nb_setval(current_session_id, SessionId),
+    catch(
+        repl_solve_loop(Goal, Names, SessionId, State),
+        '$answer_commit',
+        true
+    ).
+
+repl_solve_loop(Goal, Names, SessionId, State) :-
+    mi_call(Goal, State, StateOut),
+    collect_bindings(Names, Bindings),
+    store_repl_memory(SessionId, StateOut),
+    engine_yield(solution(Bindings, false)),
+    fail.
+
+%% collect_bindings(+Names, -Bindings)
+%% Bindings is a list of Name-RenderedText. Unbound variables render as '_'.
+collect_bindings(Names, Bindings) :-
+    findall(Name-Text,
+        (   member(Name=Var, Names),
+            render_binding(Var, Text)
+        ),
+        Bindings).
+
+render_binding(Var, '_') :-
+    var(Var),
+    !.
+render_binding(Value, Text) :-
+    with_output_to(string(Text), write_term(Value, [quoted(true), max_depth(20)])).
+
+store_repl_memory(SessionId, State) :-
+    (   is_dict(State),
+        get_dict(memory, State, Memory)
+    ->  retractall(session_repl_memory(SessionId, _)),
+        assertz(session_repl_memory(SessionId, Memory))
+    ;   true
+    ).
+
+%% repl_listing(+SessionId, +Filter, -Text)
+%% Read-only listing used by the meta tool and the `listing.` REPL command.
+repl_listing(SessionId, Filter, Text) :-
+    with_output_to(string(Text), repl_listing_output(SessionId, Filter)).
+
+%% repl_listing(+Filter, -Text) uses the current session id.
+repl_listing(Filter, Text) :-
+    get_session_id(SessionId),
+    repl_listing(SessionId, Filter, Text).
+
+repl_listing_output(SessionId, Filter) :-
+    (   Filter == tools
+    ->  forall(session_user_tool_schema(SessionId, Name, Schema),
+            (   SessionId:tool_source(Name, Source)
+            ->  format("~w - ~w~n~w~n~n", [Name, Schema, Source])
+            ;   format("~w - ~w~n~n", [Name, Schema])
+            )
+        )
+    ;   findall(Name/Arity,
+            (   current_predicate(SessionId:Name/Arity),
+                repl_user_predicate(SessionId, Name, Arity)
+            ),
+            Preds0),
+        sort(Preds0, Preds),
+        forall(member(Name/Arity, Preds),
+            (   repl_listing_match(Filter, Name, Arity)
+            ->  format("~w/~w~n", [Name, Arity]),
+                functor(Head, Name, Arity),
+                listing(SessionId:Head)
+            ;   true
+            )
+        )
+    ).
+
+repl_listing_match(all, _, _) :- !.
+repl_listing_match(Name/Arity, Name, Arity) :- !.
+repl_listing_match(Filter, Name, _) :-
+    atom(Filter),
+    !,
+    (   sub_atom(Name, 0, _, _, Filter)
+    ;   sub_atom(Filter, 0, _, _, Name)
+    ).
+repl_listing_match(_, _, _).
+
+%% repl_user_predicate(+SessionId, +Name, +Arity)
+%% Excludes reserved and internal predicates from listing/export.
+repl_user_predicate(_SessionId, Name, _Arity) :-
+    repl_reserved_name(Name),
+    !,
+    fail.
+repl_user_predicate(_SessionId, Name, _Arity) :-
+    internal_session_predicate(Name),
+    !,
+    fail.
+repl_user_predicate(SessionId, Name, Arity) :-
+    % User DML clauses are asserted (interpreted) into the session module.
+    % Builtins/imports are not, so this filters them out without also
+    % tripping over module inheritance. Build a callable head rather than a
+    % predicate indicator: predicate_property/2 wants a goal (Module:Goal).
+    functor(Head, Name, Arity),
+    predicate_property(SessionId:Head, interpreted).
+
+internal_session_predicate(param).
+internal_session_predicate(param_decl).
+internal_session_predicate(tool_source).
+internal_session_predicate('__session__').
+
+%% repl_reserved_name(+Name)
+%% Names owned by the REPL runtime. M4 uses repl_reserved/1 to refuse goals
+%% that try to re-enter or shadow the REPL control surface.
+repl_reserved_name(repl_meta_prompt).
+repl_reserved_name(repl_extract_code).
+repl_reserved_name(repl_entry_goal).
+repl_reserved_name(repl_entry).
+repl_reserved_name(repl_reserved).
+repl_reserved_name(repl_reserved_name).
+repl_reserved_name(repl_tool_catalog).
+repl_reserved_name(repl_listing).
+repl_reserved_name(repl_assert).
+repl_reserved_name(repl_retract).
+repl_reserved_name(repl_delete).
+repl_reserved_name(repl_freeze).
+repl_reserved_name(repl_unfreeze).
+repl_reserved_name(repl_is_frozen).
+repl_reserved_name(repl_solve).
+repl_reserved_name(repl_initial_state).
+repl_reserved_name(repl_user_predicate).
+repl_reserved_name(query_start).
+repl_reserved_name(read_repl_goal).
+repl_reserved_name(create_session).
+repl_reserved_name(clear_session).
+repl_reserved_name(destroy_session).
+repl_reserved_name(create_frame).
+repl_reserved_name(create_frame_raw).
+repl_reserved_name(step_frame).
+repl_reserved_name(end_frame).
+repl_reserved_name(frame_info).
+repl_reserved_name(default_frame).
+repl_reserved_name(load_code).
+repl_reserved_name(freeze).
+repl_reserved_name(unfreeze).
+repl_reserved_name(reset).
+repl_reserved_name(export).
+
+%% repl_reserved(+TermOrNameArity)
+repl_reserved(Name) :-
+    atom(Name),
+    repl_reserved_name(Name).
+repl_reserved(Name/Arity) :-
+    atom(Name),
+    integer(Arity),
+    repl_reserved_name(Name).
+repl_reserved(Term) :-
+    compound(Term),
+    functor(Term, Name, _),
+    repl_reserved_name(Name).
 
 %% determine_agent_goal(+SessionId, +Args, -Goal)
 %% Args is a list of positional arguments - passed directly to agent_main
@@ -662,6 +1002,9 @@ process_engine_result(request_judgment(Payload), request_judgment, '', Payload) 
 %% Tool result from inline tool execution
 process_engine_result(tool_result(Result), tool_result, '',
     payload{result: Result}) :- !.
+%% Goal-mode solution: bindings is a list of Name-RenderedText pairs.
+process_engine_result(solution(Bindings, Deterministic), solution, '',
+    payload{bindings: Bindings, deterministic: Deterministic}) :- !.
 process_engine_result(wait_input(Prompt), wait_input, Prompt, none) :- !.
 process_engine_result(error(Msg), error, Msg, none) :- !.
 process_engine_result(Other, error, Msg, none) :-
@@ -1839,6 +2182,27 @@ mi_call(log(Text), StateIn, StateIn) :-
     interpolate_desc(Text, Params, InterpText),
     engine_yield(log(InterpText)).
 
+%% mi_call(format(Format, Args), +StateIn, -StateOut)
+%% In REPL mode, capture format/2 output as an output event rather than
+%% writing to the process stdout. Outside the REPL (runDML), keep normal
+%% behavior so existing traces/prompts are unaffected.
+mi_call(format(Format, Args), StateIn, StateIn) :-
+    get_session_id(SessionId),
+    (   session_repl_mode(SessionId, true)
+    ->  with_output_to(string(Text), format(Format, Args)),
+        mi_call(output(Text), StateIn, StateIn)
+    ;   format(Format, Args)
+    ).
+
+%% mi_call(writeln(Value), +StateIn, -StateOut)
+mi_call(writeln(Value), StateIn, StateIn) :-
+    get_session_id(SessionId),
+    (   session_repl_mode(SessionId, true)
+    ->  with_output_to(string(Text), writeln(Value)),
+        mi_call(output(Text), StateIn, StateIn)
+    ;   writeln(Value)
+    ).
+
 %% ============================================================
 %% Context Stack Management - for memory save/restore
 %% ============================================================
@@ -2489,6 +2853,8 @@ is_mi_special_predicate(with_judgment(_,_)).
 is_mi_special_predicate(require_judgment(_,_)).
 %% Context stack management
 is_mi_special_predicate(get_memory(_)).
+is_mi_special_predicate(format(_,_)).
+is_mi_special_predicate(writeln(_)).
 is_mi_special_predicate(push_context).
 is_mi_special_predicate(push_context(_)).
 is_mi_special_predicate(pop_context).

@@ -81,7 +81,7 @@ Update the `Status` column as work lands. One milestone at a time.
 | Milestone | Scope | Proposal | Status |
 |---|---|---|---|
 | **M0** | Frame-aware, reentrant runner | §8 | ✅ |
-| **M1** | Session, goal mode, `goal:` classifier, CLI skeleton | §7, §9.1, §11, §13.1–13.3 | ☐ |
+| **M1** | Session, goal mode, `goal:` classifier, CLI skeleton | §7, §9.1, §11, §13.1–13.3 | ✅ |
 | **M2** | `freeze` lock + `export`/`-l` | §12 | ☐ |
 | **M3** | Prompt mode (meta frame, meta tools, commit/run) + streaming | §9.2–9.6, §10, §15 | ☐ |
 | **M4** | Context, scratch memory, `execute`, recursion budgets | §7.2, §10 | ☐ |
