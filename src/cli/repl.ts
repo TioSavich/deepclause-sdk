@@ -185,6 +185,9 @@ export interface ReplRuntime {
   workspace: string;
   promptPrefix: string;
   toolset: ReplToolset;
+  /** Resolved model and backend, shown in the startup banner. */
+  model: string;
+  backend: 'env' | 'pi';
   /** Set when the env backend has no credentials for the selected provider. */
   missingCredential?: string;
 }
@@ -281,8 +284,25 @@ export async function createReplRuntime(options: ReplCliOptions): Promise<ReplRu
     workspace,
     promptPrefix: config.repl.promptPrefix ?? 'dml> ',
     toolset,
+    model: backendKind === 'pi' ? harnessModel : `${harnessProvider}:${harnessModel}`,
+    backend: backendKind,
     missingCredential,
   };
+}
+
+/** Startup banner for the interactive REPL (proposal §2.1). */
+function printBanner(runtime: ReplRuntime, loaded: string[]): void {
+  const state = loaded.length > 0
+    ? `(${loaded.length} file${loaded.length === 1 ? '' : 's'} loaded)`
+    : '(blank harness)';
+  const frozen = runtime.repl.isFrozen() ? '  [FROZEN]' : '';
+  const lines = [
+    `DML REPL  ${state}${frozen}`,
+    `model: ${runtime.model}   backend: ${runtime.backend}   workspace: ${runtime.workspace}`,
+    "type 'goal: <dml>.' to run a DML goal (e.g. goal: member(X, [1,2,3]).), or plain English to build the harness.",
+    "type 'help.' for help, 'listing.' to list the harness, 'export <file>.' to save, 'freeze.' to lock, 'halt.' to exit.",
+  ];
+  runtime.renderer.writeLine(lines.join('\n'));
 }
 
 /** Dispatch one classified input. Returns false when the REPL should exit. */
@@ -469,9 +489,10 @@ async function runInteractiveGoal(
           return;
         }
         if (!pageAll) {
+          // SWI-style pager: ';' continues, '.' or Enter stops, a/w/p print all.
           const key = await nextLine();
           const trimmed = (key ?? '').trim();
-          if (trimmed === '.') {
+          if (trimmed === '' || trimmed === '.' || trimmed === 'd') {
             renderer.writeLine('.');
             await iterator.return?.(undefined);
             return;
@@ -522,6 +543,7 @@ export async function startRepl(options: ReplCliOptions): Promise<number> {
     if (!process.stdin.isTTY) {
       return await runNonInteractive(runtime, options);
     }
+    printBanner(runtime, options.load ?? []);
     return await runInteractive(runtime, options);
   } finally {
     if (options.exportPath) {
