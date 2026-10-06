@@ -527,9 +527,20 @@ export class DMLSession {
    * temp .dml file. Used as an abort safety net so a cancelled turn's work is
    * not lost.
    */
-  async saveCurrentHarness(reason: string): Promise<string | null> {
+  /** True when the living module has no user predicates (nothing worth saving). */
+  isEmpty(): boolean {
     const result = this.prologQuery(
-      `deepclause_mi:export_harness('${this.sessionId}', ${quoteString(`aborted turn: ${reason}`)}, Text)`
+      `deepclause_mi:repl_user_predicates_text('${this.sessionId}', Text)`
+    );
+    return String(plainValue(result?.Text) ?? '').trim() === '';
+  }
+
+  async saveCurrentHarness(
+    reason: string,
+    header: string = `aborted turn: ${reason}`,
+  ): Promise<string | null> {
+    const result = this.prologQuery(
+      `deepclause_mi:export_harness('${this.sessionId}', ${quoteString(header)}, Text)`
     );
     const text = String(plainValue(result?.Text) ?? '');
     if (!text.trim()) {
@@ -541,7 +552,7 @@ export class DMLSession {
       os.tmpdir(),
       `deepclause-repl-${this.sessionId}-${Date.now()}.zip`,
     );
-    await this.writeBundle(file, text, this.scriptFiles(), `aborted turn: ${reason}`);
+    await this.writeBundle(file, text, this.scriptFiles(), header);
     return file;
   }
 

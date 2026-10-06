@@ -138,8 +138,23 @@ a temp `.dml` file so nothing is lost:
 ERROR: turn aborted; current harness saved to /tmp/deepclause-repl-<id>-<ts>.dml
 ```
 
-Load that file with `deepclause repl -l <file>` to resume. Ctrl-C while idle
-exits the REPL. The same applies to `goal:` queries and `-g` runs.
+Load that file with `deepclause repl -l <file>` to resume. The same applies to
+`goal:` queries and `-g` runs.
+
+### Saving on exit
+
+When you leave the REPL — `halt.`, **Ctrl-D**, or **Ctrl-C** while idle — the
+harness (module + linked scripts, as a `.zip` bundle) is written to a temp file
+and the path is printed, so the work is preserved:
+
+```text
+dml> halt.
+harness saved to /tmp/deepclause-repl-<id>-<ts>.zip
+```
+
+It is skipped when the harness has no predicates, when `--export <file>` was
+given, or with `--no-save-on-exit`. Reload a bundle with
+`deepclause repl -l <file>.zip`.
 
 A meta task that ends **without producing DML** — iteration cap, exhausted
 model-call budget, or a model error — is treated the same way: the transaction

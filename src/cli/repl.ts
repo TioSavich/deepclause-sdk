@@ -45,6 +45,8 @@ export interface ReplCliOptions {
   stream?: boolean;
   /** Render activity events (task activity, tool calls, usage, logs; default true). */
   events?: boolean;
+  /** Save the harness to a temp file on exit (default true). */
+  saveOnExit?: boolean;
   /** Default judgment backend name (llm|jev). */
   judge?: string;
   tools?: string;
@@ -532,11 +534,15 @@ function installSigint(
   runtime: ReplRuntime,
   holder: { turn: AbortController | null },
   rl?: readline.Interface,
+  onExit?: () => Promise<void>,
 ): () => void {
   const handler = () => {
     if (holder.turn) {
       holder.turn.abort(new Error('cancelled by user'));
       runtime.renderer.writeErrorLine('(cancelling current turn… press Ctrl-C again to exit)');
+    } else if (onExit) {
+      // Save the harness before exiting (Ctrl-C while idle).
+      void onExit().finally(() => process.exit(130));
     } else {
       process.exit(130);
     }
@@ -549,11 +555,15 @@ function installSigint(
   };
 }
 
-async function runNonInteractive(runtime: ReplRuntime, options: ReplCliOptions): Promise<number> {
+async function runNonInteractive(
+  runtime: ReplRuntime,
+  options: ReplCliOptions,
+  onExit?: () => Promise<void>,
+): Promise<number> {
   let exitCode = 0;
   const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
   const holder: { turn: AbortController | null } = { turn: null };
-  const removeSigint = installSigint(runtime, holder, rl);
+  const removeSigint = installSigint(runtime, holder, rl, onExit);
   try {
     for await (const line of rl) {
       const input = classifyReplInput(line);
@@ -579,7 +589,11 @@ async function runNonInteractive(runtime: ReplRuntime, options: ReplCliOptions):
 }
 
 /** Interactive mode with the `dml>` prompt and a `;`/`.` pager for goals. */
-async function runInteractive(runtime: ReplRuntime, options: ReplCliOptions): Promise<number> {
+async function runInteractive(
+  runtime: ReplRuntime,
+  options: ReplCliOptions,
+  onExit?: () => Promise<void>,
+): Promise<number> {
   const { promptPrefix } = runtime;
   const rl = readline.createInterface({
     input: process.stdin,
@@ -621,7 +635,7 @@ async function runInteractive(runtime: ReplRuntime, options: ReplCliOptions): Pr
   });
 
   const holder: { turn: AbortController | null } = { turn: null };
-  const removeSigint = installSigint(runtime, holder, rl);
+  const removeSigint = installSigint(runtime, holder, rl, onExit);
 
   try {
     while (true) {
@@ -708,6 +722,23 @@ export async function runInteractiveGoal(
 /** Entry point for `deepclause repl`. */
 export async function startRepl(options: ReplCliOptions): Promise<number> {
   const runtime = await createReplRuntime(options);
+
+  // Save the harness to a temp bundle on exit (halt./Ctrl-D/Ctrl-C). Skipped
+  // when an explicit --export path was given, when disabled, when already
+  // saved, or when the harness has no predicates.
+  let exitSaved = false;
+  const saveHarnessOnExit = async (): Promise<void> => {
+    if (exitSaved || options.exportPath || options.saveOnExit === false) return;
+    exitSaved = true;
+    try {
+      if (runtime.repl.session.isEmpty()) return;
+      const saved = await runtime.repl.session.saveCurrentHarness('exit', 'repl exit');
+      if (saved) runtime.renderer.writeLine(`harness saved to ${saved}`);
+    } catch {
+      // best effort
+    }
+  };
+
   try {
     const loadExit = await executeLoad(runtime, options.load ?? []);
     if (loadExit !== 0) {
@@ -743,11 +774,12 @@ export async function startRepl(options: ReplCliOptions): Promise<number> {
     }
 
     if (!process.stdin.isTTY) {
-      return await runNonInteractive(runtime, options);
+      return await runNonInteractive(runtime, options, saveHarnessOnExit);
     }
     printBanner(runtime, options.load ?? []);
-    return await runInteractive(runtime, options);
+    return await runInteractive(runtime, options, saveHarnessOnExit);
   } finally {
+    await saveHarnessOnExit();
     if (options.exportPath) {
       try {
         const result = await runtime.repl.export(options.exportPath);
@@ -783,6 +815,7 @@ export function registerReplCommand(program: Command): void {
     .option('--backend <kind>', 'override the configured backend (env|pi)')
     .option('--no-stream', 'hide streamed model text/reasoning (show only outputs and solutions)')
     .option('--no-events', 'hide task activity, tool calls, usage, and logs')
+    .option('--no-save-on-exit', 'do not save the harness to a temp bundle on exit')
     .option('--judge <name>', 'default judgment backend (llm|jev)')
     .option('--tools <list>', 'comma-separated capability host tools (default: bash)')
     .option('--no-tools', 'register no capability host tools')
@@ -814,6 +847,7 @@ export function registerReplCommand(program: Command): void {
         backend: options.backend,
         stream: options.stream,
         events: options.events,
+        saveOnExit: options.saveOnExit,
         judge: options.judge,
         tools: typeof options.tools === 'string' ? options.tools : undefined,
         noTools: options.tools === false,
