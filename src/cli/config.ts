@@ -156,16 +156,17 @@ const ReplConfigSchema = z.object({
 }).optional().default({});
 
 /**
- * Model backend selection. `env` uses the SDK provider/API-key settings;
- * `pi` reuses pi's model registry and credentials.
+ * Model backend selection. `pi` (the default) uses pi's model registry and
+ * credential store, which ship as a dependency of this SDK; `env` uses the
+ * SDK provider/API-key settings.
  */
 const BackendConfigSchema = z.object({
-  kind: z.enum(['env', 'pi']).optional().default('env'),
+  kind: z.enum(['env', 'pi']).optional().default('pi'),
   agentDir: z.string().optional(),
   modelsPath: z.string().nullish(),
   authPath: z.string().nullish(),
   model: z.string().optional(),
-}).optional().default({ kind: 'env' });
+}).optional().default({ kind: 'pi' });
 
 const JevJudgeConfigSchema = z.object({
   enabled: z.boolean().optional().default(false),
@@ -212,7 +213,7 @@ const DEFAULT_CONFIG: Config = {
   models: { ...DEFAULT_MODEL_IDS },
   temperatures: { ...DEFAULT_TEMPERATURES },
   modelOptions: {},
-  backend: { kind: 'env' },
+  backend: { kind: 'pi' },
   providers: {},
   mcp: { servers: {} },
   agentvm: { network: false },

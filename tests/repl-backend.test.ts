@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest';
 import {
   createPiAdapter,
   createPiBackend,
-  resolvePiPackageEntry,
+  isPiPackageAvailable,
   resolvePiPaths,
   selectPiModel,
   type PiModelLike,
@@ -129,15 +129,9 @@ describe('createPiAdapter', () => {
   });
 });
 
-describe('existing pi install discovery', () => {
-  it('resolves an installed pi package entry to an importable file URL', () => {
-    const entry = resolvePiPackageEntry();
-    if (entry === null) {
-      // pi is not installed in this environment; the install hint path applies.
-      return;
-    }
-    expect(entry.startsWith('file://')).toBe(true);
-    expect(entry.endsWith('.js')).toBe(true);
+describe('pi dependency', () => {
+  it('resolves the pi package locally (no global install needed)', () => {
+    expect(isPiPackageAvailable()).toBe(true);
   });
 });
 

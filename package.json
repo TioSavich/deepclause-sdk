@@ -47,19 +47,9 @@
     "benchmark:nl2repo": "node benchmarks/run-nl2repo.mjs",
     "benchmark:nl2repo:evaluate": "node benchmarks/evaluate-nl2repo.mjs"
   },
-  "peerDependencies": {
-    "@earendil-works/pi-ai": "*",
-    "@earendil-works/pi-coding-agent": "*"
-  },
-  "peerDependenciesMeta": {
-    "@earendil-works/pi-ai": {
-      "optional": true
-    },
-    "@earendil-works/pi-coding-agent": {
-      "optional": true
-    }
-  },
   "dependencies": {
+    "@earendil-works/pi-ai": "^1.0.4",
+    "@earendil-works/pi-coding-agent": "^1.0.4",
     "@ai-sdk/anthropic": "^3.0.35",
     "@ai-sdk/google": "^3.0.60",
     "@ai-sdk/openai": "^3.0.25",

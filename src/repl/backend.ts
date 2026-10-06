@@ -9,10 +9,7 @@
  * the pi backend is selected.
  */
 
-import { execFileSync } from 'child_process';
-import { existsSync, readFileSync, readdirSync, realpathSync } from 'fs';
 import * as path from 'path';
-import { fileURLToPath, pathToFileURL } from 'url';
 
 import type {
   LLMBackend,
@@ -245,143 +242,18 @@ interface PiModule {
 
 const PI_PACKAGE_NAME = '@earendil-works/pi-coding-agent';
 
-/** Walk up from a file until the pi package.json is found. */
-function findPiPackageRoot(file: string): string | null {
-  try {
-    let dir = path.dirname(realpathSync(file));
-    for (let i = 0; i < 12; i += 1) {
-      const pkgPath = path.join(dir, 'package.json');
-      if (existsSync(pkgPath)) {
-        try {
-          const pkg = JSON.parse(readFileSync(pkgPath, 'utf8')) as { name?: string };
-          if (pkg.name === PI_PACKAGE_NAME) return dir;
-        } catch {
-          // ignore malformed package.json
-        }
-      }
-      const parent = path.dirname(dir);
-      if (parent === dir) break;
-      dir = parent;
-    }
-  } catch {
-    // ignore
-  }
-  return null;
-}
-
-/** Locate the pi package from the `pi` executable on PATH. */
-function findPiPackageRootOnPath(): string | null {
-  try {
-    const locator = process.platform === 'win32' ? 'where' : 'which';
-    const output = execFileSync(locator, ['pi'], {
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'ignore'],
-    }).trim();
-    const first = output.split(/\r?\n/)[0]?.trim();
-    return first ? findPiPackageRoot(first) : null;
-  } catch {
-    return null;
-  }
-}
-
-/** Candidate pi package roots for an existing (often global) install. */
-function candidatePiPackageRoots(): string[] {
-  const roots: string[] = [];
-  if (process.env.PI_PACKAGE_DIR) roots.push(process.env.PI_PACKAGE_DIR);
-  const onPath = findPiPackageRootOnPath();
-  if (onPath) roots.push(onPath);
-
-  // Peer dependency installed next to the SDK or in the current project.
-  try {
-    const sdkRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
-    roots.push(path.join(sdkRoot, 'node_modules', PI_PACKAGE_NAME));
-  } catch {
-    // ignore
-  }
-  roots.push(path.join(process.cwd(), 'node_modules', PI_PACKAGE_NAME));
-
-  const home = process.env.HOME;
-  if (home) {
-    const piNodeDir = path.join(home, '.local', 'share', 'pi-node');
-    if (existsSync(piNodeDir)) {
-      try {
-        for (const nodeDir of readdirSync(piNodeDir)) {
-          roots.push(path.join(piNodeDir, nodeDir, 'lib', 'node_modules', PI_PACKAGE_NAME));
-        }
-      } catch {
-        // ignore
-      }
-    }
-    roots.push(path.join(home, '.npm-global', 'lib', 'node_modules', PI_PACKAGE_NAME));
-  }
-
-  roots.push(path.join('/usr/local/lib/node_modules', PI_PACKAGE_NAME));
-  roots.push(path.join('/usr/lib/node_modules', PI_PACKAGE_NAME));
-  return roots;
-}
-
 /**
- * Resolve the pi package entry file to an importable file URL.
- *
- * Used as a fallback when the bare specifier cannot be resolved (for example
- * when the SDK is `npm link`ed and therefore not co-located with a global pi
- * install), so `deepclause set-backend pi` works with an existing pi install.
+ * Import the pi coding agent. It is a regular dependency of this SDK, so the
+ * bare specifier always resolves; a globally installed `pi` is deliberately
+ * not consulted, which keeps the version deterministic.
  */
-export function resolvePiPackageEntry(): string | null {
-  for (const root of candidatePiPackageRoots()) {
-    if (!root || !existsSync(root)) continue;
-    try {
-      const pkg = JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8')) as {
-        name?: string;
-        main?: string;
-        exports?: Record<string, unknown>;
-      };
-      if (pkg.name !== PI_PACKAGE_NAME) continue;
-
-      const exportEntry = pkg.exports?.['.'];
-      let entry: string | undefined;
-      if (typeof exportEntry === 'string') {
-        entry = exportEntry;
-      } else if (exportEntry && typeof exportEntry === 'object' && typeof (exportEntry as { import?: string }).import === 'string') {
-        entry = (exportEntry as { import: string }).import;
-      } else if (typeof pkg.main === 'string') {
-        entry = pkg.main;
-      } else {
-        entry = path.join('dist', 'index.js');
-      }
-
-      const resolved = path.resolve(root, entry);
-      if (existsSync(resolved)) {
-        return pathToFileURL(resolved).href;
-      }
-    } catch {
-      // ignore malformed candidates
-    }
-  }
-  return null;
-}
-
 async function importPiModule(): Promise<PiModule> {
-  // Typed as a plain string so TypeScript does not require the optional peer
-  // dependency to be installed at build time.
-  const packageName: string = PI_PACKAGE_NAME;
   try {
-    return (await import(packageName)) as unknown as PiModule;
+    return (await import(PI_PACKAGE_NAME)) as unknown as PiModule;
   } catch {
-    // Fall back to an existing (often global) pi install located on disk. This
-    // is what makes `deepclause set-backend pi` work with a plain `pi` install
-    // even when the SDK is not co-located with it (e.g. `npm link`).
-    const entry = resolvePiPackageEntry();
-    if (entry) {
-      try {
-        return (await import(entry)) as unknown as PiModule;
-      } catch {
-        // fall through to the install hint
-      }
-    }
     throw new Error(
-      "Backend 'pi' requires the optional peer dependency @earendil-works/pi-coding-agent. "
-      + 'Install it, or run `deepclause set-backend env` to use the SDK provider/API-key backend.',
+      `Backend 'pi' requires ${PI_PACKAGE_NAME} (a dependency of this SDK). `
+      + 'Reinstall dependencies, or run `deepclause set-backend env` to use the SDK provider/API-key backend.',
     );
   }
 }
@@ -392,17 +264,21 @@ export interface CreatePiBackendOptions extends PiBackendConfig {
   modelRegistry?: PiRegistryLike;
 }
 
-/** Structural view of pi's runtime used for setup/catalog operations. */
+/** Structural view of pi's runtime used for setup/catalog/auth operations. */
 export interface PiRuntimeLike {
   getProviders(): Array<{
     id: string;
     name?: string;
-    auth?: { apiKey?: unknown; oauth?: unknown };
+    auth?: { apiKey?: unknown; oauth?: { isSubscription?: boolean } };
   }>;
+  getProvider(providerId: string): { id: string; name?: string; auth?: { apiKey?: unknown; oauth?: { isSubscription?: boolean } } } | undefined;
   getModels(providerId?: string): PiModelLike[];
   hasConfiguredAuth(providerId: string): boolean;
   getProviderAuthStatus(providerId: string): { configured: boolean; label?: string; source?: string };
+  isUsingOAuth(providerId: string): boolean;
+  listCredentials(options?: unknown): Promise<Array<{ providerId: string; type: string }>>;
   login(providerId: string, type: string, interaction: unknown, options?: unknown): Promise<unknown>;
+  logout(providerId: string, options?: unknown): Promise<void>;
 }
 
 export interface PiProviderInfo {
@@ -483,14 +359,17 @@ export interface PiRuntimeHandle {
   listProviders(): PiProviderInfo[];
   listModels(providerId?: string): PiModelInfo[];
   hasAuth(providerId: string): boolean;
+  isUsingOAuth(providerId: string): boolean;
+  listCredentials(): Promise<Array<{ providerId: string; type: string }>>;
   login(providerId: string, interaction: PiAuthInteractionLike, type?: 'api_key' | 'oauth'): Promise<void>;
+  logout(providerId: string): Promise<void>;
 }
 
-/** Whether the pi package can be imported (installed and resolvable). */
+/** Whether the pi dependency resolves (it is a required dependency of the SDK). */
 export function isPiPackageAvailable(): boolean {
   try {
-    // Throws when neither the bare specifier nor a discovered path resolves.
-    return resolvePiPackageEntry() !== null;
+    const resolve = (import.meta as unknown as { resolve?: (specifier: string) => string }).resolve;
+    return typeof resolve === 'function' && Boolean(resolve(PI_PACKAGE_NAME));
   } catch {
     return false;
   }
@@ -519,9 +398,14 @@ export async function openPiRuntime(
     listProviders: () => listPiProviders(runtime),
     listModels: (providerId) => listPiModels(runtime, providerId),
     hasAuth: (providerId) => runtime.hasConfiguredAuth(providerId),
+    isUsingOAuth: (providerId) => runtime.isUsingOAuth(providerId),
+    listCredentials: async () => (await runtime.listCredentials()) ?? [],
     login: async (providerId, interaction, type) => {
       const authType = type ?? 'api_key';
       await runtime.login(providerId, authType, interaction, {});
+    },
+    logout: async (providerId) => {
+      await runtime.logout(providerId);
     },
   };
 }

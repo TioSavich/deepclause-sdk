@@ -241,20 +241,28 @@ export async function createReplRuntime(options: ReplCliOptions): Promise<ReplRu
     },
   });
 
-  const backendKind = options.backend ?? config.backend?.kind ?? 'env';
+  const backendKind = options.backend ?? config.backend?.kind ?? 'pi';
   let llmBackend;
   let harnessModel = resolved.model;
   let harnessProvider: Provider = provider;
   if (backendKind === 'pi') {
-    const pi = await createPiBackend({
-      agentDir: config.backend?.agentDir,
-      modelsPath: config.backend?.modelsPath ?? undefined,
-      authPath: config.backend?.authPath ?? undefined,
-      model: options.model ?? config.backend?.model,
-    });
-    llmBackend = pi.backend;
-    harnessModel = pi.modelId.split('/').slice(1).join('/') || pi.modelId;
-    harnessProvider = (pi.provider as Provider) ?? harnessProvider;
+    try {
+      const pi = await createPiBackend({
+        agentDir: config.backend?.agentDir,
+        modelsPath: config.backend?.modelsPath ?? undefined,
+        authPath: config.backend?.authPath ?? undefined,
+        model: options.model ?? config.backend?.model,
+      });
+      llmBackend = pi.backend;
+      harnessModel = pi.modelId.split('/').slice(1).join('/') || pi.modelId;
+      harnessProvider = (pi.provider as Provider) ?? harnessProvider;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(
+        `pi backend unavailable: ${message}\n`
+        + "Run 'deepclause login' to sign in, or 'deepclause set-backend env' to use provider API keys.",
+      );
+    }
   }
 
   // Judgment backends. `llm` reuses the active model/backend; `jev` is opt-in
