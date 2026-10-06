@@ -99,6 +99,7 @@ export class DMLSession {
   /** Current budget; grows by maxModelCalls when the user extends it. */
   private modelCallBudget: number;
   private dmlReference?: string;
+  private dmlAuthoring?: string;
   private disposed = false;
 
   private constructor(swipl: SWIPLModule, options: DMLSessionOptions) {
@@ -258,6 +259,27 @@ export class DMLSession {
       this.dmlReference = '';
     }
     return this.dmlReference;
+  }
+
+  /** Load the curated authoring patterns once, for the meta prompt. */
+  private async loadDmlAuthoring(): Promise<string> {
+    if (this.dmlAuthoring !== undefined) {
+      return this.dmlAuthoring;
+    }
+    try {
+      this.dmlAuthoring = await fs.readFile(getWorkspaceDocAssetPath('dml-authoring'), 'utf8');
+    } catch {
+      this.dmlAuthoring = '';
+    }
+    return this.dmlAuthoring;
+  }
+
+  /** Predicates replaced by the most recent successful commit ("name/arity, …"). */
+  private lastCommitPredicates(): string {
+    const result = this.prologQuery(
+      `deepclause_mi:repl_last_commit_summary('${this.sessionId}', Text)`
+    );
+    return String(plainValue(result?.Text) ?? '');
   }
 
   /**
@@ -453,6 +475,12 @@ export class DMLSession {
             `deepclause_mi:repl_set_dml_reference('${this.sessionId}', ${quoteString(reference)})`
           );
         }
+        const authoring = await this.loadDmlAuthoring();
+        if (authoring) {
+          this.prologQuery(
+            `deepclause_mi:repl_set_authoring_examples('${this.sessionId}', ${quoteString(authoring)})`
+          );
+        }
 
         // 2. Assemble the prompt and create the meta frame.
         const promptResult = this.prologQuery(
@@ -504,7 +532,12 @@ export class DMLSession {
               entry = event.metaResult?.entry ?? '';
               answer = event.metaResult?.answer ?? '';
             } else if (event.type === 'error') {
-              metaFailed = event.content;
+              // Only the meta frame's own errors abort the turn. An error from
+              // an `execute` child frame is a tool result the model can react
+              // to (it is still surfaced for rendering).
+              if (event.frameKind !== 'nested') {
+                metaFailed = event.content;
+              }
               yield event;
             } else if (event.type !== 'finished') {
               yield event;
@@ -542,9 +575,11 @@ export class DMLSession {
         // Direct answer: a simple question the model answered without changing
         // the harness. Render the reply and skip the commit entirely.
         if (!code.trim() && answer.trim()) {
-          yield { type: 'output', content: answer.trim() };
+          const reply = answer.trim();
+          yield { type: 'output', content: reply };
+          const summary = `answered: ${reply.length > 200 ? `${reply.slice(0, 197)}…` : reply}`;
           this.prologQuery(
-            `deepclause_mi:repl_record_meta('${this.sessionId}', ${quoteString(request)}, ${quoteString('answered directly')})`
+            `deepclause_mi:repl_record_meta('${this.sessionId}', ${quoteString(request)}, ${quoteString(summary)})`
           );
           succeeded = true;
           break;
@@ -581,7 +616,8 @@ export class DMLSession {
         }
         const hasEntry = String(plainValue(start?.HasEntry)) === 'true';
 
-        let summary = `committed ${source.trim().split('\n').length} source lines`;
+        const committed = this.lastCommitPredicates();
+        let summary = committed ? `committed ${committed}` : 'committed (no predicates)';
         if (hasEntry) {
           const entryFrame = this.runner.registerDefaultFrame('object');
           if (entryFrame) {

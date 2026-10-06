@@ -6,7 +6,7 @@ import { fileURLToPath } from 'url';
 export type SystemSkillAssetName = 'conductor' | 'skill-creator' | 'plan' | 'deep-planner' | 'security-planner';
 export type SystemPromptAssetName = 'conductor' | 'skill-creator' | 'task';
 export type SystemCompactorAssetName = 'default-session-compactor' | 'default-loop-compactor';
-export type WorkspaceDocAssetName = 'tui' | 'dml-reference';
+export type WorkspaceDocAssetName = 'tui' | 'dml-reference' | 'dml-authoring';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -74,6 +74,8 @@ function getWorkspaceDocFileName(name: WorkspaceDocAssetName): string {
       return 'TUI.md';
     case 'dml-reference':
       return 'DML_REFERENCE.md';
+    case 'dml-authoring':
+      return 'DML_AUTHORING.md';
   }
 }
 

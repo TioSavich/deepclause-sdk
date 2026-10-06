@@ -132,8 +132,52 @@ describe('prompt mode', () => {
     const promptText = backend.calls[0].messages.map((message) => message.content).join('\n');
     expect(promptText).toContain('DML LANGUAGE REFERENCE');
     expect(promptText).toContain('# DML Language Reference');
+    expect(promptText).toContain('IDIOMATIC HARNESS PATTERNS');
+    expect(promptText).toContain('tool(run_python(Script, Output)');
+    expect(promptText).toContain('script_body(word_count');
     expect(promptText).toContain('BOUNDED ITERATION');
     expect(promptText).toContain('CLAUSE ORDER MATTERS');
+  });
+
+  it('keeps meta memory clean: raw request/outcome pairs, not the assembled prompt', async () => {
+    backend = new CannedBackend([finalResponse('p1(1).', ''), finalResponse('p2(1).', '')]);
+    repl = await openRepl();
+    await collect(repl.prompt('first request alpha'));
+    await collect(repl.prompt('second request beta'));
+
+    const secondCall = backend.calls[backend.calls.length - 1];
+    const promptPrefixed = secondCall.messages.filter((message) => message.content.startsWith('Subtask:'));
+    // Only the current turn's assembled prompt may appear; it is ephemeral.
+    expect(promptPrefixed).toHaveLength(1);
+
+    // Exclude the system prompt (it embeds the current turn's task text) and the
+    // current `Subtask:` message; the remainder is the persisted meta memory.
+    const persisted = secondCall.messages
+      .filter((message) => message.role !== 'system' && !message.content.startsWith('Subtask:'))
+      .map((message) => message.content)
+      .join('\n');
+    expect(persisted).not.toContain('You are the DeepClause REPL harness author');
+    expect(persisted).toContain('first request alpha');
+    expect(persisted).toContain('committed p1/1');
+  });
+
+  it('keeps the turn alive when an execute child goal fails', async () => {
+    backend = new CannedBackend([{
+      text: '',
+      toolCalls: [
+        { name: 'execute', arguments: { goal: 'no_such_predicate(1)' } },
+        { name: 'set_result', arguments: { variable: 'DMLCode', value: 'kept(1).' } },
+        { name: 'set_result', arguments: { variable: 'EntryGoal', value: '' } },
+        { name: 'set_result', arguments: { variable: 'Answer', value: '' } },
+        { name: 'finish', arguments: { success: true } },
+      ],
+    }]);
+    repl = await openRepl();
+
+    const events = await collect(repl.prompt('explore with a failing execute'));
+    // The nested error is surfaced for rendering, but the turn still commits.
+    expect(events.some((event) => event.type === 'error')).toBe(true);
+    expect(values(await collect(repl.query('kept(X)')), 'X')).toEqual(['1']);
   });
 
   it('assert_many keeps clause order so recursion terminates', async () => {

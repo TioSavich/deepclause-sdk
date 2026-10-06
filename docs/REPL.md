@@ -113,8 +113,14 @@ exits the REPL. The same applies to `goal:` queries and `-g` runs.
 
 The code-writing meta task is restricted to `listing`, `assert`, `assert_many`,
 `retract`, `execute`, and `ask_user`. The meta prompt embeds the full bundled
-`DML_REFERENCE.md`, the live host tool catalog, and the current harness manifest,
-and it states the rules that matter most:
+`DML_REFERENCE.md`, a curated set of **idiomatic harness patterns** (a `tool/2`
+wrapping `exec(bash(...))` + a `task(...)` chain + `repl_entry/1`; a
+self-contained `script_body/2` materialized with `write_file/2`; a
+`task → task → output/answer` pipeline), the live host tool catalog, and the
+current harness manifest. It also states the catalog pairing rule explicitly:
+**only the `exec(...)` names in the catalog exist — by default just `bash`** —
+so it never invents `calculator`/`fetch_url`/`web_search`/`vm_exec`. The rules
+that matter most:
 
 * **Read before writing** — call `listing` first.
 * **Clause order matters** — a base case must precede a recursive rule. Define a
@@ -207,9 +213,17 @@ a file rather than interpolated into the shell command.
 
 Keeping them apart is a core design decision: the model writing code does not
 accumulate the harness's runtime conversation, and the harness runtime never
-contains code-review chatter. `execute` gets a copy of harness memory so it can
-test with realistic context; those writes are discarded at commit. The entry run
-is the only place harness memory advances.
+contains code-review chatter. The agent loop passes the meta memory as the
+model's conversation history, so the author sees its own previous requests and
+outcomes.
+
+Meta memory is a **clean `messages[]`**: each successful turn records exactly
+`user: <your raw request>` and `assistant: <outcome + the predicates that were
+committed>`. The assembled meta prompt (authoring contract, reference, catalog,
+manifest) is **ephemeral** — it is the agent loop's current task text, not
+persisted. `execute` sees a snapshot of harness memory so it can test with
+realistic context; those writes are discarded at commit. The entry run is the
+only place harness memory advances.
 
 ## Export, freeze, and `-l`
 

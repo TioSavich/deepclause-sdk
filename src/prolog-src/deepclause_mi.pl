@@ -56,12 +56,14 @@
     repl_assert_many/3,
     repl_retract/3,
     repl_set_dml_reference/2,
+    repl_set_authoring_examples/2,
     repl_manifest/2,
     repl_set_meta_catalog/2,
     repl_run_meta/4,
     repl_snapshot_save/1,
     repl_snapshot_restore/1,
     repl_commit/4,
+    repl_last_commit_summary/2,
     repl_start_entry/3,
     repl_execute_frame/4,
     repl_record_meta/3,
@@ -101,6 +103,8 @@
 :- dynamic session_meta_catalog/2.  % session_meta_catalog(SessionId, CatalogText) - host tool catalog for the meta prompt
 :- dynamic session_repl_entry/2.    % session_repl_entry(SessionId, EntryGoal) - resolved entry for the pending commit
 :- dynamic session_dml_reference/2. % session_dml_reference(SessionId, Text) - bundled DML reference for the meta prompt
+:- dynamic session_authoring_examples/2. % session_authoring_examples(SessionId, Text) - curated authoring patterns
+:- dynamic session_last_commit/2.    % session_last_commit(SessionId, [Name/Arity]) - predicates the last commit replaced
 :- dynamic repl_snapshot/2.         % repl_snapshot(SessionId, Snapshot) - transactional edit snapshot
 :- dynamic session_params/2.       % session_params(SessionId, ParamsDict)
 :- dynamic session_user_tools/2.   % session_user_tools(SessionId, ToolName)
@@ -756,6 +760,9 @@ destroy_session(SessionId) :-
     retractall(session_locked(SessionId, _)),
     retractall(session_directive(SessionId, _)),
     retractall(session_meta_catalog(SessionId, _)),
+    retractall(session_dml_reference(SessionId, _)),
+    retractall(session_authoring_examples(SessionId, _)),
+    retractall(session_last_commit(SessionId, _)),
     retractall(session_repl_entry(SessionId, _)),
     retractall(repl_snapshot(SessionId, _)),
     retractall(session_params(SessionId, _)),
@@ -1275,6 +1282,12 @@ repl_set_dml_reference(SessionId, Text) :-
     retractall(session_dml_reference(SessionId, _)),
     assertz(session_dml_reference(SessionId, Text)).
 
+%% repl_set_authoring_examples(+SessionId, +Text)
+%% Stores the curated authoring patterns for the meta prompt.
+repl_set_authoring_examples(SessionId, Text) :-
+    retractall(session_authoring_examples(SessionId, _)),
+    assertz(session_authoring_examples(SessionId, Text)).
+
 %% repl_assert_many(+SessionId, +ClausesText, -Result)
 %% Parses a block of clauses and asserts them in the order written. Prefer this
 %% for defining a predicate: clause order matters for backtracking, so asserting
@@ -1383,13 +1396,10 @@ repl_meta_memory_text(SessionId, Text) :-
     ->  true
     ;   Memory = []
     ),
-    findall(Content,
-        (   member(message{role: Role, content: Content}, Memory),
-            (Role == user ; Role == assistant)
-        ),
-        Contents0),
-    last_n(Contents0, 6, Recent),
-    with_output_to(string(Text), forall(member(C, Recent), format("- ~w~n", [C]))).
+    last_n(Memory, 10, Recent),
+    with_output_to(string(Text),
+        forall(member(message{role: Role, content: Content}, Recent),
+            format("~w: ~w~n", [Role, Content]))).
 
 last_n(List, N, Tail) :-
     length(List, Len),
@@ -1407,6 +1417,7 @@ last_n(List, N, Tail) :-
 repl_meta_prompt(SessionId, Request, Prompt) :-
     (   session_meta_catalog(SessionId, Catalog) -> true ; Catalog = "" ),
     (   session_dml_reference(SessionId, Reference) -> true ; Reference = "" ),
+    (   session_authoring_examples(SessionId, Examples) -> true ; Examples = "" ),
     repl_manifest(SessionId, Manifest),
     repl_meta_memory_text(SessionId, MemoryText),
     with_output_to(string(Prompt),
@@ -1428,8 +1439,9 @@ repl_meta_prompt(SessionId, Request, Prompt) :-
             format("- DIRECT QUESTIONS: if the request is only a question you can answer directly (for example \"what did we just do?\", \"what can you do?\", \"how do I ...?\"), do NOT write or change harness code. Set DMLCode to the empty string and set the Answer output variable to your reply. Build DML only when the user asks you to create, change, or run logic.~n~n"),
             format("HOST TOOL CATALOG (only these names may be called through exec/2; listing(tools) has full schemas)~n~w~n~n", [Catalog]),
             format("DML LANGUAGE REFERENCE~n~w~n~n", [Reference]),
+            format("IDIOMATIC HARNESS PATTERNS~n~w~n~n", [Examples]),
             format("CURRENT HARNESS MANIFEST~n~w~n~n", [Manifest]),
-            format("RECENT PROMPTS~n~w~n~n", [MemoryText]),
+            format("META MEMORY (your previous requests and outcomes; also in the conversation history)~n~w~n~n", [MemoryText]),
             format("USER REQUEST~n~w~n~n", [Request]),
             format("OUTPUT CONTRACT~n"),
             format("Return the complete DML definitions for every predicate this turn touches.~n"),
@@ -1464,8 +1476,11 @@ repl_meta_solve(PromptText, SessionId, State) :-
                     [typed_var{name:'DMLCode', type:string},
                      typed_var{name:'EntryGoal', type:string},
                      typed_var{name:'Answer', type:string}]),
-                State, StateOut),
-            store_memory_for_state(SessionId, StateOut),
+                State, _StateOut),
+            % The task's own memory (incl. the assembled prompt and tool results)
+            % is ephemeral. The host records a clean user/assistant pair with
+            % repl_record_meta/3 after the turn; that becomes the next turn's
+            % conversation history (a normal messages array).
             engine_yield(meta_result(DMLCode, EntryGoal, Answer))
         ),
         MetaError,
@@ -1485,7 +1500,8 @@ repl_record_meta(SessionId, Request, Summary) :-
         [message{role: user, content: Request},
          message{role: assistant, content: Summary}],
         Combined),
-    last_n(Combined, 12, Bounded),
+    % 20 messages = 10 request/outcome exchanges; entries are short now.
+    last_n(Combined, 20, Bounded),
     retractall(session_meta_memory(SessionId, _)),
     assertz(session_meta_memory(SessionId, Bounded)).
 
@@ -1614,7 +1630,28 @@ repl_commit_from_parse(SessionId, Source, Preds, EntryGoalText, none, Result) :-
     forall(member(Name/Arity, Preds),
         catch(abolish(SessionId:Name/Arity), _, true)),
     load_code(SessionId, Source, LoadError),
+    (   LoadError == none
+    ->  retractall(session_last_commit(SessionId, _)),
+        assertz(session_last_commit(SessionId, Preds))
+    ;   true
+    ),
     repl_commit_from_load(SessionId, EntryGoalText, LoadError, Result).
+
+%% repl_last_commit_summary(+SessionId, -Text)
+%% Rendered "name/arity, name/arity" of the predicates the last commit replaced.
+repl_last_commit_summary(SessionId, Text) :-
+    (   session_last_commit(SessionId, Preds), Preds \= []
+    ->  with_output_to(string(Text), print_pred_list(Preds))
+    ;   Text = ""
+    ).
+
+print_pred_list([]).
+print_pred_list([Name/Arity]) :-
+    !,
+    format("~w/~w", [Name, Arity]).
+print_pred_list([Name/Arity|Rest]) :-
+    format("~w/~w, ", [Name, Arity]),
+    print_pred_list(Rest).
 
 repl_commit_from_load(_SessionId, _EntryGoalText, LoadError, Result) :-
     LoadError \== none,
