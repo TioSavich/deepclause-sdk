@@ -16,6 +16,8 @@ import type {
 import type { FrameKind } from '../types.js';
 import { DMLSession, type DMLQueryOptions } from './session.js';
 import type { HarnessExportOptions, HarnessExportResult } from './export.js';
+import { resolveReplJudgeSelection, type JevJudgeOptions } from './judge.js';
+import type { JudgeSelection } from '../judge/types.js';
 
 export type RunOpts = DMLQueryOptions;
 
@@ -52,6 +54,14 @@ export interface HarnessReplOptions {
   hostToolsCatalog?: string;
   /** Human-in-the-loop channel for the meta ask_user tool (M6). */
   askUser?: (prompt: string, options?: string[]) => Promise<{ answer: string } | { cancelled: true }>;
+  /** Explicit judgment backend registry. When omitted, an `llm` backend is built from the active model. */
+  judgeSelection?: JudgeSelection;
+  /** Default judgment backend name (default: `'llm'`). */
+  defaultJudge?: string;
+  /** Opt-in Jev (TypeSafe System One) judgment backend. */
+  jev?: JevJudgeOptions;
+  /** Receives startup diagnostics, e.g. a skipped `jev` backend. */
+  onDiagnostic?: (message: string) => void;
 }
 
 export interface HarnessRepl {
@@ -136,6 +146,20 @@ class HarnessReplImpl implements HarnessRepl {
 }
 
 export async function createHarnessRepl(options: HarnessReplOptions): Promise<HarnessRepl> {
+  const { selection: judgeSelection, warnings } = resolveReplJudgeSelection({
+    judgeSelection: options.judgeSelection,
+    llmBackend: options.llmBackend,
+    model: options.model,
+    provider: options.provider,
+    temperature: options.temperature ?? 0.7,
+    maxTokens: options.maxTokens ?? 65536,
+    defaultJudge: options.defaultJudge,
+    jev: options.jev,
+  });
+  for (const warning of warnings) {
+    options.onDiagnostic?.(warning);
+  }
+
   const session = await DMLSession.open({
     sessionId: options.sessionId,
     workspacePath: options.workspacePath,
@@ -158,6 +182,7 @@ export async function createHarnessRepl(options: HarnessReplOptions): Promise<Ha
       maxTokens: options.maxTokens ?? 65536,
       streaming: options.streaming ?? true,
       llmBackend: options.llmBackend,
+      judgeSelection,
     },
   });
   return new HarnessReplImpl(session);

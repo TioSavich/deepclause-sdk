@@ -313,6 +313,31 @@ With `backend = pi`, the REPL never asks for API keys, never writes provider
 environment variables, and never guesses a provider. Resolution order: explicit
 CLI/config paths → `<cwd>/.pi` → `~/.pi/agent`.
 
+### Judgment backends
+
+Semantic judgments (`judge/2`, `choose/4`, `rate/4`, `verify/3`,
+`probability/3`, `holds/2,3`) answer bounded, typed questions about an explicit
+state and never read or write conversation memory. The REPL registers two
+backends:
+
+- **`llm`** (default): reuses the active model and backend — the pi model and
+  credentials when `backend = pi`, otherwise the configured provider.
+- **`jev`** (TypeSafe System One): opt-in, because it is a separate service.
+  Enable it and provide its key:
+
+```json
+"judgment": {
+  "default": "llm",
+  "jev": { "enabled": false, "model": "jev-latest", "apiKeyEnv": "TYPESAFE_API_KEY" }
+}
+```
+
+`--judge <name>` (or `judgment.default`) selects the default backend. If the
+chosen backend is not registered the REPL fails at startup with a clear error;
+if `jev` is enabled but its key is missing the REPL warns and uses `llm`.
+`require_judgment(Capability, Goal)` gates a goal on backend capabilities
+(`calibrated`, `probability`, `confidence`, `independentQuestions`).
+
 ## Host tools
 
 The default capability host tool is exactly **`bash`**, registered through the
@@ -340,6 +365,7 @@ deepclause repl [options]
       --json               emit results as JSON lines
       --workspace <path>   workspace root (default ./)
       --backend <kind>     override the configured backend (env|pi)
+      --judge <name>       default judgment backend (llm|jev)
       --model <model>      override the configured run model
       --provider <provider>
       --temperature <n>
@@ -415,6 +441,10 @@ block.
   "maxToolResultChars": 2000,
   "color": true,
   "tools": null
+},
+"judgment": {
+  "default": "llm",
+  "jev": { "enabled": false, "model": "jev-latest", "apiKeyEnv": "TYPESAFE_API_KEY" }
 }
 ```
 
@@ -428,6 +458,9 @@ for await (const event of repl.query('fact(5, F)')) {
   if (event.type === 'solution') console.log(event.solution?.bindings);
 }
 await repl.dispose();
+
+// Judgment: an `llm` backend is built from the injected LLMBackend; pass
+// `judgeSelection` to register custom/`jev` backends, or `jev: { enabled, apiKey }`.
 ```
 
 The SDK also exports `DMLSession`, `createPiBackend`/`createPiAdapter`,

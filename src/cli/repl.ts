@@ -12,6 +12,7 @@ import * as path from 'path';
 import * as readline from 'readline';
 
 import { createHarnessRepl, type HarnessRepl } from '../repl/index.js';
+import { resolveReplJudgeSelection } from '../repl/judge.js';
 import { ReplRenderer, type RenderMode } from '../repl/render.js';
 import { createPiBackend } from '../repl/backend.js';
 import { createReplToolset, type ReplToolset } from '../repl/toolset.js';
@@ -38,6 +39,8 @@ export interface ReplCliOptions {
   locked?: boolean;
   exportPath?: string;
   backend?: 'env' | 'pi';
+  /** Default judgment backend name (llm|jev). */
+  judge?: string;
   tools?: string;
   noTools?: boolean;
   sandbox?: boolean;
@@ -253,6 +256,26 @@ export async function createReplRuntime(options: ReplCliOptions): Promise<ReplRu
     harnessProvider = (pi.provider as Provider) ?? harnessProvider;
   }
 
+  // Judgment backends. `llm` reuses the active model/backend; `jev` is opt-in
+  // and only registered when enabled and its API key is present. Building the
+  // registry here (rather than in createHarnessRepl) lets the CLI report a
+  // skipped `jev` backend and honor --judge.
+  const { selection: judgeSelection, warnings: judgeWarnings } = resolveReplJudgeSelection({
+    llmBackend,
+    model: harnessModel,
+    provider: harnessProvider,
+    temperature: options.temperature ?? config.temperatures.run,
+    defaultJudge: options.judge ?? config.judgment.default,
+    jev: {
+      enabled: config.judgment.jev.enabled,
+      model: config.judgment.jev.model,
+      apiKeyEnv: config.judgment.jev.apiKeyEnv,
+    },
+  });
+  for (const warning of judgeWarnings) {
+    process.stderr.write(`[deepclause] ${warning}\n`);
+  }
+
   const repl = await createHarnessRepl({
     workspacePath: workspace,
     model: harnessModel,
@@ -266,6 +289,7 @@ export async function createReplRuntime(options: ReplCliOptions): Promise<ReplRu
     tools: toolset.tools,
     hostToolsCatalog: toolset.catalog,
     llmBackend,
+    judgeSelection,
     onInput: buildCliOnInput(options),
   });
 
@@ -671,6 +695,7 @@ export function registerReplCommand(program: Command): void {
     .option('--depth <number>', 'maximum nested frame depth (default 3)', parseInt)
     .option('--max-model-calls <number>', 'maximum model calls per turn (default 100)', parseInt)
     .option('--backend <kind>', 'override the configured backend (env|pi)')
+    .option('--judge <name>', 'default judgment backend (llm|jev)')
     .option('--tools <list>', 'comma-separated capability host tools (default: bash)')
     .option('--no-tools', 'register no capability host tools')
     .option('--sandbox', 'run shell tools in AgentVM')
@@ -699,6 +724,7 @@ export function registerReplCommand(program: Command): void {
         depth: options.depth,
         maxModelCalls: options.maxModelCalls,
         backend: options.backend,
+        judge: options.judge,
         tools: typeof options.tools === 'string' ? options.tools : undefined,
         noTools: options.tools === false,
         sandbox: options.sandbox,

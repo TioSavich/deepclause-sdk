@@ -541,7 +541,7 @@ Record each decision at the top of the milestone that depends on it.
 
 Numbered as in proposal §20.
 
-* **#30 — scratch `assert`/`assert_many` link the `task`/`prompt` rewrite.**
+* **#30 — scratch `assert`/`assert_many` skip the `task`/`prompt` rewrite.**
   *Fixed.* `repl_assert`/`repl_assert_many` now run
   `preprocess_loaded_term/3` (capturing `variable_names` via `read_term`) before
   `process_clause/2`, exactly as `parse_clauses`/`consult_clauses` do, so
@@ -549,6 +549,15 @@ Numbered as in proposal §20.
   rewrite, `{Var}` interpolation, `expand_term/2`). An untransformed
   `task/N`/`prompt/N` reaching the runtime now raises a loud
   `domain_error(unrewritten_task_form, Goal)` instead of failing silently.
+
+* **#31 — judgment predicates documented but not wired in the REPL.**
+  *Fixed.* The REPL now resolves a `JudgeSelection` in `createHarnessRepl`
+  (`src/repl/judge.ts`): an `llm` backend from the active model/`LLMBackend`,
+  plus an opt-in `jev` backend when `judgment.jev.enabled` and its API key are
+  present. The CLI adds the `judgment` config section and a `--judge` flag, and
+  fails loudly at startup when the requested default backend is missing. The
+  meta-prompt authoring contract now names `system/1`/`user/1` and the judgment
+  predicates. Covered by `tests/repl-judge.test.ts`.
 
 * **Scratch-assert duplicate clauses.** `assert`/`assert_many` append, so the
   scratch module accumulates duplicate clauses during a long debugging turn.

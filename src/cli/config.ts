@@ -156,6 +156,22 @@ const BackendConfigSchema = z.object({
   model: z.string().optional(),
 }).optional().default({ kind: 'env' });
 
+const JevJudgeConfigSchema = z.object({
+  enabled: z.boolean().optional().default(false),
+  model: z.string().optional().default('jev-latest'),
+  apiKeyEnv: z.string().optional().default('TYPESAFE_API_KEY'),
+}).optional().default({});
+
+/**
+ * Semantic judgment backend selection. `llm` reuses the active model; `jev`
+ * (TypeSafe System One) is opt-in and only registered when enabled and its API
+ * key is present. See docs/DML_REPL_PROPOSAL.md and DML_REFERENCE.md.
+ */
+const JudgmentConfigSchema = z.object({
+  default: z.string().optional().default('llm'),
+  jev: JevJudgeConfigSchema,
+}).optional().default({});
+
 export const ConfigSchema = z.object({
   models: ModelsSchema.default(DEFAULT_MODEL_IDS),
   backend: BackendConfigSchema,
@@ -167,6 +183,7 @@ export const ConfigSchema = z.object({
   shell: ShellConfigSchema,
   compaction: CompactionConfigSchema,
   repl: ReplConfigSchema,
+  judgment: JudgmentConfigSchema,
   dmlBase: z.string().optional().default('.deepclause/tools'),
   workspace: z.string().optional().default('./'),
   model: z.string().optional(),
@@ -231,6 +248,10 @@ const DEFAULT_CONFIG: Config = {
     showToolArgs: true,
     maxToolResultChars: 2000,
     color: true,
+  },
+  judgment: {
+    default: 'llm',
+    jev: { enabled: false, model: 'jev-latest', apiKeyEnv: 'TYPESAFE_API_KEY' },
   },
   dmlBase: '.deepclause/tools',
   workspace: './'

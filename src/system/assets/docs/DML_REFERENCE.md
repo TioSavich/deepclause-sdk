@@ -727,6 +727,11 @@ with_judgment(jev, choose("state", "Which team?", [billing, orders], Team)).
 require_judgment(calibrated, verify("state", "Is this urgent?", Truth)).
 ```
 
+> **In the DML REPL**, an `llm` backend is always registered (it reuses the
+> active model), and `jev` is registered when `judgment.jev.enabled` is set in
+> `.deepclause/config.json` and its API key is available. `with_judgment(jev,
+> ...)` fails if `jev` is not registered.
+
 `require_judgment/2` fails the wrapped goal before it runs when the active
 backend does not provide the capability, so a skill that depends on calibrated
 probabilities cannot silently run on an uncalibrated backend. Available
