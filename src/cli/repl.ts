@@ -8,8 +8,10 @@
  */
 
 import type { Command } from 'commander';
+import { readFileSync } from 'fs';
 import * as path from 'path';
 import * as readline from 'readline';
+import { fileURLToPath } from 'url';
 
 import { createHarnessRepl, type HarnessRepl } from '../repl/index.js';
 import { resolveReplJudgeSelection } from '../repl/judge.js';
@@ -196,6 +198,8 @@ export interface ReplRuntime {
   workspace: string;
   promptPrefix: string;
   toolset: ReplToolset;
+  /** Package version, shown in the startup banner. */
+  version: string;
   /** Resolved model and backend, shown in the startup banner. */
   model: string;
   backend: 'env' | 'pi';
@@ -337,6 +341,7 @@ export async function createReplRuntime(options: ReplCliOptions): Promise<ReplRu
     workspace,
     promptPrefix: config.repl.promptPrefix ?? 'dml> ',
     toolset,
+    version: PACKAGE_VERSION,
     model: backendKind === 'pi' ? harnessModel : `${harnessProvider}:${harnessModel}`,
     backend: backendKind,
     setOnInput: (handler) => repl.setOnInput(handler),
@@ -345,18 +350,39 @@ export async function createReplRuntime(options: ReplCliOptions): Promise<ReplRu
 }
 
 /** Startup banner for the interactive REPL (proposal §2.1). */
+/** Package version, read once from package.json for the banner/`--version`. */
+export const PACKAGE_VERSION: string = (() => {
+  try {
+    const here = path.dirname(fileURLToPath(import.meta.url));
+    const pkg = JSON.parse(readFileSync(path.join(here, '..', '..', 'package.json'), 'utf8')) as { version?: string };
+    return pkg.version ?? 'unknown';
+  } catch {
+    return 'unknown';
+  }
+})();
+
 function printBanner(runtime: ReplRuntime, loaded: string[]): void {
+  const rich = runtime.renderer.mode === 'rich';
+  const paint = (text: string, code: string): string => (rich ? `\u001b[${code}m${text}\u001b[0m` : text);
+  const dim = (text: string): string => paint(text, '2');
+  const accent = (text: string): string => paint(text, '36');
+
   const state = loaded.length > 0
-    ? `(${loaded.length} file${loaded.length === 1 ? '' : 's'} loaded)`
-    : '(blank harness)';
-  const frozen = runtime.repl.isFrozen() ? '  [FROZEN]' : '';
-  const lines = [
-    `DML REPL  ${state}${frozen}`,
-    `model: ${runtime.model}   backend: ${runtime.backend}   workspace: ${runtime.workspace}`,
-    "type 'goal: <dml>.' to run a DML goal (e.g. goal: member(X, [1,2,3]).), or plain English to build the harness.",
-    "type 'help.' for help, 'listing.' to list the harness, 'export <file>.' to save, 'freeze.' to lock, 'halt.' to exit.",
+    ? `${loaded.length} file${loaded.length === 1 ? '' : 's'} loaded`
+    : 'blank harness';
+  const frozen = runtime.repl.isFrozen() ? `  ${paint(' FROZEN ', '41;97')}` : '';
+
+  const title = `  ${paint('DeepClause', '1;36')} ${paint('DML REPL', '1')}  ${dim(`v${runtime.version}`)}${frozen}`;
+  const meta = `  ${dim(state)}  ${dim('·')}  ${paint(runtime.model, '35')}  ${dim('·')}  ${dim(`backend ${runtime.backend}`)}`;
+  const cwd = `  ${dim(runtime.workspace)}`;
+  const help = [
+    `  ${accent('goal:')} ${dim('<dml>.')}           run a DML goal, e.g. ${dim('goal: member(X, [1,2,3]).')}`,
+    `  ${accent('<plain English>')}        build the harness from a prompt`,
+    '',
+    `  ${accent('help.')}  ${accent('listing.')}  ${accent('export <file>.')}  ${accent('freeze.')}  ${accent('model.')}  ${accent('halt.')}`,
   ];
-  runtime.renderer.writeLine(lines.join('\n'));
+
+  runtime.renderer.writeLine(['', title, meta, cwd, '', ...help, ''].join('\n'));
 }
 
 /** Dispatch one classified input. Returns false when the REPL should exit. */
