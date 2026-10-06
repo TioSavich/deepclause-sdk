@@ -290,6 +290,17 @@ export async function createReplRuntime(options: ReplCliOptions): Promise<ReplRu
     hostToolsCatalog: toolset.catalog,
     llmBackend,
     judgeSelection,
+    history: config.repl.history.enabled
+      ? {
+          dir: config.repl.history.dir,
+          trace: config.repl.history.trace,
+          maxEventBytes: config.repl.history.maxEventBytes,
+          maxSessions: config.repl.history.maxSessions,
+          maxVersions: config.repl.history.maxVersions,
+          includeInExport: config.repl.history.includeInExport,
+          redact: config.repl.history.redact,
+        }
+      : undefined,
     onInput: buildCliOnInput(options),
   });
 

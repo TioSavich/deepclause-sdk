@@ -29,6 +29,12 @@ import {
   type HarnessExportResult,
 } from './export.js';
 import { createMetaTools, type ExecuteResult } from './tools.js';
+import {
+  HistoryStore,
+  type HistoryChangedPredicate,
+  type HistoryOptions,
+  type HistoryTurnRecord,
+} from './history.js';
 
 export interface DMLSessionOptions {
   /** Optional explicit session id; generated when omitted. */
@@ -56,6 +62,13 @@ export interface DMLSessionOptions {
   hostToolsCatalog?: string;
   /** Human-in-the-loop channel for the meta ask_user tool (M6). */
   askUser?: (prompt: string, options?: string[]) => Promise<{ answer: string } | { cancelled: true }>;
+  /**
+   * Persistent session/trace/harness history. When set, the session records
+   * its turns, traces, and harness versions and loads prior harness_* facts
+   * into the module so DML can query them. See
+   * `docs/DML_REPL_SESSION_HISTORY.md`.
+   */
+  history?: HistoryOptions;
 }
 
 export interface DMLQueryOptions {
@@ -102,6 +115,12 @@ export class DMLSession {
   private dmlReference?: string;
   private dmlAuthoring?: string;
   private disposed = false;
+  /** History recorder; present only when the caller enables it. */
+  private history?: HistoryStore;
+  private historyOptions?: HistoryOptions;
+  /** Monotonic per-session turn counter used by history records. */
+  private turnCounter = 0;
+  private historyWarned = false;
 
   private constructor(swipl: SWIPLModule, options: DMLSessionOptions) {
     this.swipl = swipl;
@@ -121,6 +140,7 @@ export class DMLSession {
     this.maxModelCalls = options.maxModelCalls ?? 100;
     this.modelCallBudget = this.maxModelCalls;
     this.hostToolsCatalog = options.hostToolsCatalog;
+    this.historyOptions = options.history;
     this.runner = new DMLRunner(swipl, options.runnerOptions);
     this.runner.bindSession(this.sessionId);
   }
@@ -151,6 +171,7 @@ export class DMLSession {
     if (!result) {
       throw new Error('Failed to create REPL session');
     }
+    await session.initHistory();
     return session;
   }
 
@@ -181,17 +202,21 @@ export class DMLSession {
    * `embedded_file/2` facts back into the workspace.
    */
   async load(file: string): Promise<{ error?: string }> {
+    const before = this.predicateList();
     const target = path.isAbsolute(file)
       ? file
       : path.resolve(this.workspacePath ?? process.cwd(), file);
     try {
       if (target.toLowerCase().endsWith('.zip')) {
-        return await this.loadBundle(target);
+        const result = await this.loadBundle(target);
+        if (!result.error) await this.recordHistoryChange('load', this.turnCounter, before, file);
+        return result;
       }
       const code = await fs.readFile(target, 'utf8');
       const result = await this.loadCode(code);
       if (!result.error) {
         this.prologQuery(`deepclause_mi:repl_materialize_embedded('${this.sessionId}')`);
+        await this.recordHistoryChange('load', this.turnCounter, before, file);
       }
       return result;
     } catch (error) {
@@ -208,6 +233,152 @@ export class DMLSession {
     const paths = plainValue(result?.Paths);
     if (!Array.isArray(paths)) return [];
     return paths.map((value) => String(plainValue(value) ?? '')).filter(Boolean);
+  }
+
+  // ---- History (docs/DML_REPL_SESSION_HISTORY.md) ----
+
+  private async initHistory(): Promise<void> {
+    if (!this.historyOptions) return;
+    try {
+      const store = new HistoryStore(
+        this.workspacePath ?? process.cwd(),
+        this.sessionId,
+        this.historyOptions,
+      );
+      await store.init();
+      const existing = await store.readFacts();
+      if (existing.trim()) {
+        this.prologQuery(`deepclause_mi:repl_history_load('${this.sessionId}', ${quoteString(existing)})`);
+      }
+      this.history = store;
+      this.assertHistoryFacts(await store.startSession({ model: this.model, backend: this.provider }));
+    } catch (error) {
+      this.warnHistory(error);
+    }
+  }
+
+  private assertHistoryFacts(facts: string[]): void {
+    if (!this.history || facts.length === 0) return;
+    try {
+      this.prologQuery(
+        `deepclause_mi:repl_history_record('${this.sessionId}', ${quoteString(facts.join('\n'))})`
+      );
+    } catch (error) {
+      this.warnHistory(error);
+    }
+  }
+
+  private recordHistoryEvent(turn: number, event: DMLEvent): void {
+    this.history?.recordEvent(
+      { turn, frame: event.frameKind },
+      event as unknown as { type: string } & Record<string, unknown>,
+    );
+  }
+
+  private manifestText(): string {
+    const result = this.prologQuery(`deepclause_mi:repl_manifest('${this.sessionId}', Text)`);
+    return String(plainValue(result?.Text) ?? '');
+  }
+
+  private predicateList(): string[] {
+    const result = this.prologQuery(`deepclause_mi:repl_user_predicates_text('${this.sessionId}', Text)`);
+    return String(plainValue(result?.Text) ?? '')
+      .split(',')
+      .map((entry) => entry.trim())
+      .filter(Boolean);
+  }
+
+  private moduleSource(): string {
+    const result = this.prologQuery(`deepclause_mi:export_harness('${this.sessionId}', none, Text)`);
+    return String(plainValue(result?.Text) ?? '');
+  }
+
+  private async scriptHashes(): Promise<Array<{ path: string; sha256: string }>> {
+    const { createHash } = await import('crypto');
+    const out: Array<{ path: string; sha256: string }> = [];
+    for (const rel of this.scriptFiles()) {
+      try {
+        const content = await fs.readFile(this.resolveWorkspacePath(rel));
+        out.push({ path: rel, sha256: createHash('sha256').update(content).digest('hex') });
+      } catch {
+        out.push({ path: rel, sha256: 'missing' });
+      }
+    }
+    return out;
+  }
+
+  private diffPredicates(
+    before: string[],
+    after: string[],
+    touched: string[],
+  ): HistoryChangedPredicate[] {
+    const beforeSet = new Set(before);
+    const afterSet = new Set(after);
+    const changed: HistoryChangedPredicate[] = [];
+    for (const predicate of touched) {
+      if (!afterSet.has(predicate)) continue;
+      changed.push({ predicate, action: beforeSet.has(predicate) ? 'replaced' : 'added' });
+    }
+    for (const predicate of before) {
+      if (!afterSet.has(predicate)) changed.push({ predicate, action: 'removed' });
+    }
+    changed.sort((a, b) => a.predicate.localeCompare(b.predicate));
+    return changed;
+  }
+
+  private touchedPredicates(): string[] {
+    return this.lastCommitPredicates().split(',').map((entry) => entry.trim()).filter(Boolean);
+  }
+
+  /** Record a harness version; returns the new version number. */
+  private async recordHistoryChange(
+    kind: 'commit' | 'load' | 'reset',
+    turn: number,
+    before: string[],
+    entry: string,
+  ): Promise<number | undefined> {
+    if (!this.history) return undefined;
+    try {
+      const after = this.predicateList();
+      const changed = this.diffPredicates(
+        before,
+        after,
+        kind === 'commit' ? this.touchedPredicates() : after,
+      );
+      const { facts } = await this.history.recordChange({
+        kind,
+        sessionId: this.sessionId,
+        turn,
+        entry: entry || undefined,
+        changed,
+        scripts: await this.scriptHashes(),
+        module: this.moduleSource(),
+        manifest: this.manifestText(),
+      });
+      this.assertHistoryFacts(facts);
+      return this.history.currentVersion;
+    } catch (error) {
+      this.warnHistory(error);
+      return undefined;
+    }
+  }
+
+  private async finishHistoryTurn(record: HistoryTurnRecord): Promise<void> {
+    if (!this.history) return;
+    try {
+      this.assertHistoryFacts(await this.history.recordTurn(record));
+      await this.history.flushEvents();
+    } catch (error) {
+      this.warnHistory(error);
+    }
+  }
+
+  private warnHistory(error: unknown): void {
+    if (this.historyWarned) return;
+    this.historyWarned = true;
+    if (process.env.DEBUG_REPL) {
+      console.error('[repl] history recording failed:', error);
+    }
   }
 
   /** Extract a `.zip` bundle and load its harness.dml. */
@@ -279,26 +450,45 @@ export class DMLSession {
       return;
     }
 
+    this.turnCounter += 1;
+    const historyTurn = this.turnCounter;
+    const historyStart = Date.now();
+
     const frame = this.runner.registerDefaultFrame(frameKind);
     if (!frame) {
       yield { type: 'error', content: 'Failed to create query frame' };
       return;
     }
 
+    let historyOutcome: HistoryTurnRecord['outcome'] = 'query';
     try {
-      yield* this.runner.runFrame(frame.id, this.buildRunOptions(options));
+      for await (const event of this.runner.runFrame(frame.id, this.buildRunOptions(options))) {
+        this.recordHistoryEvent(historyTurn, event);
+        if (event.type === 'error') historyOutcome = 'failed';
+        yield event;
+      }
     } finally {
       this.runner.endFrame(frame.id);
     }
 
     // An aborted goal may have asserted scratch state; preserve it.
     if (options.signal?.aborted) {
+      historyOutcome = 'aborted';
       const saved = await this.saveCurrentHarness('cancelled');
       yield {
         type: 'error',
         content: saved ? `turn aborted; current harness saved to ${saved}` : 'turn aborted',
       };
     }
+
+    await this.finishHistoryTurn({
+      turn: historyTurn,
+      mode: 'goal',
+      request: goal,
+      outcome: historyOutcome,
+      durationMs: Date.now() - historyStart,
+      modelCalls: this.modelCallsThisTurn,
+    });
   }
 
   /** Load the bundled DML reference once, for inclusion in the meta prompt. */
@@ -363,8 +553,10 @@ export class DMLSession {
     if (this.isFrozen()) {
       throw new Error('harness is frozen; reset is disabled');
     }
+    const before = this.predicateList();
     this.prologQuery(`deepclause_mi:clear_session('${this.sessionId}')`);
     this.runner.clearFrames();
+    await this.recordHistoryChange('reset', this.turnCounter, before, '');
   }
 
   // ---- Freeze lock (M2) ----
@@ -564,6 +756,13 @@ export class DMLSession {
     let succeeded = false;
     let lastError: string | undefined;
     let currentRequest = request;
+    this.turnCounter += 1;
+    const historyTurn = this.turnCounter;
+    const historyStart = Date.now();
+    const historyBefore = this.predicateList();
+    let historyOutcome: HistoryTurnRecord['outcome'] = 'failed';
+    let historyEntry = '';
+    let historyVersion: number | undefined;
 
     yield { type: 'task_activity', taskState: 'started', taskDescription: request };
 
@@ -653,13 +852,19 @@ export class DMLSession {
               if (event.frameKind !== 'nested') {
                 metaFailed = event.content;
               }
+              this.recordHistoryEvent(historyTurn, event);
               yield event;
             } else if (event.type !== 'finished') {
+              this.recordHistoryEvent(historyTurn, event);
               yield event;
             }
           }
         } catch (error) {
           metaFailed = error instanceof Error ? error.message : String(error);
+          this.history?.recordEvent(
+            { turn: historyTurn, frame: 'meta' },
+            { type: 'error', content: metaFailed },
+          );
           yield { type: 'error', content: metaFailed };
         } finally {
           this.runner.endFrame(metaFrame.id);
@@ -669,6 +874,7 @@ export class DMLSession {
         // Aborted turn: preserve the scratch state to a temp file, then restore
         // the committed harness (the turn stays atomic).
         if (options.signal?.aborted) {
+          historyOutcome = 'aborted';
           const saved = await this.saveCurrentHarness('cancelled');
           this.prologQuery(`deepclause_mi:repl_snapshot_restore('${this.sessionId}')`);
           yield {
@@ -683,6 +889,7 @@ export class DMLSession {
         // save the scratch module + linked scripts BEFORE discarding the
         // transaction, so the author's work is recoverable, then abort.
         if (metaFailed || (!code.trim() && !answer.trim())) {
+          historyOutcome = 'failed';
           const saved = await this.saveCurrentHarness(
             metaFailed ? 'meta task failed' : 'meta task produced no DML',
           );
@@ -700,6 +907,7 @@ export class DMLSession {
         // Direct answer: a simple question the model answered without changing
         // the harness. Render the reply and skip the commit entirely.
         if (!code.trim() && answer.trim()) {
+          historyOutcome = 'answered';
           const reply = answer.trim();
           yield { type: 'output', content: reply };
           const summary = `answered: ${reply.length > 200 ? `${reply.slice(0, 197)}…` : reply}`;
@@ -725,6 +933,9 @@ export class DMLSession {
           continue;
         }
         succeeded = true;
+        historyEntry = entry;
+        historyOutcome = 'committed';
+        historyVersion = await this.recordHistoryChange('commit', historyTurn, historyBefore, entry);
 
         // 6. Run the declared entry (EntryGoal or repl_entry/1), if any.
         const start = this.prologQuery(
@@ -745,6 +956,7 @@ export class DMLSession {
             this.frameDepth = 1;
             try {
               for await (const event of this.runner.runFrame(entryFrame.id, runOptions)) {
+                this.recordHistoryEvent(historyTurn, event);
                 yield event;
               }
             } catch (error) {
@@ -775,11 +987,30 @@ export class DMLSession {
     if (!succeeded) {
       yield { type: 'error', content: lastError ?? 'prompt failed' };
     }
+
+    await this.finishHistoryTurn({
+      turn: historyTurn,
+      mode: 'prompt',
+      request,
+      outcome: historyOutcome,
+      commitVersion: historyVersion,
+      entry: historyEntry || undefined,
+      durationMs: Date.now() - historyStart,
+      modelCalls: this.modelCallsThisTurn,
+      error: succeeded ? undefined : lastError,
+    });
   }
 
   async dispose(): Promise<void> {
     if (this.disposed) return;
     this.disposed = true;
+    if (this.history) {
+      try {
+        this.assertHistoryFacts(await this.history.endSession('dispose'));
+      } catch (error) {
+        this.warnHistory(error);
+      }
+    }
     this.prologQuery(`deepclause_mi:destroy_session('${this.sessionId}')`);
     this.runner.clearFrames();
     await this.runner.dispose();

@@ -264,6 +264,27 @@ persisted. `execute` sees a snapshot of harness memory so it can test with
 realistic context; those writes are discarded at commit. The entry run is the
 only place harness memory advances.
 
+## History
+
+Every session, turn, event trace, and harness version is persisted under
+`.deepclause/repl/` (configurable via `repl.history`). The durable links live in
+the harness itself as `harness_*` facts, so a skill can query what happened
+before:
+
+```prolog
+recent(N, Cs) :-
+    findall(V-Ts-E, harness_change(V, Ts, commit, _, _, E), All),
+    last_n(All, N, Cs).
+```
+
+`harness_session/5`, `harness_session_end/2`, `harness_turn/5`,
+`harness_change/6`, `harness_changed/4`, `harness_head/4`, and
+`harness_trace/3` are system-owned: queryable from DML, but never committed,
+exported, or listed as harness predicates (`listing(history)` shows a tail). A
+new session loads the persisted `history.dml` at startup. See
+[`DML_REPL_SESSION_HISTORY.md`](./DML_REPL_SESSION_HISTORY.md). Set
+`repl.history.enabled: false` (or omit `history` when embedding) to disable it.
+
 ## Export, freeze, and `-l`
 
 **`export`** serializes the living module into a self-contained, human-readable
@@ -476,7 +497,16 @@ block.
   "showToolArgs": true,
   "maxToolResultChars": 2000,
   "color": true,
-  "tools": null
+  "tools": null,
+  "history": {
+    "enabled": true,
+    "dir": ".deepclause/repl",
+    "trace": "summary",
+    "maxEventBytes": 8192,
+    "maxSessions": 50,
+    "maxVersions": 200,
+    "includeInExport": false
+  }
 },
 "judgment": {
   "default": "llm",

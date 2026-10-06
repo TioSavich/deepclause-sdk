@@ -17,6 +17,7 @@ import type { FrameKind } from '../types.js';
 import { DMLSession, type DMLQueryOptions } from './session.js';
 import type { HarnessExportOptions, HarnessExportResult } from './export.js';
 import { resolveReplJudgeSelection, type JevJudgeOptions } from './judge.js';
+import type { HistoryOptions } from './history.js';
 import type { JudgeSelection } from '../judge/types.js';
 
 export type RunOpts = DMLQueryOptions;
@@ -62,6 +63,8 @@ export interface HarnessReplOptions {
   jev?: JevJudgeOptions;
   /** Receives startup diagnostics, e.g. a skipped `jev` backend. */
   onDiagnostic?: (message: string) => void;
+  /** Persistent session/trace/harness history. Off unless provided. */
+  history?: HistoryOptions;
 }
 
 export interface HarnessRepl {
@@ -175,6 +178,7 @@ export async function createHarnessRepl(options: HarnessReplOptions): Promise<Ha
     maxModelCalls: options.maxModelCalls,
     hostToolsCatalog: options.hostToolsCatalog,
     askUser: options.askUser,
+    history: options.history,
     runnerOptions: {
       model: options.model,
       provider: options.provider,

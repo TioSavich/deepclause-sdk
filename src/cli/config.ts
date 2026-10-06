@@ -142,6 +142,17 @@ const ReplConfigSchema = z.object({
   maxToolResultChars: z.number().int().positive().optional().default(2000),
   color: z.boolean().optional().default(true),
   tools: z.array(z.string()).nullish(),
+  /** Persistent session/trace/harness history (docs/DML_REPL_SESSION_HISTORY.md). */
+  history: z.object({
+    enabled: z.boolean().optional().default(true),
+    dir: z.string().optional().default('.deepclause/repl'),
+    trace: z.enum(['off', 'summary', 'full']).optional().default('summary'),
+    maxEventBytes: z.number().int().positive().optional().default(8192),
+    maxSessions: z.number().int().positive().optional().default(50),
+    maxVersions: z.number().int().positive().optional().default(200),
+    includeInExport: z.boolean().optional().default(false),
+    redact: z.array(z.string()).optional(),
+  }).optional().default({}),
 }).optional().default({});
 
 /**
@@ -248,6 +259,15 @@ const DEFAULT_CONFIG: Config = {
     showToolArgs: true,
     maxToolResultChars: 2000,
     color: true,
+    history: {
+      enabled: true,
+      dir: '.deepclause/repl',
+      trace: 'summary' as const,
+      maxEventBytes: 8192,
+      maxSessions: 50,
+      maxVersions: 200,
+      includeInExport: false,
+    },
   },
   judgment: {
     default: 'llm',

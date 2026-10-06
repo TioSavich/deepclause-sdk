@@ -154,6 +154,8 @@ describe('prompt mode', () => {
     expect(promptText).toContain('DATA = CODE');
     expect(promptText).toContain('TESTS');
     expect(promptText).toContain('bash access to a sandbox');
+    expect(promptText).toContain('HISTORY: the harness remembers');
+    expect(promptText).toContain('harness_change/6');
     expect(promptText).toContain('EVOLVE ONLY WHEN ASKED');
   });
 

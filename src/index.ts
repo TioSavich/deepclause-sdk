@@ -42,6 +42,15 @@ export type { DMLSessionOptions, DMLQueryOptions } from './repl/session.js';
 export type { HarnessExportOptions, HarnessExportResult } from './repl/export.js';
 export { createPiBackend, createPiAdapter, resolvePiPaths, selectPiModel } from './repl/backend.js';
 export { createReplToolset, buildToolCatalog } from './repl/toolset.js';
+export { HistoryStore } from './repl/history.js';
+export type {
+  HistoryOptions,
+  HistoryTrace,
+  HistoryTurnRecord,
+  HistoryChangeRecord,
+  HistoryChangedPredicate,
+  HistoryEventContext,
+} from './repl/history.js';
 
 // Compiler utilities — also available via the 'deepclause-sdk/compiler' subpath
 export {

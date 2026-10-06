@@ -60,6 +60,11 @@
     repl_set_dml_reference/2,
     repl_set_authoring_examples/2,
     repl_manifest/2,
+    repl_history_load/2,
+    repl_history_record/2,
+    repl_history_summary/2,
+    repl_user_predicates/2,
+    repl_user_predicates_text/2,
     repl_set_meta_catalog/2,
     repl_run_meta/4,
     repl_snapshot_save/1,
@@ -957,6 +962,8 @@ repl_listing_output(SessionId, Filter) :-
             ;   format("~w - ~w~n~n", [Name, Schema])
             )
         )
+    ;   Filter == history
+    ->  repl_history_listing(SessionId)
     ;   findall(Name/Arity,
             (   current_predicate(SessionId:Name/Arity),
                 repl_user_predicate(SessionId, Name, Arity)
@@ -995,6 +1002,10 @@ repl_user_predicate(_SessionId, Name, _Arity) :-
     internal_session_predicate(Name),
     !,
     fail.
+repl_user_predicate(_SessionId, Name, _Arity) :-
+    history_predicate(Name),
+    !,
+    fail.
 repl_user_predicate(SessionId, Name, Arity) :-
     % User DML clauses are asserted (interpreted) into the session module.
     % Exclude predicates imported via use_module (e.g. library(clpfd)) and
@@ -1009,6 +1020,15 @@ internal_session_predicate(param).
 internal_session_predicate(param_decl).
 internal_session_predicate(tool_source).
 internal_session_predicate('__session__').
+
+%% history_predicate(+Name)
+%% Runtime-owned harness-history facts. Excluded from the user predicate set (so
+%% they are neither listed as harness predicates nor exported nor replaced by a
+%% commit) and protected from user definition -- but CALLABLE from DML, so the
+%% harness can query what happened in previous sessions.
+history_predicate(Name) :-
+    atom(Name),
+    sub_atom(Name, 0, _, _, harness_).
 
 %% repl_reserved_name(+Name)
 %% Names owned by the REPL runtime. M4 uses repl_reserved/1 to refuse goals
@@ -1266,6 +1286,8 @@ repl_materialize_embedded(SessionId) :-
 %% Reserved names that generated code may not (re)define. repl_entry and
 %% repl_delete are legitimate harness directives and are allowed through.
 repl_protected_name(Name) :-
+    history_predicate(Name).
+repl_protected_name(Name) :-
     repl_reserved_name(Name),
     Name \== repl_entry,
     Name \== repl_delete.
@@ -1467,11 +1489,13 @@ repl_manifest(SessionId, Manifest) :-
     sort(Tools0, Tools),
     findall(Directive, session_directive(SessionId, Directive), Directives0),
     sort(Directives0, Directives),
+    repl_history_summary(SessionId, HistorySummary),
     with_output_to(string(Manifest),
         (   format("- predicates: ~w~n", [Preds]),
             format("- tools: ~w~n", [Tools]),
             format("- entries: ~w~n", [Entries]),
-            format("- directives: ~w~n", [Directives])
+            format("- directives: ~w~n", [Directives]),
+            format("- history: ~w~n", [HistorySummary])
         )).
 
 %% repl_meta_memory_text(+SessionId, -Text)
@@ -1494,6 +1518,109 @@ last_n(List, N, Tail) :-
         append(Prefix, Tail, List)
     ).
 
+%% ============================================================
+%% Harness history (see docs/DML_REPL_SESSION_HISTORY.md)
+%% ============================================================
+
+%% repl_history_load(+SessionId, +Text)
+%% Asserts harness_* history facts (the persisted .deepclause/repl/history.dml)
+%% into the session module so the harness can query prior sessions.
+repl_history_load(SessionId, Text) :-
+    (   var(Text)
+    ->  true
+    ;   open_string(Text, Stream),
+        repl_history_read_stream(Stream, SessionId),
+        close(Stream)
+    ).
+
+repl_history_read_stream(Stream, SessionId) :-
+    catch(read_term(Stream, Term, [module(SessionId)]), _, Term = end_of_file),
+    (   Term == end_of_file
+    ->  true
+    ;   repl_history_assert_term(Term, SessionId),
+        repl_history_read_stream(Stream, SessionId)
+    ).
+
+%% repl_history_record(+SessionId, +FactText)
+%% Asserts one or more history facts into the live module. The recorder persists
+%% the same facts to history.dml; here they become queryable.
+repl_history_record(SessionId, FactText) :-
+    (   var(FactText)
+    ->  true
+    ;   ensure_full_stop(FactText, Text1),
+        open_string(Text1, Stream),
+        repl_history_read_stream(Stream, SessionId),
+        close(Stream)
+    ).
+
+%% Only harness_* facts may be asserted through this path.
+repl_history_assert_term(Term, SessionId) :-
+    (   nonvar(Term),
+        Term \== end_of_file,
+        Term \== none,
+        callable(Term),
+        functor(Term, Name, _),
+        history_predicate(Name)
+    ->  assertz(SessionId:Term)
+    ;   true
+    ).
+
+%% repl_user_predicates(+SessionId, -Preds)
+%% Sorted Name/Arity list of the harness's own predicates.
+repl_user_predicates(SessionId, Preds) :-
+    findall(Name/Arity,
+        (   current_predicate(SessionId:Name/Arity),
+            repl_user_predicate(SessionId, Name, Arity)
+        ),
+        Preds0),
+    sort(Preds0, Preds).
+
+%% repl_user_predicates_text(+SessionId, -Text)
+%% Rendered "name/arity, name/arity" for change diffing on the host side.
+repl_user_predicates_text(SessionId, Text) :-
+    repl_user_predicates(SessionId, Preds),
+    with_output_to(string(Text), print_pred_list(Preds)).
+
+%% repl_history_listing(+SessionId)
+%% Human-readable tail for `listing(history)`.
+repl_history_listing(SessionId) :-
+    (   current_predicate(SessionId:harness_head/4),
+        SessionId:harness_head(Version, Timestamp, HeadSession, _Turn)
+    ->  format("harness_head(~w, ~w, ~w)~n", [Version, Timestamp, HeadSession])
+    ;   format("harness_head(none)~n")
+    ),
+    (   current_predicate(SessionId:harness_session/5)
+    ->  forall(SessionId:harness_session(Sid, Started, Model, Backend, Dir),
+            format("harness_session(~w, ~w, ~w, ~w, ~w)~n", [Sid, Started, Model, Backend, Dir]))
+    ;   true
+    ),
+    (   current_predicate(SessionId:harness_change/6)
+    ->  forall(SessionId:harness_change(V, Ts, Kind, Sid, Turn, Entry),
+            format("harness_change(~w, ~w, ~w, ~w, ~w, ~w)~n", [V, Ts, Kind, Sid, Turn, Entry]))
+    ;   true
+    ).
+
+%% repl_history_summary(+SessionId, -Text)
+%% One-line history for the meta prompt manifest.
+repl_history_summary(SessionId, Text) :-
+    (   current_predicate(SessionId:harness_head/4),
+        SessionId:harness_head(Version, Timestamp, HeadSession, _Turn)
+    ->  true
+    ;   Version = none, Timestamp = none, HeadSession = none
+    ),
+    (   current_predicate(SessionId:harness_session/5)
+    ->  findall(s, SessionId:harness_session(_, _, _, _, _), Sessions0),
+        length(Sessions0, Sessions)
+    ;   Sessions = 0
+    ),
+    (   current_predicate(SessionId:harness_change/6)
+    ->  findall(c, SessionId:harness_change(_, _, _, _, _, _), Changes0),
+        length(Changes0, Changes)
+    ;   Changes = 0
+    ),
+    format(atom(Text), 'version ~w (updated ~w by ~w), ~w session(s), ~w change(s)',
+        [Version, Timestamp, HeadSession, Sessions, Changes]).
+
 %% repl_meta_prompt(+SessionId, +Request, -PromptText)
 %% Assembles the deterministic code-writing prompt: authoring contract, host
 %% tool catalog, harness manifest, recent meta memory, the request, and the
@@ -1511,6 +1638,7 @@ repl_meta_prompt(SessionId, Request, Prompt) :-
             format("- Skills compose: helper predicates (plain Prolog/CLP), semantic judgments (choose/rate/verify/probability), host tools via exec/2, and model calls via task/N. A task/N call runs a bounded agentic turn that may itself invoke other skills, so the library grows by composition and reuse.~n"),
             format("- DATA = CODE: the harness is a live Prolog module, so structured data belongs in it as facts (for example country(Name, Code).) and is inspected and queried exactly like code (listing, goal:, execute). Add data as facts when it is small enough to reason over; keep large datasets in a file or a linked script instead of bloating the module.~n"),
             format("- TESTS: a harness may carry test predicates that pin the intended behavior of a skill (for example test_<name>, or a small check/2 runner). When you change a skill, update or add its test and run it (execute or goal:) so the change is verified, not assumed.~n"),
+            format("- HISTORY: the harness remembers. Query the harness_* facts (harness_change/6, harness_changed/4, harness_turn/5, harness_session/5, harness_session_end/2, harness_head/4, harness_trace/3) to see what happened in previous sessions; listing(history) shows a tail.~n"),
             format("- EVOLVE ONLY WHEN ASKED: create or change the harness only for an explicit create/change/run request. On a fresh workspace create what the user asked for; afterwards change only what the request requires, reuse existing skills instead of duplicating them, and never refactor or extend the harness on your own initiative.~n~n"),
             format("AUTHORING CONTRACT~n"),
             format("- Emit only valid DML. There is no Markdown->DML compiler; the code you return is loaded directly.~n"),
