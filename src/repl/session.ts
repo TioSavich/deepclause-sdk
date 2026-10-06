@@ -687,18 +687,29 @@ export class DMLSession {
           break;
         }
 
-        // 4. Discard scratch edits.
-        this.prologQuery(`deepclause_mi:repl_snapshot_restore('${this.sessionId}')`);
-
-        if (metaFailed) {
+        // A failed or empty meta turn (iteration cap, budget, model error):
+        // save the scratch module + staged scripts BEFORE discarding the
+        // transaction, so the author's work is recoverable, then abort.
+        if (metaFailed || (!code.trim() && !answer.trim())) {
+          const saved = await this.saveCurrentHarness(
+            metaFailed ? 'meta task failed' : 'meta task produced no DML',
+          );
+          this.prologQuery(`deepclause_mi:repl_snapshot_restore('${this.sessionId}')`);
           this.staging.clear();
-          lastError = `meta task failed: ${metaFailed}`;
+          lastError = (metaFailed
+            ? `meta task failed: ${metaFailed}`
+            : 'the meta task returned no DML source or answer')
+            + (saved ? ` (current harness saved to ${saved})` : '');
           break;
         }
+
+        // 4. Discard scratch edits.
+        this.prologQuery(`deepclause_mi:repl_snapshot_restore('${this.sessionId}')`);
 
         // Direct answer: a simple question the model answered without changing
         // the harness. Render the reply and skip the commit entirely.
         if (!code.trim() && answer.trim()) {
+          this.staging.clear();
           const reply = answer.trim();
           yield { type: 'output', content: reply };
           const summary = `answered: ${reply.length > 200 ? `${reply.slice(0, 197)}…` : reply}`;
@@ -706,11 +717,6 @@ export class DMLSession {
             `deepclause_mi:repl_record_meta('${this.sessionId}', ${quoteString(request)}, ${quoteString(summary)})`
           );
           succeeded = true;
-          break;
-        }
-        if (!code.trim()) {
-          this.staging.clear();
-          lastError = 'the meta task returned no DML source or answer';
           break;
         }
 

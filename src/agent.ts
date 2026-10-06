@@ -627,7 +627,7 @@ async function runInjectedAgentLoop(
     ...conversationHistory.map((message) => ({ role: message.role, content: message.content })),
     { role: 'user', content: `Subtask: ${options.taskDescription}` },
   ];
-  const maxIterations = Math.max(1, Number(process.env.DC_MAX_ITERATIONS) || 50);
+  const maxIterations = Math.max(1, Number(process.env.DC_MAX_ITERATIONS) || 1000);
 
   for (let iteration = 0; iteration < maxIterations && !state.finished; iteration++) {
     if (options.signal?.aborted) break;
@@ -971,7 +971,7 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<AgentLoop
   );
 
   // Agent loop
-  const maxIterations = Math.max(1, Number(process.env.DC_MAX_ITERATIONS) || 50);
+  const maxIterations = Math.max(1, Number(process.env.DC_MAX_ITERATIONS) || 1000);
   let iteration = 0;
   let lastActualInputTokens: number | undefined;
 

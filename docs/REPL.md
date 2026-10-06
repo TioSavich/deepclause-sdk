@@ -109,6 +109,13 @@ ERROR: turn aborted; current harness saved to /tmp/deepclause-repl-<id>-<ts>.dml
 Load that file with `deepclause repl -l <file>` to resume. Ctrl-C while idle
 exits the REPL. The same applies to `goal:` queries and `-g` runs.
 
+A meta task that ends **without producing DML** — iteration cap, exhausted
+model-call budget, or a model error — is treated the same way: the transaction
+is discarded, the scratch module + staged scripts are written to a temp bundle,
+and the error reports the path, e.g.
+`ERROR: the meta task returned no DML source or answer (current harness saved to /tmp/deepclause-repl-….zip)`.
+So a long debugging turn is never lost even when the turn itself fails.
+
 ### Meta tools and guard rails
 
 The code-writing meta task is restricted to `listing`, `assert`, `assert_many`,

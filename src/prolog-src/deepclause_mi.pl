@@ -843,9 +843,31 @@ query_start(SessionId, Text, FrameKind, InitialState, Error) :-
 %% both `goal: p(X).` and `-g "p(X)"` read cleanly.
 ensure_full_stop(Text, Text1) :-
     atom_string(TextAtom, Text),
-    (   sub_atom(TextAtom, _, _, 0, '.')
+    (   atom_ends_with_stop(TextAtom)
     ->  atom_concat(TextAtom, '\n', Text1)
     ;   atom_concat(TextAtom, '.\n', Text1)
+    ).
+
+%% atom_ends_with_stop(+Atom)
+%% True when the last non-whitespace character is a full stop. A naive
+%% "ends with ." test would append an extra full stop to any block that ends
+%% with a newline, and read_term/3 then fails on the lone '.' (end_of_clause).
+atom_ends_with_stop(TextAtom) :-
+    atom_string(TextAtom, TextStr),
+    string_length(TextStr, Len0),
+    trim_trailing_ws(TextStr, Len0, Len),
+    Len > 0,
+    Pos is Len - 1,
+    sub_string(TextStr, Pos, 1, _, ".").
+
+trim_trailing_ws(Str, Len0, Len) :-
+    (   Len0 > 0,
+        Pos is Len0 - 1,
+        sub_string(Str, Pos, 1, _, Ch),
+        ( Ch == " " ; Ch == "\t" ; Ch == "\n" ; Ch == "\r" )
+    ->  Len1 is Len0 - 1,
+        trim_trailing_ws(Str, Len1, Len)
+    ;   Len = Len0
     ).
 
 %% read_repl_goal(+SessionId, +Text, -Goal, -Names)

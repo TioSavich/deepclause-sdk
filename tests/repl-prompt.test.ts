@@ -240,6 +240,57 @@ describe('prompt mode', () => {
     expect(listing).not.toContain('```');
   });
 
+  it('saves a bundle when the meta task ends without finishing', async () => {
+    const previous = process.env.DC_MAX_ITERATIONS;
+    process.env.DC_MAX_ITERATIONS = '3';
+    try {
+      backend = new CannedBackend([
+        { text: '', toolCalls: [{ name: 'assert', arguments: { clause: 'scratch_on_fail(1).' } }] },
+      ]);
+      repl = await openRepl();
+
+      const events = await collect(repl.prompt('never finish'));
+      const failure = events.find((event) => event.type === 'error' && event.content?.includes('no DML source'));
+      expect(failure).toBeDefined();
+
+      const savedPath = failure!.content!.match(/saved to (.+?)\)?$/)?.[1]?.trim();
+      expect(savedPath).toBeTruthy();
+      const { unzipSync, strFromU8 } = await import('fflate');
+      const entries = unzipSync(new Uint8Array(await fs.readFile(savedPath!)));
+      expect(strFromU8(entries['harness.dml'])).toContain('scratch_on_fail');
+      await fs.rm(savedPath!, { force: true });
+    } finally {
+      if (previous === undefined) {
+        delete process.env.DC_MAX_ITERATIONS;
+      } else {
+        process.env.DC_MAX_ITERATIONS = previous;
+      }
+    }
+  });
+
+  it('assert_many accepts blocks that end with a newline', async () => {
+    backend = new CannedBackend([{
+      text: '',
+      toolCalls: [
+        { name: 'assert_many', arguments: { clauses: 'a(1).\nb(2).\nc(3) :- true.\n' } },
+        { name: 'execute', arguments: { goal: 'a(X), b(Y), c(Z)' } },
+        { name: 'set_result', arguments: { variable: 'DMLCode', value: 'kept(1).' } },
+        { name: 'set_result', arguments: { variable: 'EntryGoal', value: '' } },
+        { name: 'set_result', arguments: { variable: 'Answer', value: '' } },
+        { name: 'finish', arguments: { success: true } },
+      ],
+    }]);
+    repl = await openRepl();
+
+    const events = await collect(repl.prompt('assert a multi-clause block'));
+    expect(events.some((event) => (
+      event.type === 'tool_call' && event.toolName === 'assert_many' && event.toolState === 'completed'
+    ))).toBe(true);
+    expect(events.some((event) => (
+      event.type === 'tool_call' && event.toolName === 'assert_many' && event.toolState === 'failed'
+    ))).toBe(false);
+  });
+
   it('keeps the turn alive when an execute child goal fails', async () => {
     backend = new CannedBackend([{
       text: '',
