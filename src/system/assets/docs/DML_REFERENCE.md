@@ -142,6 +142,17 @@ agent_main :-
 
 Bind up to three variables.
 
+> **Note — `task/N` is load-time sugar.** `task/1,2,3,4` and `prompt/2,3,4` are
+> rewritten by the DML loader into `task_named/3` / `prompt_named/3` with typed
+> output variables. The rewrite runs when code is loaded (`deepclause run`,
+> the REPL `-l` and commit paths, `consult`). Code that reaches the runtime
+> **without** that rewrite keeps the source form, for which there is no runtime
+> handler; the goal is treated as a reserved MI predicate and **fails
+> silently**. In practice: a predicate that calls `task/2..4` works once it is
+> loaded/committed, but may fail when exercised only from the REPL meta task's
+> scratch `assert`/`assert_many` tools (these currently assert verbatim).
+> `task/1` is unaffected.
+
 ### Type-Safe Output Variables
 
 You can wrap output variables with type specifiers to enforce strict validation on the LLM's output. The runtime will ensure the value matches the specified type.

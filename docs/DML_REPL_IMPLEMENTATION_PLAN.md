@@ -536,3 +536,31 @@ Record each decision at the top of the milestone that depends on it.
 * `docs/REPL.md` documents the classifier, both memory levels, `export`/
   `freeze`, `ask_user`, self-containment, and the backend.
 * A fresh checkout can reproduce the self-hosting demo from the plan.
+
+## 8. Known issues / follow-ups
+
+Numbered as in proposal §20.
+
+* **#30 — scratch `assert`/`assert_many` skip the `task`/`prompt` rewrite.**
+  `task/N` and `prompt/N` (N ≥ 2) are source sugar rewritten to
+  `task_named/3`/`prompt_named/3` by `transform_task_calls/3` at load time.
+  `parse_dml_string` (file load, `-l`, commit) and `consult` run it; the scratch
+  `assert`/`assert_many` meta tools call `process_clause/2` directly, so a clause
+  asserted mid-turn keeps `task/N`, which has no runtime handler and fails
+  silently. The committed harness is correct because the commit re-loads the
+  returned source through the normal (transforming) path. Symptom: a predicate
+  that uses `task/2..4` runs after commit but returns 0 solutions when tested
+  with `execute` on the scratch module, and `current_predicate`/`listing` never
+  shows `task/N`.
+
+  **Fix (not yet implemented):** route `repl_assert`/`repl_assert_many` through
+  `preprocess_loaded_term/3` (capturing `variable_names` via `read_term`) before
+  `process_clause/2`, exactly as `parse_clauses`/`consult_clauses` do. That also
+  fixes `{Var}` interpolation in scratch asserts. Interim options: make an
+  untransformed `task/N`/`prompt/N` a loud error instead of a silent fail, and
+  keep the note in `DML_REFERENCE.md`.
+
+* **Scratch-assert duplicate clauses.** `assert`/`assert_many` append, so the
+  scratch module accumulates duplicate clauses during a long debugging turn.
+  This is display/backtracking noise only (the commit is replace-by-predicate),
+  but `listing` during the turn can look confusing.
