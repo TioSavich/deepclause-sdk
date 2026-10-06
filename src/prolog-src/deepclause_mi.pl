@@ -53,7 +53,6 @@
     repl_meta_prompt/2,
     repl_meta_prompt/3,
     repl_extract_code/2,
-    repl_entry_goal/2,
     repl_assert/3,
     repl_assert_many/3,
     repl_retract/3,
@@ -70,9 +69,8 @@
     repl_run_meta/4,
     repl_snapshot_save/1,
     repl_snapshot_restore/1,
-    repl_commit/4,
+    repl_commit/3,
     repl_last_commit_summary/2,
-    repl_start_entry/3,
     repl_execute_frame/4,
     repl_record_meta/3,
     post_agent_result/4,
@@ -109,7 +107,6 @@
 :- dynamic session_locked/2.        % session_locked(SessionId, true/false) - irreversibly frozen (--locked)
 :- dynamic session_directive/2.     % session_directive(SessionId, Directive) - recorded :- directives for export
 :- dynamic session_meta_catalog/2.  % session_meta_catalog(SessionId, CatalogText) - host tool catalog for the meta prompt
-:- dynamic session_repl_entry/2.    % session_repl_entry(SessionId, EntryGoal) - resolved entry for the pending commit
 :- dynamic session_dml_reference/2. % session_dml_reference(SessionId, Text) - bundled DML reference for the meta prompt
 :- dynamic session_authoring_examples/2. % session_authoring_examples(SessionId, Text) - curated authoring patterns
 :- dynamic session_last_commit/2.    % session_last_commit(SessionId, [Name/Arity]) - predicates the last commit replaced
@@ -754,7 +751,6 @@ clear_session(SessionId) :-
     assertz(session_repl_memory(SessionId, [])),
     retractall(session_meta_memory(SessionId, _)),
     assertz(session_meta_memory(SessionId, [])),
-    retractall(session_repl_entry(SessionId, _)),
     retractall(repl_snapshot(SessionId, _)),
     retractall(session_user_tools(SessionId, _)),
     retractall(session_user_tool_schema(SessionId, _, _)),
@@ -775,7 +771,6 @@ destroy_session(SessionId) :-
     retractall(session_dml_reference(SessionId, _)),
     retractall(session_authoring_examples(SessionId, _)),
     retractall(session_last_commit(SessionId, _)),
-    retractall(session_repl_entry(SessionId, _)),
     retractall(repl_snapshot(SessionId, _)),
     retractall(session_params(SessionId, _)),
     retractall(session_trace_enabled(SessionId, _)),
@@ -999,8 +994,6 @@ repl_listing_match(_, _, _).
 %% Excludes reserved and internal predicates from listing/export.
 repl_user_predicate(_SessionId, Name, _Arity) :-
     repl_reserved_name(Name),
-    % repl_entry/1 is a legitimate harness predicate (entry declaration).
-    Name \== repl_entry,
     !,
     fail.
 repl_user_predicate(_SessionId, Name, _Arity) :-
@@ -1039,8 +1032,8 @@ history_predicate(Name) :-
 %% Names owned by the REPL runtime. M4 uses repl_reserved/1 to refuse goals
 %% that try to re-enter or shadow the REPL control surface.
 %% Any repl_*/meta_* name is reserved (namespace guard), plus the explicit
-%% control names below. repl_entry/repl_delete are protected exceptions for
-%% definition purposes (see repl_protected_name/1).
+%% control names below. repl_delete is a protected exception for definition
+%% purposes (see repl_protected_name/1).
 repl_reserved_name(Name) :-
     atom(Name),
     (   sub_atom(Name, 0, _, _, repl_)
@@ -1049,8 +1042,6 @@ repl_reserved_name(Name) :-
 
 repl_reserved_name(repl_meta_prompt).
 repl_reserved_name(repl_extract_code).
-repl_reserved_name(repl_entry_goal).
-repl_reserved_name(repl_entry).
 repl_reserved_name(repl_reserved).
 repl_reserved_name(repl_reserved_name).
 repl_reserved_name(repl_tool_catalog).
@@ -1199,10 +1190,6 @@ export_clauses(SessionId) :-
             forall(clause(SessionId:Head, Body), export_clause(Head, Body))
         )).
 
-%% repl_entry/1 must survive export even though repl_* is otherwise reserved.
-export_user_predicate(SessionId, repl_entry, Arity) :-
-    current_predicate(SessionId:repl_entry/Arity),
-    !.
 export_user_predicate(SessionId, Name, Arity) :-
     repl_user_predicate(SessionId, Name, Arity),
     \+ tool_predicate_name(Name).
@@ -1288,13 +1275,12 @@ repl_materialize_embedded(SessionId) :-
 %% ============================================================
 
 %% repl_protected_name(+Name)
-%% Reserved names that generated code may not (re)define. repl_entry and
-%% repl_delete are legitimate harness directives and are allowed through.
+%% Reserved names that generated code may not (re)define. repl_delete is a
+%% legitimate harness directive and is allowed through.
 repl_protected_name(Name) :-
     history_predicate(Name).
 repl_protected_name(Name) :-
     repl_reserved_name(Name),
-    Name \== repl_entry,
     Name \== repl_delete.
 
 repl_protected_clause((Head :- _)) :-
@@ -1468,14 +1454,6 @@ repl_extract_code(Text, Source) :-
     ;   Source = TextAtom
     ).
 
-%% repl_entry_goal(+SessionId, -Goal)
-repl_entry_goal(SessionId, Goal) :-
-    (   current_predicate(SessionId:repl_entry/1),
-        SessionId:repl_entry(Entry)
-    ->  Goal = Entry
-    ;   Goal = none
-    ).
-
 %% repl_manifest(+SessionId, -ManifestText)
 %% Compact signatures + tools + entries + directives for the meta prompt.
 repl_manifest(SessionId, Manifest) :-
@@ -1485,11 +1463,6 @@ repl_manifest(SessionId, Manifest) :-
         ),
         Preds0),
     sort(Preds0, Preds),
-    (   current_predicate(SessionId:repl_entry/1)
-    ->  findall(Entry, SessionId:repl_entry(Entry), Entries0)
-    ;   Entries0 = []
-    ),
-    sort(Entries0, Entries),
     findall(Name, session_user_tool_schema(SessionId, Name, _), Tools0),
     sort(Tools0, Tools),
     findall(Directive, session_directive(SessionId, Directive), Directives0),
@@ -1498,7 +1471,6 @@ repl_manifest(SessionId, Manifest) :-
     with_output_to(string(Manifest),
         (   format("- predicates: ~w~n", [Preds]),
             format("- tools: ~w~n", [Tools]),
-            format("- entries: ~w~n", [Entries]),
             format("- directives: ~w~n", [Directives]),
             format("- history: ~w~n", [HistorySummary])
         )).
@@ -1571,7 +1543,11 @@ repl_history_assert_term(Term, SessionId) :-
         ->  retractall(SessionId:harness_head(_, _, _, _))
         ;   true
         ),
-        assertz(SessionId:Term)
+        % Migrate pre-/5 harness_change facts (they carried an unused Entry arg).
+        (   Term = harness_change(V, Ts, Kind, Sid, Turn, _Entry)
+        ->  assertz(SessionId:harness_change(V, Ts, Kind, Sid, Turn))
+        ;   assertz(SessionId:Term)
+        )
     ;   true
     ).
 
@@ -1591,7 +1567,6 @@ repl_rollback(SessionId, Source, Result) :-
             ->  retractall(SessionId:tool_source(_, _))
             ;   true
             ),
-            retractall(session_repl_entry(SessionId, _)),
             (   Source == ""
             ->  Result = ok
             ;   load_code(SessionId, Source, LoadError),
@@ -1634,9 +1609,9 @@ repl_history_listing(SessionId) :-
             format("harness_session(~w, ~w, ~w, ~w, ~w)~n", [Sid, Started, Model, Backend, Dir]))
     ;   true
     ),
-    (   current_predicate(SessionId:harness_change/6)
-    ->  forall(SessionId:harness_change(V, Ts, Kind, Sid, Turn, Entry),
-            format("harness_change(~w, ~w, ~w, ~w, ~w, ~w)~n", [V, Ts, Kind, Sid, Turn, Entry]))
+    (   current_predicate(SessionId:harness_change/5)
+    ->  forall(SessionId:harness_change(V, Ts, Kind, Sid, Turn),
+            format("harness_change(~w, ~w, ~w, ~w, ~w)~n", [V, Ts, Kind, Sid, Turn]))
     ;   true
     ).
 
@@ -1653,8 +1628,8 @@ repl_history_summary(SessionId, Text) :-
         length(Sessions0, Sessions)
     ;   Sessions = 0
     ),
-    (   current_predicate(SessionId:harness_change/6)
-    ->  findall(c, SessionId:harness_change(_, _, _, _, _, _), Changes0),
+    (   current_predicate(SessionId:harness_change/5)
+    ->  findall(c, SessionId:harness_change(_, _, _, _, _), Changes0),
         length(Changes0, Changes)
     ;   Changes = 0
     ),
@@ -1674,15 +1649,15 @@ repl_meta_prompt(SessionId, Request, Prompt) :-
     with_output_to(string(Prompt),
         (   format("You are the DeepClause REPL harness author. Maintain a living library of DML skills.~n~n"),
             format("WHAT A HARNESS IS~n"),
-            format("- A harness is a living library of reusable DML SKILLS for this workspace, not a single script. A skill is a predicate; expose the skills the user should call as entry points with repl_entry/1.~n"),
+            format("- A harness is a living library of reusable DML SKILLS for this workspace, not a single script. A skill is a predicate; name skills descriptively and run them with execute or goal:.~n"),
             format("- Skills compose: helper predicates (plain Prolog/CLP), semantic judgments (choose/rate/verify/probability), host tools via exec/2, and model calls via task/N. A task/N call runs a bounded agentic turn that may itself invoke other skills, so the library grows by composition and reuse.~n"),
             format("- DATA = CODE: the harness is a live Prolog module, so structured data belongs in it as facts (for example country(Name, Code).) and is inspected and queried exactly like code (listing, goal:, execute). Add data as facts when it is small enough to reason over; keep large datasets in a file or a linked script instead of bloating the module.~n"),
             format("- TESTS: a harness may carry test predicates that pin the intended behavior of a skill (for example test_<name>, or a small check/2 runner). When you change a skill, update or add its test and run it (execute or goal:) so the change is verified, not assumed.~n"),
-            format("- HISTORY: the harness remembers. Query the harness_* facts (harness_change/6, harness_changed/4, harness_turn/5, harness_session/5, harness_session_end/2, harness_head/4, harness_trace/3) to see what happened in previous sessions; listing(history) shows a tail.~n"),
+            format("- HISTORY: the harness remembers. Query the harness_* facts (harness_change/5, harness_changed/4, harness_turn/5, harness_session/5, harness_session_end/2, harness_head/4, harness_trace/3) to see what happened in previous sessions; listing(history) shows a tail.~n"),
             format("- EVOLVE ONLY WHEN ASKED: create or change the harness only for an explicit create/change/run request. On a fresh workspace create what the user asked for; afterwards change only what the request requires, reuse existing skills instead of duplicating them, and never refactor or extend the harness on your own initiative.~n~n"),
             format("AUTHORING CONTRACT~n"),
             format("- Emit only valid DML. There is no Markdown->DML compiler; the code you return is loaded directly.~n"),
-            format("- Reserve the repl_* and meta_* namespaces. Never define repl_entry or repl_delete as logic; repl_entry(Goal) declares the default entry.~n"),
+            format("- Reserve the repl_* and meta_* namespaces. Never define repl_delete as logic; repl_delete(Name/Arity) deletes a predicate.~n"),
             format("- For every predicate you change, return its COMPLETE definition. The commit replaces by predicate, so partial definitions lose clauses.~n"),
             format("- Define facts with head. and rules with 'head :- body.'.~n"),
             format("- Use task(Desc, ...Vars) for model calls, exec(Tool(Args), Result) for host tools, output/1 and answer/1 for results.~n"),
@@ -1690,7 +1665,7 @@ repl_meta_prompt(SessionId, Request, Prompt) :-
             format("- Conversation memory: system(Text) sets persistent context and user(Text) adds a user turn; both survive across task/2..4 in the same frame. Use prompt/1..4 for a fresh context.~n"),
             format("- Semantic judgments (not generative): judge(State, [choose(...) - X, rate(...) - R, verify(...) - V, probability(...) - P]) or the one-off choose/4, rate/4, verify/3, probability/3, holds/2,3. They never read or write memory. Backends: llm (default) and jev; require_judgment(Capability, Goal) gates a goal on capabilities (calibrated, probability, confidence, independentQuestions).~n"),
             format("- SELF-CONTAINMENT: the harness is the .dml PLUS the files it links. Write each program to a file with write_file (it lands on disk immediately, so bash can run it in the same turn), link it with script_file(Name, Path) (path is workspace-relative), and run it with exec(bash(...)). export bundles the linked files into a .zip, so they travel with the harness.~n"),
-            format("- Naming: there is no agent_main requirement. Name predicates descriptively and declare entries with repl_entry/1. To delete a predicate, emit repl_delete(Name/Arity) as a directive fact.~n"),
+            format("- Naming: there is no agent_main requirement in the REPL. Name predicates descriptively. To delete a predicate, emit repl_delete(Name/Arity) as a directive fact.~n"),
             format("- READ FIRST: call the listing tool before writing so you build on the current harness.~n"),
             format("- You have workspace file tools (read_file, write_file, list_files, delete_file) and the bash host tool. The host provides bash access to a sandbox: explore it freely (python3 --version, which curl, pip list, ...) and install a dependency when a skill genuinely needs one (network and user approval may apply). Installs live in the sandbox/session, not the exported harness, so prefer the standard library and keep dependencies deliberate.~n"),
             format("- CLAUSE ORDER MATTERS: a predicate's clauses are tried in order, so a base case must come before a recursive rule. Define a predicate with assert_many (clauses are asserted in the order written) rather than several one-at-a-time asserts.~n"),
@@ -1707,8 +1682,8 @@ repl_meta_prompt(SessionId, Request, Prompt) :-
             format("OUTPUT CONTRACT~n"),
             format("Return the complete DML definitions for every predicate this turn touches.~n"),
             format("Set the DMLCode output variable to the DML source (optionally wrapped in a fenced dml block).~n"),
-            format("Set the EntryGoal output variable to the goal to run after committing (for example weekly_report), or leave it empty for a definitions-only commit.~n"),
-            format("Set every requested output variable before calling finish: for a direct question set DMLCode to the empty string and Answer to your reply; otherwise set DMLCode (and optionally EntryGoal) and set Answer to the empty string.~n")
+            format("Use the execute tool to run and verify a goal during the turn; the commit only changes the module.~n"),
+            format("Set every requested output variable before calling finish: for a direct question set DMLCode to the empty string and Answer to your reply; otherwise set DMLCode and set Answer to the empty string.~n")
         )).
 
 repl_meta_prompt(Request, Prompt) :-
@@ -1733,16 +1708,15 @@ repl_meta_solve(PromptText, SessionId, State) :-
     nb_setval(current_session_id, SessionId),
     catch(
         (   mi_call(
-                task_named(PromptText, [DMLCode, EntryGoal, Answer],
+                task_named(PromptText, [DMLCode, Answer],
                     [typed_var{name:'DMLCode', type:string},
-                     typed_var{name:'EntryGoal', type:string},
                      typed_var{name:'Answer', type:string}]),
                 State, _StateOut),
             % The task's own memory (incl. the assembled prompt and tool results)
             % is ephemeral. The host records a clean user/assistant pair with
             % repl_record_meta/3 after the turn; that becomes the next turn's
             % conversation history (a normal messages array).
-            engine_yield(meta_result(DMLCode, EntryGoal, Answer))
+            engine_yield(meta_result(DMLCode, Answer))
         ),
         MetaError,
         (   format(atom(Msg), '~w', [MetaError]),
@@ -1874,27 +1848,27 @@ repl_collect_source_predicates(Stream, SessionId, Preds) :-
         repl_collect_source_predicates(Stream, SessionId, Rest)
     ).
 
-%% repl_commit(+SessionId, +Source, +EntryGoalText, -Result)
+%% repl_commit(+SessionId, +Source, -Result)
 %% Transactional commit: validate, replace-by-predicate, then load the returned
 %% source. Result = ok | 'error(Message)'. Never throws; failures are reported
 %% through Result so the caller can decide whether to repair.
-repl_commit(SessionId, Source, EntryGoalText, Result) :-
+repl_commit(SessionId, Source, Result) :-
     catch(
-        repl_commit_unsafe(SessionId, Source, EntryGoalText, Result),
+        repl_commit_unsafe(SessionId, Source, Result),
         CommitError,
         format(atom(Result), 'error(~w)', [CommitError])
     ).
 
-repl_commit_unsafe(SessionId, Source, EntryGoalText, Result) :-
+repl_commit_unsafe(SessionId, Source, Result) :-
     guard_not_frozen(SessionId),
     repl_parse_source(SessionId, Source, Preds, ParseError),
-    repl_commit_from_parse(SessionId, Source, Preds, EntryGoalText, ParseError, Result).
+    repl_commit_from_parse(SessionId, Source, Preds, ParseError, Result).
 
-repl_commit_from_parse(_SessionId, _Source, _Preds, _EntryGoalText, ParseError, Result) :-
+repl_commit_from_parse(_SessionId, _Source, _Preds, ParseError, Result) :-
     ParseError \== none,
     !,
     commit_error(ParseError, Result).
-repl_commit_from_parse(SessionId, Source, Preds, EntryGoalText, none, Result) :-
+repl_commit_from_parse(SessionId, Source, Preds, none, Result) :-
     forall(member(Name/Arity, Preds),
         catch(abolish(SessionId:Name/Arity), _, true)),
     load_code(SessionId, Source, LoadError),
@@ -1903,7 +1877,7 @@ repl_commit_from_parse(SessionId, Source, Preds, EntryGoalText, none, Result) :-
         assertz(session_last_commit(SessionId, Preds))
     ;   true
     ),
-    repl_commit_from_load(SessionId, EntryGoalText, LoadError, Result).
+    repl_commit_from_load(LoadError, Result).
 
 %% repl_last_commit_summary(+SessionId, -Text)
 %% Rendered "name/arity, name/arity" of the predicates the last commit replaced.
@@ -1921,64 +1895,14 @@ print_pred_list([Name/Arity|Rest]) :-
     format("~w/~w, ", [Name, Arity]),
     print_pred_list(Rest).
 
-repl_commit_from_load(_SessionId, _EntryGoalText, LoadError, Result) :-
+repl_commit_from_load(LoadError, Result) :-
     LoadError \== none,
     !,
     commit_error(LoadError, Result).
-repl_commit_from_load(SessionId, EntryGoalText, none, Result) :-
-    (   EntryGoalText \== "", EntryGoalText \== none
-    ->  (   catch(read_repl_goal(SessionId, EntryGoalText, Goal, _), _, fail)
-        ->  retractall(session_repl_entry(SessionId, _)),
-            assertz(session_repl_entry(SessionId, Goal)),
-            Result = ok
-        ;   Result = 'error(invalid EntryGoal)'
-        )
-    ;   repl_entry_goal(SessionId, EntryGoal),
-        retractall(session_repl_entry(SessionId, _)),
-        assertz(session_repl_entry(SessionId, EntryGoal)),
-        Result = ok
-    ).
+repl_commit_from_load(none, ok).
 
 commit_error(Message, Result) :-
     format(atom(Result), 'error(~w)', [Message]).
-
-%% repl_start_entry(+SessionId, -HasEntry, -Error)
-%% Creates an object frame for the resolved entry goal (if any).
-repl_start_entry(SessionId, HasEntry, Error) :-
-    catch(
-        (   (   session_repl_entry(SessionId, Goal),
-                Goal \== none,
-                Goal \== ''
-            ->  repl_initial_state(SessionId, object, State),
-                create_frame_raw(SessionId, object, 0,
-                    deepclause_mi:repl_entry_solve(Goal, SessionId, State),
-                    FrameId),
-                retractall(session_default_frame(SessionId, _)),
-                assertz(session_default_frame(SessionId, FrameId)),
-                session_frame_engine(FrameId, Engine),
-                retractall(session_engine(SessionId, _)),
-                assertz(session_engine(SessionId, Engine)),
-                HasEntry = true
-            ;   HasEntry = false
-            ),
-            Error = none
-        ),
-        StartError,
-        format(atom(Error), '~w', [StartError])
-    ).
-
-%% repl_entry_solve(+Goal, +SessionId, +State)
-%% Runs the committed entry and persists harness memory (the entry run is the
-%% only place harness memory advances). answer/1 commits and stops.
-repl_entry_solve(Goal, SessionId, State) :-
-    nb_setval(current_session_id, SessionId),
-    catch(
-        (   mi_call(Goal, State, StateOut),
-            store_memory_for_state(SessionId, StateOut)
-        ),
-        '$answer_commit',
-        true
-    ).
 
 %% repl_execute_frame(+SessionId, +GoalText, -FrameId, -Error)
 %% Creates a child frame for the meta `execute` tool.
@@ -2076,10 +2000,10 @@ process_engine_result(tool_result(Result), tool_result, '',
 %% Goal-mode solution: bindings is a list of Name-RenderedText pairs.
 process_engine_result(solution(Bindings, Deterministic), solution, '',
     payload{bindings: Bindings, deterministic: Deterministic}) :- !.
-%% Prompt-mode meta task result: generated DML source, entry goal, and an
-%% optional direct answer for simple questions.
-process_engine_result(meta_result(Code, Entry, Answer), meta_result, '',
-    payload{code: Code, entry: Entry, answer: Answer}) :- !.
+%% Prompt-mode meta task result: generated DML source and an optional direct
+%% answer for simple questions.
+process_engine_result(meta_result(Code, Answer), meta_result, '',
+    payload{code: Code, answer: Answer}) :- !.
 process_engine_result(wait_input(Prompt), wait_input, Prompt, none) :- !.
 process_engine_result(error(Msg), error, Msg, none) :- !.
 process_engine_result(Other, error, Msg, none) :-
@@ -3417,7 +3341,7 @@ mi_call(false, _StateIn, _StateOut) :-
 %% (draft/4, claim/3, ...) are asserted/retracted in the right module.
 %% repl_reserved_clause(+Term)
 %% True when Term defines a reserved predicate. directives and the legitimate
-%% repl_delete/repl_entry harness forms are exempt.
+%% repl_delete harness form are exempt.
 repl_reserved_clause((:- _)) :-
     !,
     fail.

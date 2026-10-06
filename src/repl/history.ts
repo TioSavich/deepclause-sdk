@@ -47,7 +47,6 @@ export interface HistoryTurnRecord {
   request: string;
   outcome: 'committed' | 'answered' | 'failed' | 'aborted' | 'query';
   commitVersion?: number;
-  entry?: string;
   durationMs: number;
   modelCalls: number;
   error?: string;
@@ -63,7 +62,6 @@ export interface HistoryChangeRecord {
   kind: 'commit' | 'load' | 'reset';
   sessionId: string;
   turn: number;
-  entry?: string;
   changed: HistoryChangedPredicate[];
   scripts: Array<{ path: string; sha256: string }>;
   module: string;
@@ -221,10 +219,9 @@ export class HistoryStore {
       .update('\n')
       .update(JSON.stringify(record.scripts))
       .digest('hex');
-    const entryAtom = record.entry ? prologAtom(record.entry) : 'none';
     const facts = [
       `harness_change(${version}, ${prologAtom(ts)}, ${prologAtom(record.kind)}, `
-        + `${prologAtom(record.sessionId)}, ${record.turn}, ${entryAtom}).`,
+        + `${prologAtom(record.sessionId)}, ${record.turn}).`,
       ...record.changed.map((change) => {
         const [name, arity] = splitPredicate(change.predicate);
         return `harness_changed(${version}, ${prologAtom(name)}, ${arity}, ${prologAtom(change.action)}).`;
@@ -238,7 +235,6 @@ export class HistoryStore {
       sessionId: record.sessionId,
       turn: record.turn,
       kind: record.kind,
-      entry: record.entry ?? null,
       hash,
       changed: record.changed,
       scripts: record.scripts,
@@ -252,7 +248,6 @@ export class HistoryStore {
         kind: record.kind,
         sessionId: record.sessionId,
         turn: record.turn,
-        entry: record.entry ?? null,
         hash,
         changed: record.changed,
         scripts: record.scripts,

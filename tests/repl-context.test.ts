@@ -41,12 +41,17 @@ class CannedBackend implements LLMBackend {
   }
 }
 
-function finalResponse(code: string, entry = ''): CannedResponse {
+function finalResponse(code: string, run?: string): CannedResponse {
   return {
     text: 'Here is the harness.',
     toolCalls: [
+      ...(run
+        ? [
+            { name: 'assert_many', arguments: { clauses: code } },
+            { name: 'execute', arguments: { goal: run } },
+          ]
+        : []),
       { name: 'set_result', arguments: { variable: 'DMLCode', value: code } },
-      { name: 'set_result', arguments: { variable: 'EntryGoal', value: entry } },
       { name: 'set_result', arguments: { variable: 'Answer', value: '' } },
       { name: 'finish', arguments: { success: true } },
     ],
@@ -112,7 +117,7 @@ describe('two-level memory', () => {
   it('keeps harness memory out of the meta task and meta memory out of the harness', async () => {
     backend = new CannedBackend((request, index) => {
       if (index === 0) {
-        return finalResponse('repl_entry(demo).\ndemo :- output("ok").', 'demo');
+        return finalResponse('demo :- output("ok").', 'demo');
       }
       return taskResponse('harness answer', request);
     });
@@ -133,14 +138,13 @@ describe('two-level memory', () => {
     expect(harnessMessages).not.toContain('You are the DeepClause REPL harness author');
   });
 
-  it('discards execute memory writes but advances harness memory on the entry run', async () => {
+  it('discards execute and commit memory writes (nothing runs the harness)', async () => {
     backend = new CannedBackend([{
       text: '',
       toolCalls: [
         { name: 'execute', arguments: { goal: 'system("scratch-note")' } },
-        { name: 'set_result', arguments: { variable: 'DMLCode', value: 'repl_entry(demo).\ndemo :- system("entry-note"), output("done").' } },
-        { name: 'set_result', arguments: { variable: 'EntryGoal', value: 'demo' } },
-      { name: 'set_result', arguments: { variable: 'Answer', value: '' } },
+        { name: 'set_result', arguments: { variable: 'DMLCode', value: 'demo :- system("entry-note"), output("done").' } },
+        { name: 'set_result', arguments: { variable: 'Answer', value: '' } },
         { name: 'finish', arguments: { success: true } },
       ],
     }]);
@@ -149,7 +153,8 @@ describe('two-level memory', () => {
 
     await collect(repl.prompt('write a note'));
 
-    expect(hasSolution(await collect(repl.query('has_note("entry-note")')))).toBe(true);
+    // Neither the scratch run nor the commit advances harness memory now.
+    expect(hasSolution(await collect(repl.query('has_note("entry-note")')))).toBe(false);
     expect(hasSolution(await collect(repl.query('has_note("scratch-note")')))).toBe(false);
   });
 });
@@ -163,7 +168,6 @@ describe('execute recursion', () => {
           toolCalls: [
             { name: 'execute', arguments: { goal: 'task("nested ask", R), output(R)' } },
             { name: 'set_result', arguments: { variable: 'DMLCode', value: 'kept(1).' } },
-            { name: 'set_result', arguments: { variable: 'EntryGoal', value: '' } },
       { name: 'set_result', arguments: { variable: 'Answer', value: '' } },
             { name: 'finish', arguments: { success: true } },
           ],
@@ -185,7 +189,6 @@ describe('execute recursion', () => {
       toolCalls: [
         { name: 'execute', arguments: { goal: 'call(repl_freeze)' } },
         { name: 'set_result', arguments: { variable: 'DMLCode', value: 'kept(1).' } },
-        { name: 'set_result', arguments: { variable: 'EntryGoal', value: '' } },
       { name: 'set_result', arguments: { variable: 'Answer', value: '' } },
         { name: 'finish', arguments: { success: true } },
       ],
@@ -205,7 +208,6 @@ describe('execute recursion', () => {
         { name: 'execute', arguments: { goal: 'output("one")' } },
         { name: 'execute', arguments: { goal: 'output("two")' } },
         { name: 'set_result', arguments: { variable: 'DMLCode', value: 'kept(1).' } },
-        { name: 'set_result', arguments: { variable: 'EntryGoal', value: '' } },
       { name: 'set_result', arguments: { variable: 'Answer', value: '' } },
         { name: 'finish', arguments: { success: true } },
       ],

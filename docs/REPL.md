@@ -60,7 +60,7 @@ A small set of whole-line commands is matched before the classifier:
 
 A harness is a **living library of reusable DML skills** for the workspace, not
 a single program. A skill is a predicate; the ones a user should call are
-declared as entry points with `repl_entry/1`. Skills compose:
+named descriptively and run with the meta task's `execute` tool or `goal:`. Skills compose:
 
 - **helper predicates** (plain Prolog/CLP),
 - **semantic judgments** (`choose`/`rate`/`verify`/`probability`),
@@ -106,9 +106,9 @@ dml> add a rule that computes factorial and a tool that formats integers
 
 meta │ Let me list the harness first.
 meta │   ⚙ listing(filter=all)
-meta │ I'll commit fact/2 and repl_entry/1.
-committed … and ran the declared entry
+meta │ I'll test it with execute, then commit fact/2.
 120
+committed fact/2, demo/0
 ```
 
 A prompt is an **edit transaction**:
@@ -155,7 +155,7 @@ The code-writing meta task is restricted to `listing`, `assert`, `assert_many`,
 `ask_user`, plus the capability host tools (**`bash`** by default). The meta
 prompt embeds the full bundled `DML_REFERENCE.md`, a curated set of **idiomatic
 harness patterns** (a `tool/2` wrapping `exec(bash(...))` + a `task(...)` chain
-+ `repl_entry/1`; a script file linked with `script_file/2`; a
++ a script file linked with `script_file/2`; a
 `task → task → output/answer` pipeline), the live host tool catalog, and the
 current harness manifest. It also states the catalog pairing rule explicitly:
 **only the `exec(...)` names in the catalog exist — by default just `bash`** —
@@ -202,20 +202,19 @@ dml> listing.
 ### Entry points
 
 There is **no `agent_main` requirement** in the REPL. Name predicates
-descriptively and declare the default entry with `repl_entry/1`:
+descriptively and run any of them directly with `goal: <name>(…)`:
 
 ```prolog
-repl_entry(weekly_report).
 weekly_report :-
     gather_data(Rows),
     summarize(Rows, Summary),
     answer(Summary).
 ```
 
-The meta task may also return an `EntryGoal`. Users can always call any
-predicate directly with `goal: <name>(…)`. `export --skill` adds a thin
-`agent_main/0` wrapper when you need to run the same file with
-`deepclause run` / `/dc-run`.
+Running is the meta task's job: while authoring a turn it calls the `execute`
+tool to run and verify a goal; a commit only changes the module (nothing is
+auto-run). If the same file should also run with `deepclause run` / `/dc-run`,
+define `agent_main` in the harness.
 
 ### Self-containment and bundles
 
@@ -547,7 +546,6 @@ mkdir -p .dc-repl/scripts
 printf 'the script file ran\n' > .dc-repl/scripts/writer.sh
 cat > seed.dml <<'DML'
 script_file(writer, ".dc-repl/scripts/writer.sh").
-repl_entry(run_writer).
 run_writer :-
     script_file(writer, Script),
     format(atom(Cmd), "sh '~w'", [Script]),

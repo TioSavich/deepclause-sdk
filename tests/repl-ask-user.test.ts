@@ -42,12 +42,11 @@ class CannedBackend implements LLMBackend {
   }
 }
 
-function finalResponse(code: string, entry = ''): CannedResponse {
+function finalResponse(code: string): CannedResponse {
   return {
     text: 'Here is the harness.',
     toolCalls: [
       { name: 'set_result', arguments: { variable: 'DMLCode', value: code } },
-      { name: 'set_result', arguments: { variable: 'EntryGoal', value: entry } },
       { name: 'set_result', arguments: { variable: 'Answer', value: '' } },
       { name: 'finish', arguments: { success: true } },
     ],
@@ -173,7 +172,6 @@ describe('harness input/2', () => {
       toolCalls: [
         { name: 'execute', arguments: { goal: 'input("Nested question?", A), output(A)' } },
         { name: 'set_result', arguments: { variable: 'DMLCode', value: 'kept(1).' } },
-        { name: 'set_result', arguments: { variable: 'EntryGoal', value: '' } },
       { name: 'set_result', arguments: { variable: 'Answer', value: '' } },
         { name: 'finish', arguments: { success: true } },
       ],

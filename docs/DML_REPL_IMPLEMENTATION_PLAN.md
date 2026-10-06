@@ -572,6 +572,14 @@ Numbered as in proposal §20.
   `tests/repl-prompt.test.ts`. The `:- use_module(library(clpfd)).` directive
   must be top-level (inline `use_module` in a body is not run at read time).
 
+* **#33 — `repl_entry/1` / `EntryGoal` removed.** *Fixed.* Running after a
+  commit is now the meta task's job via the `execute` tool; the REPL no longer
+  auto-runs an entry. Removed `repl_entry/1`, the `EntryGoal` output, the
+  post-commit entry run, and the `export --skill` `agent_main` wrapper (define
+  `agent_main` in the harness when a skill should run under `deepclause run`).
+  History's `harness_change` dropped its entry slot (`/6` -> `/5`). REPL tests
+  updated to drive runs through `execute`.
+
 * **Scratch-assert duplicate clauses.** `assert`/`assert_many` append, so the
   scratch module accumulates duplicate clauses during a long debugging turn.
   This is display/backtracking noise only (the commit is replace-by-predicate),

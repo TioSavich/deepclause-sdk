@@ -23,7 +23,6 @@ import type {
 } from '../types.js';
 import { buildParamsTerm, plainValue, quotePrologString } from './frames.js';
 import {
-  applySkillWrapper,
   buildHarnessHeader,
   type HarnessExportOptions,
   type HarnessExportResult,
@@ -209,14 +208,14 @@ export class DMLSession {
     try {
       if (target.toLowerCase().endsWith('.zip')) {
         const result = await this.loadBundle(target);
-        if (!result.error) await this.recordHistoryChange('load', this.turnCounter, before, file);
+        if (!result.error) await this.recordHistoryChange('load', this.turnCounter, before);
         return result;
       }
       const code = await fs.readFile(target, 'utf8');
       const result = await this.loadCode(code);
       if (!result.error) {
         this.prologQuery(`deepclause_mi:repl_materialize_embedded('${this.sessionId}')`);
-        await this.recordHistoryChange('load', this.turnCounter, before, file);
+        await this.recordHistoryChange('load', this.turnCounter, before);
       }
       return result;
     } catch (error) {
@@ -335,7 +334,6 @@ export class DMLSession {
     kind: 'commit' | 'load' | 'reset',
     turn: number,
     before: string[],
-    entry: string,
   ): Promise<number | undefined> {
     if (!this.history) return undefined;
     try {
@@ -349,7 +347,6 @@ export class DMLSession {
         kind,
         sessionId: this.sessionId,
         turn,
-        entry: entry || undefined,
         changed,
         scripts: await this.scriptHashes(),
         module: this.moduleSource(),
@@ -556,7 +553,7 @@ export class DMLSession {
     const before = this.predicateList();
     this.prologQuery(`deepclause_mi:clear_session('${this.sessionId}')`);
     this.runner.clearFrames();
-    await this.recordHistoryChange('reset', this.turnCounter, before, '');
+    await this.recordHistoryChange('reset', this.turnCounter, before);
   }
 
   /**
@@ -629,10 +626,7 @@ export class DMLSession {
     const result = this.prologQuery(
       `deepclause_mi:export_harness('${this.sessionId}', ${quoteString(header)}, Text)`
     );
-    let moduleText = String(plainValue(result?.Text) ?? '');
-    if (options.skill) {
-      moduleText = applySkillWrapper(moduleText);
-    }
+    const moduleText = String(plainValue(result?.Text) ?? '');
 
     const target = path.resolve(
       this.workspacePath ?? process.cwd(),
@@ -785,7 +779,6 @@ export class DMLSession {
     const historyStart = Date.now();
     const historyBefore = this.predicateList();
     let historyOutcome: HistoryTurnRecord['outcome'] = 'failed';
-    let historyEntry = '';
     let historyVersion: number | undefined;
 
     yield { type: 'task_activity', taskState: 'started', taskDescription: request };
@@ -859,7 +852,6 @@ export class DMLSession {
         });
 
         let code = '';
-        let entry = '';
         let answer = '';
         let metaFailed: string | undefined;
         this.frameDepth = 1;
@@ -867,7 +859,6 @@ export class DMLSession {
           for await (const event of this.runner.runFrame(metaFrame.id, { ...runOptions, metaTools })) {
             if (event.type === 'meta_result') {
               code = event.metaResult?.code ?? '';
-              entry = event.metaResult?.entry ?? '';
               answer = event.metaResult?.answer ?? '';
             } else if (event.type === 'error') {
               // Only the meta frame's own errors abort the turn. An error from
@@ -948,7 +939,7 @@ export class DMLSession {
         );
         const source = String(plainValue(extract?.Source) ?? code);
         const commit = this.prologQuery(
-          `deepclause_mi:repl_commit('${this.sessionId}', ${quoteString(source)}, ${quoteString(entry)}, Result)`
+          `deepclause_mi:repl_commit('${this.sessionId}', ${quoteString(source)}, Result)`
         );
         const result = plainValue(commit?.Result);
         if (result !== 'ok') {
@@ -957,43 +948,12 @@ export class DMLSession {
           continue;
         }
         succeeded = true;
-        historyEntry = entry;
         historyOutcome = 'committed';
-        historyVersion = await this.recordHistoryChange('commit', historyTurn, historyBefore, entry);
+        historyVersion = await this.recordHistoryChange('commit', historyTurn, historyBefore);
 
-        // 6. Run the declared entry (EntryGoal or repl_entry/1), if any.
-        const start = this.prologQuery(
-          `deepclause_mi:repl_start_entry('${this.sessionId}', HasEntry, Error)`
-        );
-        const startError = plainValue(start?.Error);
-        if (startError !== 'none') {
-          yield { type: 'error', content: String(startError) };
-          continue;
-        }
-        const hasEntry = String(plainValue(start?.HasEntry)) === 'true';
-
+        // 6. Summarize the commit. Running is the meta task's job (via execute).
         const committed = this.lastCommitPredicates();
-        let summary = committed ? `committed ${committed}` : 'committed (no predicates)';
-        if (hasEntry) {
-          const entryFrame = this.runner.registerDefaultFrame('object');
-          if (entryFrame) {
-            this.frameDepth = 1;
-            try {
-              for await (const event of this.runner.runFrame(entryFrame.id, runOptions)) {
-                this.recordHistoryEvent(historyTurn, event);
-                yield event;
-              }
-            } catch (error) {
-              yield { type: 'error', content: error instanceof Error ? error.message : String(error) };
-            } finally {
-              this.runner.endFrame(entryFrame.id);
-              this.frameDepth = 0;
-            }
-          }
-          summary += ' and ran the declared entry';
-        } else {
-          summary += ' (definitions only)';
-        }
+        const summary = committed ? `committed ${committed}` : 'committed (no predicates)';
 
         // 7. Record the prompt + outcome in bounded meta memory.
         this.prologQuery(
@@ -1018,7 +978,6 @@ export class DMLSession {
       request,
       outcome: historyOutcome,
       commitVersion: historyVersion,
-      entry: historyEntry || undefined,
       durationMs: Date.now() - historyStart,
       modelCalls: this.modelCallsThisTurn,
       error: succeeded ? undefined : lastError,

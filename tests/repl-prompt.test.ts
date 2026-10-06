@@ -46,12 +46,17 @@ class CannedBackend implements LLMBackend {
   }
 }
 
-function finalResponse(code: string, entry = ''): CannedResponse {
+function finalResponse(code: string, run?: string): CannedResponse {
   return {
     text: 'Here is the harness.',
     toolCalls: [
+      ...(run
+        ? [
+            { name: 'assert_many', arguments: { clauses: code } },
+            { name: 'execute', arguments: { goal: run } },
+          ]
+        : []),
       { name: 'set_result', arguments: { variable: 'DMLCode', value: code } },
-      { name: 'set_result', arguments: { variable: 'EntryGoal', value: entry } },
       { name: 'set_result', arguments: { variable: 'Answer', value: '' } },
       { name: 'finish', arguments: { success: true } },
     ],
@@ -109,7 +114,6 @@ afterEach(async () => {
 const FACTORIAL = [
   'fact(0, 1).',
   'fact(N, F) :- N > 0, N1 is N - 1, fact(N1, F1), F is N * F1.',
-  'repl_entry(demo).',
   'demo :- fact(5, F), output(F).',
 ].join('\n');
 
@@ -153,7 +157,7 @@ describe('prompt mode', () => {
 
     const listing = await repl.list('all');
     expect(listing).not.toContain('agent_main');
-    expect(listing).toContain('repl_entry(demo)');
+    expect(listing).toContain('demo/0');
   });
 
   it('includes the bundled DML reference and guard rails in the meta prompt', async () => {
@@ -175,7 +179,7 @@ describe('prompt mode', () => {
     expect(promptText).toContain('TESTS');
     expect(promptText).toContain('bash access to a sandbox');
     expect(promptText).toContain('HISTORY: the harness remembers');
-    expect(promptText).toContain('harness_change/6');
+    expect(promptText).toContain('harness_change/5');
     expect(promptText).toContain('EVOLVE ONLY WHEN ASKED');
   });
 
@@ -224,7 +228,6 @@ describe('prompt mode', () => {
         // immediate (it used to be invisible until commit).
         { name: 'execute', arguments: { goal: 'read_file("scripts/hello.txt", C), output(C)' } },
         { name: 'set_result', arguments: { variable: 'DMLCode', value: 'kept(1).' } },
-        { name: 'set_result', arguments: { variable: 'EntryGoal', value: '' } },
         { name: 'set_result', arguments: { variable: 'Answer', value: '' } },
         { name: 'finish', arguments: { success: true } },
       ],
@@ -243,7 +246,6 @@ describe('prompt mode', () => {
       toolCalls: [
         { name: 'write_file', arguments: { path: '../escape.txt', content: 'nope' } },
         { name: 'set_result', arguments: { variable: 'DMLCode', value: 'kept(1).' } },
-        { name: 'set_result', arguments: { variable: 'EntryGoal', value: '' } },
         { name: 'set_result', arguments: { variable: 'Answer', value: '' } },
         { name: 'finish', arguments: { success: true } },
       ],
@@ -259,13 +261,12 @@ describe('prompt mode', () => {
   });
 
   it('extracts and commits a fenced dml block', async () => {
-    const fenced = ['```dml', 'repl_entry(demo).', 'demo :- output("fenced-ok").', '```'].join('\n');
-    backend = new CannedBackend([finalResponse(fenced, 'demo')]);
+    const fenced = ['```dml', 'demo :- output("fenced-ok").', '```'].join('\n');
+    backend = new CannedBackend([finalResponse(fenced)]);
     repl = await openRepl();
 
     const events = await collect(repl.prompt('add a fenced block'));
     expect(events.some((event) => event.type === 'error')).toBe(false);
-    expect(events.some((event) => event.type === 'output' && event.content === 'fenced-ok')).toBe(true);
     const listing = await repl.list('all');
     expect(listing).toContain('demo/0');
     expect(listing).not.toContain('```');
@@ -307,7 +308,6 @@ describe('prompt mode', () => {
           { name: 'assert_many', arguments: { clauses: 'foo :- task("hi", X), output(X).\n' } },
           { name: 'execute', arguments: { goal: 'foo' } },
           { name: 'set_result', arguments: { variable: 'DMLCode', value: 'kept(1).' } },
-          { name: 'set_result', arguments: { variable: 'EntryGoal', value: '' } },
           { name: 'set_result', arguments: { variable: 'Answer', value: '' } },
           { name: 'finish', arguments: { success: true } },
         ],
@@ -345,7 +345,6 @@ describe('prompt mode', () => {
         { name: 'assert_many', arguments: { clauses: 'a(1).\nb(2).\nc(3) :- true.\n' } },
         { name: 'execute', arguments: { goal: 'a(X), b(Y), c(Z)' } },
         { name: 'set_result', arguments: { variable: 'DMLCode', value: 'kept(1).' } },
-        { name: 'set_result', arguments: { variable: 'EntryGoal', value: '' } },
         { name: 'set_result', arguments: { variable: 'Answer', value: '' } },
         { name: 'finish', arguments: { success: true } },
       ],
@@ -367,7 +366,6 @@ describe('prompt mode', () => {
       toolCalls: [
         { name: 'execute', arguments: { goal: 'no_such_predicate(1)' } },
         { name: 'set_result', arguments: { variable: 'DMLCode', value: 'kept(1).' } },
-        { name: 'set_result', arguments: { variable: 'EntryGoal', value: '' } },
         { name: 'set_result', arguments: { variable: 'Answer', value: '' } },
         { name: 'finish', arguments: { success: true } },
       ],
@@ -392,7 +390,6 @@ describe('prompt mode', () => {
         },
         { name: 'execute', arguments: { goal: 'fact(5, F)' } },
         { name: 'set_result', arguments: { variable: 'DMLCode', value: 'kept(1).' } },
-        { name: 'set_result', arguments: { variable: 'EntryGoal', value: '' } },
         { name: 'set_result', arguments: { variable: 'Answer', value: '' } },
         { name: 'finish', arguments: { success: true } },
       ],
@@ -414,7 +411,6 @@ describe('prompt mode', () => {
       text: 'Answering directly.',
       toolCalls: [
         { name: 'set_result', arguments: { variable: 'DMLCode', value: '' } },
-        { name: 'set_result', arguments: { variable: 'EntryGoal', value: '' } },
         { name: 'set_result', arguments: { variable: 'Answer', value: 'We added a factorial rule.' } },
         { name: 'finish', arguments: { success: true } },
       ],
@@ -527,7 +523,6 @@ describe('prompt mode', () => {
         { name: 'assert', arguments: { clause: 'scratch(1).' } },
         { name: 'execute', arguments: { goal: 'scratch(X)' } },
         { name: 'set_result', arguments: { variable: 'DMLCode', value: 'kept(1).' } },
-        { name: 'set_result', arguments: { variable: 'EntryGoal', value: '' } },
       { name: 'set_result', arguments: { variable: 'Answer', value: '' } },
         { name: 'finish', arguments: { success: true } },
       ],
@@ -553,7 +548,6 @@ describe('prompt mode', () => {
           { name: 'execute', arguments: { goal: 'foo(X)' } },
           { name: 'execute', arguments: { goal: 'bar(1)' } },
           { name: 'set_result', arguments: { variable: 'DMLCode', value: 'kept(1).' } },
-          { name: 'set_result', arguments: { variable: 'EntryGoal', value: '' } },
           { name: 'set_result', arguments: { variable: 'Answer', value: '' } },
           { name: 'finish', arguments: { success: true } },
         ],

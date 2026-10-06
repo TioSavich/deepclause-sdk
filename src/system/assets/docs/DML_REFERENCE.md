@@ -755,10 +755,11 @@ DML skills can also be grown interactively in a persistent **living module**.
 
 - `goal: <dml>.` runs a goal and enumerates its solutions.
 - Plain English builds the harness: a meta task writes DML that is committed
-  replace-by-predicate and then run.
-- Declare entry points with `repl_entry/1`. There is **no implicit `agent_main`
-  requirement** in the REPL; `export --skill` adds a thin `agent_main/0`
-  wrapper when a file must also run with `deepclause run` / `/dc-run`.
+  replace-by-predicate (nothing is auto-run; the meta task uses the `execute`
+  tool when it needs to run something during the turn).
+- There is **no implicit `agent_main` requirement** in the REPL. Run any
+  predicate with `goal: <name>(…)`. Define `agent_main` in the harness when it
+  should also run with `deepclause run` / `/dc-run`.
 - `freeze.` makes the harness read-only; `export <file>.` serializes it.
   `export harness.zip` bundles the module with its linked script files;
   `export harness.dml` inlines them into one portable file.

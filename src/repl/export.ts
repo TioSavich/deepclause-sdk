@@ -9,7 +9,7 @@
 export interface HarnessExportOptions {
   /** Override the header comment line (used by deterministic tests). */
   header?: string;
-  /** Emit a thin agent_main/N wrapper over the default repl_entry/1. */
+  /** Mark the export as a skill (header only). Define `agent_main` in the harness for `run`. */
   skill?: boolean;
   /** Output path; defaults to `harness.dml` in the workspace. */
   path?: string;
@@ -33,24 +33,6 @@ export function buildHarnessHeader(info: {
   if (info.backend) parts.push(`backend: ${info.backend}`);
   if (info.model) parts.push(`model: ${info.model}`);
   return parts.join(' ');
-}
-
-/**
- * `export --skill` appends a thin agent_main/0 wrapper around the default
- * repl_entry/1 so the same file can be run with `deepclause run` / `/dc-run`,
- * which require the agent_main convention.
- */
-export const SKILL_WRAPPER = [
-  '',
-  '%% --skill wrapper: run the default entry point as a DeepClause skill',
-  'agent_main :-',
-  '    repl_entry(Goal),',
-  '    call(Goal).',
-  '',
-].join('\n');
-
-export function applySkillWrapper(text: string): string {
-  return text.endsWith('\n') ? `${text}${SKILL_WRAPPER}` : `${text}\n${SKILL_WRAPPER}`;
 }
 
 /** Strip the informational header line, e.g. for byte-stability comparisons. */

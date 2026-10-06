@@ -5,8 +5,8 @@ Idiomatic shapes for a REPL harness. Keep harnesses small and concrete.
 ## 0. What a harness is
 
 A harness is a **living library of reusable DML skills** for the workspace —
-not a single program. A skill is a predicate; the ones a user should call are
-declared as entry points with `repl_entry/1`. Skills are built from:
+not a single program. A skill is a predicate; name them descriptively and run
+them with `execute` (during a turn) or `goal:`. Skills are built from:
 
 - **helper predicates** (plain Prolog/CLP),
 - **semantic judgments** (`choose`/`rate`/`verify`/`probability`),
@@ -54,7 +54,6 @@ tool(count_words(File, Count), "Count words in a workspace file.") :-
     exec(bash(command: Cmd), Result),
     get_dict(stdout, Result, Count).
 
-repl_entry(report).
 report :-
     task("Suggest a short sentence to count. Store it in Sentence.", Sentence),
     write_file(".dc-tmp/sentence.txt", Sentence),
@@ -85,7 +84,6 @@ never interpolated into the shell command string.
 Sequence model calls and symbolic steps; use `task/2` for each reasoning step.
 
 ```prolog
-repl_entry(report).
 report :-
     task("List three risks of using an LLM for arithmetic. Store them in Risks.", Risks),
     format(string(Desc), "Rank these risks by severity and explain the top one: ~w", [Risks]),
@@ -106,5 +104,5 @@ report :-
   `which jq`) and install a dependency when a skill genuinely needs one;
   installs are sandbox/session-local and do not travel with an exported harness,
   so prefer the standard library.
-- Declare entries with `repl_entry/1`. Do **not** use `agent_main` unless the
-  user asks for a `deepclause run` / `/dc-run` skill.
+- Do **not** use `agent_main` unless the user asks for a `deepclause run` /
+  `/dc-run` skill.

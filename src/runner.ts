@@ -510,7 +510,6 @@ export class DMLRunner {
             type: 'meta_result',
             metaResult: {
               code: String(toJsValue(payload.code) ?? ''),
-              entry: String(toJsValue(payload.entry) ?? ''),
               answer: String(toJsValue(payload.answer) ?? ''),
             },
           };

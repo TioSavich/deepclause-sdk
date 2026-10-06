@@ -81,7 +81,6 @@ describe('export and reload', () => {
   it('is byte-stable across export -> load -> export (header normalized)', async () => {
     await repl.session.loadCode([
       ':- use_module(library(clpfd)).',
-      'repl_entry(demo).',
       'greet(Name, Out) :- format(string(Out), "hi ~w", [Name]).',
       'tool(greet_tool(Name, Out), "Greet someone") :- greet(Name, Out).',
       'demo :- greet("world", X), output(X).',
@@ -112,9 +111,8 @@ describe('export and reload', () => {
     }
   });
 
-  it('runs the default entry identically after export -> load', async () => {
+  it('runs the predicate identically after export -> load', async () => {
     await repl.session.loadCode([
-      'repl_entry(demo).',
       'demo :- fact(5, F), output(F).',
       'fact(0, 1).',
       'fact(N, F) :- N > 0, N1 is N - 1, fact(N1, F1), F is N * F1.',
@@ -144,7 +142,6 @@ describe('export and reload', () => {
     await repl.session.loadCode([
       'script_file(writer, ".dc-repl/scripts/writer.txt").',
       'read_writer(Out) :- script_file(writer, Path), read_file(Path, Out).',
-      'repl_entry(read_writer).',
       'read_writer :- read_writer(Out), output(Out).',
       '',
     ].join('\n'));
@@ -175,7 +172,6 @@ describe('export and reload', () => {
     await repl.session.loadCode([
       'script_file(note, "note.txt").',
       'read_note(Out) :- script_file(note, Path), read_file(Path, Out).',
-      'repl_entry(read_note).',
       'read_note :- read_note(Out), output(Out).',
       '',
     ].join('\n'));
@@ -199,12 +195,12 @@ describe('export and reload', () => {
     }
   });
 
-  it('emits an agent_main wrapper with export --skill', async () => {
-    await repl.session.loadCode('repl_entry(demo).\ndemo :- output("ok").\n');
-    const exported = await repl.export('skill.dml', { header: 'h', skill: true });
+  it('export --skill marks the header and adds no wrapper (agent_main is authored)', async () => {
+    await repl.session.loadCode('agent_main :- output("ok").\n');
+    const exported = await repl.export('skill.dml', { skill: true });
     const text = await fs.readFile(exported.path, 'utf8');
+    expect(text).toContain('backend: skill');
     expect(text).toContain('agent_main :-');
-    expect(text).toContain('repl_entry(Goal)');
   });
 
   it('removes a predicate via the repl_delete/1 directive', async () => {

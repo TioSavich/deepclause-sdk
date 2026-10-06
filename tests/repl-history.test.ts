@@ -35,12 +35,11 @@ class CannedBackend implements LLMBackend {
   }
 }
 
-function commitResponse(code: string, entry = ''): CannedResponse {
+function commitResponse(code: string): CannedResponse {
   return {
     text: '',
     toolCalls: [
       { name: 'set_result', arguments: { variable: 'DMLCode', value: code } },
-      { name: 'set_result', arguments: { variable: 'EntryGoal', value: entry } },
       { name: 'set_result', arguments: { variable: 'Answer', value: '' } },
       { name: 'finish', arguments: { success: true } },
     ],
@@ -76,7 +75,7 @@ afterEach(async () => {
 
 describe('harness history', () => {
   it('records sessions, turns, traces, and versions on disk', async () => {
-    const backend = new CannedBackend([commitResponse('repl_entry(demo).\ndemo :- output(hi).', 'demo')]);
+    const backend = new CannedBackend([commitResponse('demo :- output(hi).')]);
     repl = await createHarnessRepl({
       workspacePath: workspace,
       model: 'test-model',
@@ -103,7 +102,7 @@ describe('harness history', () => {
 
     const sessionDir = path.join(workspace, '.deepclause/repl/sessions', sessionId);
     expect(await fs.readFile(path.join(sessionDir, 'turns.jsonl'), 'utf8')).toContain('"outcome":"committed"');
-    expect(await fs.readFile(path.join(sessionDir, 'events.jsonl'), 'utf8')).toContain('"type":"output"');
+    expect(await fs.readFile(path.join(sessionDir, 'events.jsonl'), 'utf8')).toContain('"type":"tool_call"');
 
     const head = JSON.parse(await fs.readFile(path.join(workspace, '.deepclause/repl/harness/HEAD.json'), 'utf8'));
     expect(head.version).toBe(1);
@@ -111,7 +110,7 @@ describe('harness history', () => {
   });
 
   it('loads prior history into a new session so DML can query it', async () => {
-    const first = new CannedBackend([commitResponse('repl_entry(demo).\ndemo :- output(hi).', 'demo')]);
+    const first = new CannedBackend([commitResponse('demo :- output(hi).')]);
     repl = await createHarnessRepl({
       workspacePath: workspace,
       model: 'test-model',
@@ -134,8 +133,8 @@ describe('harness history', () => {
       history: HISTORY,
     });
 
-    const changes = await collect(repl.query('harness_change(V, Ts, K, S, T, E), output(V-K-E)'));
-    expect(outputs(changes)).toContain('1-commit-demo');
+    const changes = await collect(repl.query('harness_change(V, Ts, K, S, T), output(V-K)'));
+    expect(outputs(changes)).toContain('1-commit');
 
     const sessions = await collect(repl.query('harness_session(S, Started, Model, Backend, Dir)'));
     expect(sessions.filter((event) => event.type === 'solution')).toHaveLength(2);
@@ -145,10 +144,33 @@ describe('harness history', () => {
     expect(listing).not.toContain('harness_');
   });
 
+  it('migrates pre-/5 history (old harness_change/6) on load', async () => {
+    const dir = path.join(workspace, '.deepclause/repl');
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(
+      path.join(dir, 'history.dml'),
+      "harness_change(1, '2026-01-01T00:00:00Z', commit, 'sess_old', 1, demo).\n"
+        + "harness_head(1, '2026-01-01T00:00:00Z', 'sess_old', 1).\n",
+    );
+
+    repl = await createHarnessRepl({
+      workspacePath: workspace,
+      model: 'm',
+      provider: 'openai',
+      llmBackend: new CannedBackend([{ text: '' }]),
+      tools: new Map(),
+      history: HISTORY,
+    });
+
+    const changes = await collect(repl.query('harness_change(V, Ts, K, S, T), output(V-K)'));
+    expect(outputs(changes)).toContain('1-commit');
+    expect(await repl.list('history')).toContain('harness_change(1');
+  });
+
   it('rolls back the last harness transaction, step by step', async () => {
     const backend = new CannedBackend([
-      commitResponse('repl_entry(demo).\ndemo :- output(one).', 'demo'),
-      commitResponse('repl_entry(demo).\ndemo :- output(two).', 'demo'),
+      commitResponse('demo :- output(one).'),
+      commitResponse('demo :- output(two).'),
     ]);
     repl = await createHarnessRepl({
       workspacePath: workspace,
@@ -161,7 +183,9 @@ describe('harness history', () => {
     });
 
     await collect(repl.prompt('first version'));
-    expect(outputs(await collect(repl.prompt('second version')))).toContain('two');
+    const second = await collect(repl.prompt('second version'));
+    expect(second.some((event) => event.type === 'error')).toBe(false);
+    expect(outputs(await collect(repl.query('demo')))).toContain('two');
 
     // Undo the second commit -> back to version 1.
     expect(await repl.rollback()).toEqual({ ok: true, from: 2, to: 1 });
