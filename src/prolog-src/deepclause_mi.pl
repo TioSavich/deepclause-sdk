@@ -20,6 +20,12 @@
     create_engine/6,
     step_engine/4,
     destroy_engine/1,
+    % Frame predicates (M0: reentrant, frame-aware execution)
+    create_frame/6,
+    step_frame/4,
+    end_frame/1,
+    frame_info/4,
+    default_frame/2,
     post_agent_result/4,
     post_exec_result/3,
     post_sample_token_result/3,
@@ -42,7 +48,10 @@
 :- discontiguous var_to_name/3.
 
 %% Dynamic predicates for session state (engine management only, not memory!)
-:- dynamic session_engine/2.       % session_engine(SessionId, Engine)
+:- dynamic session_engine/2.       % session_engine(SessionId, Engine) - legacy default engine handle
+:- dynamic session_frame/4.        % session_frame(FrameId, SessionId, Kind, Depth)
+:- dynamic session_frame_engine/2. % session_frame_engine(FrameId, Engine)
+:- dynamic session_default_frame/2. % session_default_frame(SessionId, FrameId)
 :- dynamic session_params/2.       % session_params(SessionId, ParamsDict)
 :- dynamic session_user_tools/2.   % session_user_tools(SessionId, ToolName)
 :- dynamic session_user_tool_schema/3. % session_user_tool_schema(SessionId, ToolName, Schema)
@@ -473,6 +482,9 @@ process_directive(_, _).
 %% create_engine(+SessionId, +MemoryId, +Args, +Params, +InitialMemory, -Engine)
 %% Args is a list of positional arguments for agent_main
 %% Params is a dict of named parameters (already asserted as param/2 facts)
+%%
+%% The engine is registered as the session's default `query` frame so that
+%% step_engine/4 keeps working as a thin wrapper over step_frame/4.
 create_engine(SessionId, _MemoryId, Args, Params, InitialMemory, Engine) :-
     assertz(session_params(SessionId, Params)),
     determine_agent_goal(SessionId, Args, Goal),
@@ -484,11 +496,98 @@ create_engine(SessionId, _MemoryId, Args, Params, InitialMemory, Engine) :-
     (get_dict(gas_limit, Params, GasLimit) -> true ; GasLimit = -1),
     % Create initial state with provided memory, params, context stack, trace depth and gas
     InitialState = state{memory: InitialMemory, params: Params, context_stack: [], depth: 0, gas_remaining: GasLimit},
-    % Create the engine - pass SessionId and initial state to mi/3
-    engine_create(_, 
+    create_frame(SessionId, query, 0, Goal, InitialState, FrameId),
+    retractall(session_default_frame(SessionId, _)),
+    assertz(session_default_frame(SessionId, FrameId)),
+    session_frame_engine(FrameId, Engine),
+    retractall(session_engine(SessionId, _)),
+    assertz(session_engine(SessionId, Engine)).
+
+%% ============================================================
+%% Frames (re-entrant execution)
+%% ============================================================
+%%
+%% Historically a session owned exactly one engine (session_engine/2).
+%% Prompt mode requires nested engines: a meta frame that calls `execute`
+%% which runs a child frame, which may itself call task() and spawn a
+%% further frame. A frame is therefore (FrameId, SessionId, Kind, Depth)
+%% with its engine stored in session_frame_engine/2.
+%%
+%% The legacy step_engine/4 resolves the session's default query frame and
+%% delegates to step_frame/4, so single-engine callers are unaffected.
+
+default_frame(SessionId, FrameId) :-
+    session_default_frame(SessionId, FrameId).
+
+%% frame_info(+FrameId, -SessionId, -Kind, -Depth)
+frame_info(FrameId, SessionId, Kind, Depth) :-
+    session_frame(FrameId, SessionId, Kind, Depth).
+
+%% create_frame(+SessionId, +Kind, +Depth, +Goal, +InitialState, -FrameId)
+%% Kind = query | meta | nested | object
+%% Creates an engine running deepclause_mi:mi(Goal, InitialState, SessionId)
+%% and registers it as a frame. The caller is responsible for depth-first
+%% stepping: a parent frame is suspended while a child frame runs, so the
+%% per-session result/signal slots are never concurrently pending.
+create_frame(SessionId, Kind, Depth, Goal, InitialState, FrameId) :-
+    gensym(frame_, FrameId),
+    engine_create(_,
         deepclause_mi:mi(Goal, InitialState, SessionId),
         Engine),
-    assertz(session_engine(SessionId, Engine)).
+    assertz(session_frame(FrameId, SessionId, Kind, Depth)),
+    assertz(session_frame_engine(FrameId, Engine)).
+
+%% step_frame(+FrameId, -Status, -Content, -Payload)
+step_frame(FrameId, Status, Content, Payload) :-
+    (   session_frame(FrameId, SessionId, _Kind, _Depth),
+        session_frame_engine(FrameId, Engine)
+    ->  step_engine_handle(SessionId, Engine, Status, Content, Payload)
+    ;   Status = error,
+        Content = 'No engine found for frame',
+        Payload = none
+    ).
+
+%% step_engine_handle(+SessionId, +Engine, -Status, -Content, -Payload)
+%% Shared stepping logic for both step_frame/4 and the legacy step_engine/4.
+step_engine_handle(SessionId, Engine, Status, Content, Payload) :-
+    catch(
+        (   engine_next(Engine, Result)
+        ->  process_engine_result(Result, Status, Content, Payload)
+        ;   % Engine finished - return trace if enabled
+            Status = finished,
+            Content = '',
+            (   session_trace_enabled(SessionId, true),
+                session_trace_log(SessionId, TraceLog)
+            ->  Payload = payload{trace: TraceLog}
+            ;   Payload = none
+            )
+        ),
+        Error,
+        (   format(atom(ErrMsg), 'Engine error: ~w', [Error]),
+            Status = error,
+            Content = ErrMsg,
+            (   session_trace_enabled(SessionId, true),
+                session_trace_log(SessionId, TraceLog)
+            ->  Payload = payload{trace: TraceLog}
+            ;   Payload = none
+            )
+        )
+    ).
+
+%% end_frame(+FrameId)
+%% Destroys the frame's engine and unregisters the frame. Also clears the
+%% session's default-frame pointer if this frame was the default.
+end_frame(FrameId) :-
+    (   session_frame_engine(FrameId, Engine)
+    ->  catch(engine_destroy(Engine), _, true)
+    ;   true
+    ),
+    (   session_frame(FrameId, SessionId, _, _)
+    ->  retractall(session_default_frame(SessionId, FrameId))
+    ;   true
+    ),
+    retractall(session_frame_engine(FrameId, _)),
+    retractall(session_frame(FrameId, _, _, _)).
 
 %% determine_agent_goal(+SessionId, +Args, -Goal)
 %% Args is a list of positional arguments - passed directly to agent_main
@@ -529,31 +628,12 @@ determine_agent_goal(SessionId, Args, Goal) :-
 determine_agent_goal(SessionId, _Args, SessionId:agent_main).
 
 %% step_engine(+SessionId, -Status, -Content, -Payload)
+%% Legacy single-engine entry point: resolves the session's default frame and
+%% delegates to step_frame/4. Kept as a thin wrapper so existing callers are
+%% unaffected by the frame refactor.
 step_engine(SessionId, Status, Content, Payload) :-
-    (   session_engine(SessionId, Engine)
-    ->  catch(
-            (   engine_next(Engine, Result)
-            ->  process_engine_result(Result, Status, Content, Payload)
-            ;   % Engine finished - return trace if enabled
-                Status = finished,
-                Content = '',
-                (   session_trace_enabled(SessionId, true),
-                    session_trace_log(SessionId, TraceLog)
-                ->  Payload = payload{trace: TraceLog}
-                ;   Payload = none
-                )
-            ),
-            Error,
-            (   format(atom(ErrMsg), 'Engine error: ~w', [Error]),
-                Status = error,
-                Content = ErrMsg,
-                (   session_trace_enabled(SessionId, true),
-                    session_trace_log(SessionId, TraceLog)
-                ->  Payload = payload{trace: TraceLog}
-                ;   Payload = none
-                )
-            )
-        )
+    (   session_default_frame(SessionId, FrameId)
+    ->  step_frame(FrameId, Status, Content, Payload)
     ;   Status = error,
         Content = 'No engine found for session',
         Payload = none
@@ -589,10 +669,17 @@ process_engine_result(Other, error, Msg, none) :-
 
 %% destroy_engine(+SessionId)
 destroy_engine(SessionId) :-
+    % Destroy every frame belonging to this session (the default query frame and
+    % any nested frames still alive). end_frame/1 also clears the default pointer.
+    (   findall(FrameId, session_frame(FrameId, SessionId, _, _), FrameIds)
+    ->  forall(member(FrameId, FrameIds), end_frame(FrameId))
+    ;   true
+    ),
     (   session_engine(SessionId, Engine)
     ->  catch(engine_destroy(Engine), _, true)
     ;   true
     ),
+    retractall(session_default_frame(SessionId, _)),
     retractall(session_engine(SessionId, _)),
     retractall(session_params(SessionId, _)),
     retractall(session_user_tools(SessionId, _)),

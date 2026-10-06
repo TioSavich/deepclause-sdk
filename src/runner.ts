@@ -8,6 +8,7 @@ import type { SWIPLModule } from './prolog/loader.js';
 import type {
   CompactionOptions,
   DMLEvent,
+  FrameKind,
   MemoryMessage,
   LLMBackend,
   ToolDefinition,
@@ -240,6 +241,21 @@ function prologTypeToJsonType(prologType: string): string {
 }
 
 /**
+ * A frame in the runner's reentrant execution stack.
+ *
+ * Frames are strictly depth-first: a parent frame is suspended at an
+ * `engine_yield` while a child frame runs to completion, so the per-session
+ * result/signal slots (`session_agent_result/2`, `session_pending_signal/2`, …)
+ * are never concurrently pending. This is what makes keying those slots by
+ * `SessionId` (rather than `FrameId`) safe.
+ */
+export interface Frame {
+  id: string;
+  kind: FrameKind;
+  depth: number;
+}
+
+/**
  * DML execution engine
  * 
  * ARCHITECTURE NOTE: 
@@ -250,11 +266,18 @@ function prologTypeToJsonType(prologType: string): string {
 export class DMLRunner {
   private swipl: SWIPLModule;
   private options: RunnerOptions;
-  private engine: unknown = null;
   private sessionId: string = '';
   private currentMemory: MemoryMessage[] = [];
   private stepCounter = 0;
   private judgeCache = new Map<string, JudgeAnswer[]>();
+  /**
+   * Runner-owned frame table: FrameId -> { frame, engine }.
+   * The Prolog session owns the authoritative engine handles
+   * (session_frame_engine/2); this map mirrors them for the driver.
+   */
+  private frames = new Map<string, { frame: Frame; engine: unknown }>();
+  /** FrameId of the session's default query frame (created by createEngine). */
+  private defaultFrameId: string | null = null;
 
   constructor(swipl: SWIPLModule, options: RunnerOptions) {
     this.swipl = swipl;
@@ -306,114 +329,20 @@ export class DMLRunner {
         return;
       }
 
-      // Create cooperative engine with args
+      // Create cooperative engine with args (registers the default query frame)
       const engineResult = this.createEngine(memoryId, args, params);
       if (engineResult.error) {
         yield { type: 'error', content: engineResult.error };
         return;
       }
 
-      // Cooperative execution loop
-      while (true) {
-        // Check for abort
-        if (options.signal?.aborted) {
-          const reason = options.signal.reason;
-          const abortMessage = reason instanceof Error
-            ? reason.message
-            : typeof reason === 'string' && reason.trim().length > 0
-              ? reason
-              : 'Execution aborted';
-          yield { type: 'error', content: abortMessage };
-          break;
-        }
-
-        // Step the engine
-        const step = this.stepEngine();
-
-        if (process.env.DEBUG_STEPS) {
-          console.log('[MAIN_LOOP] step:', step.status, step.content?.substring(0, 50));
-        }
-
-        switch (step.status) {
-          case 'output':
-            if (step.content) {
-              if (process.env.DEBUG_STEPS) {
-                console.log('[MAIN_LOOP] yielding output:', step.content.substring(0, 50));
-              }
-              yield { type: 'output', content: step.content };
-            }
-            break;
-
-          case 'log':
-            if (step.content) {
-              yield { type: 'log', content: step.content };
-            }
-            break;
-
-          case 'answer':
-            yield { type: 'answer', content: step.content };
-            break;
-
-          case 'request_agent_loop':
-            // Run agent loop for task() predicate
-            yield* this.handleAgentLoop(
-              step.payload,
-              memoryId,
-              options
-            );
-            break;
-
-          case 'request_exec':
-            // Execute external tool
-            yield* this.handleExec(
-              step.payload,
-              options
-            );
-            break;
-
-          case 'request_sample_token':
-            yield* this.handleSampleToken(step.payload, options);
-            break;
-
-          case 'request_llm':
-            yield* this.handleLlm(step.payload, options);
-            break;
-
-          case 'request_judgment':
-            yield* this.handleJudgment(step.payload, options);
-            break;
-
-          case 'wait_input':
-            // Request user input
-            yield { type: 'input_required', prompt: step.prompt };
-            const input = await options.onInputRequired(step.prompt ?? '');
-            this.provideInput(input);
-            break;
-
-          case 'finished':
-            // Include trace data if trace mode was enabled
-            if (this.options.trace && step.payload) {
-              const traceData = toJsValue((step.payload as Record<string, unknown>).trace);
-              yield { type: 'finished', trace: Array.isArray(traceData) ? traceData : undefined } as DMLEvent;
-            } else {
-              yield { type: 'finished' };
-            }
-            return;
-
-          case 'error':
-            if (this.options.trace && step.payload) {
-              const traceData = toJsValue((step.payload as Record<string, unknown>).trace);
-              yield { type: 'error', content: step.content, trace: Array.isArray(traceData) ? traceData : undefined } as DMLEvent;
-            } else {
-              yield { type: 'error', content: step.content };
-            }
-            return;
-
-          default:
-            yield { type: 'error', content: `Unknown step status: ${step.status}` };
-            return;
-        }
+      const frame = this.defaultFrameId ? this.frames.get(this.defaultFrameId)?.frame : undefined;
+      if (!frame) {
+        yield { type: 'error', content: 'Failed to register default query frame' };
+        return;
       }
+
+      yield* this.stepLoop(frame, options);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       yield { type: 'error', content: message };
@@ -421,6 +350,136 @@ export class DMLRunner {
       // Cleanup
       this.cleanup();
     }
+  }
+
+  /**
+   * Drive a single frame until it finishes or errors, yielding its events.
+   *
+   * This is the extracted, reentrant form of the original `while(true)` loop.
+   * `run()` calls it for the default query frame; `runFrame` calls it for
+   * nested frames. Because frames are read from the Prolog frame table via
+   * `step_frame/4`, stepping a different frame never disturbs a suspended
+   * parent's engine.
+   */
+  private async *stepLoop(frame: Frame, options: InternalRunOptions): AsyncGenerator<DMLEvent> {
+    // Cooperative execution loop
+    while (true) {
+      // Check for abort
+      if (options.signal?.aborted) {
+        const reason = options.signal.reason;
+        const abortMessage = reason instanceof Error
+          ? reason.message
+          : typeof reason === 'string' && reason.trim().length > 0
+            ? reason
+            : 'Execution aborted';
+        yield { type: 'error', content: abortMessage };
+        break;
+      }
+
+      // Step the frame
+      const step = this.stepFrame(frame.id);
+
+      if (process.env.DEBUG_STEPS) {
+        console.log('[MAIN_LOOP] step:', step.status, step.content?.substring(0, 50));
+      }
+
+      switch (step.status) {
+        case 'output':
+          if (step.content) {
+            if (process.env.DEBUG_STEPS) {
+              console.log('[MAIN_LOOP] yielding output:', step.content.substring(0, 50));
+            }
+            yield { type: 'output', content: step.content };
+          }
+          break;
+
+        case 'log':
+          if (step.content) {
+            yield { type: 'log', content: step.content };
+          }
+          break;
+
+        case 'answer':
+          yield { type: 'answer', content: step.content };
+          break;
+
+        case 'request_agent_loop':
+          // Run agent loop for task() predicate
+          yield* this.handleAgentLoop(
+            step.payload,
+            '',
+            options
+          );
+          break;
+
+        case 'request_exec':
+          // Execute external tool
+          yield* this.handleExec(
+            step.payload,
+            options
+          );
+          break;
+
+        case 'request_sample_token':
+          yield* this.handleSampleToken(step.payload, options);
+          break;
+
+        case 'request_llm':
+          yield* this.handleLlm(step.payload, options);
+          break;
+
+        case 'request_judgment':
+          yield* this.handleJudgment(step.payload, options);
+          break;
+
+        case 'wait_input':
+          // Request user input
+          yield { type: 'input_required', prompt: step.prompt };
+          const input = await options.onInputRequired(step.prompt ?? '');
+          this.provideInput(input);
+          break;
+
+        case 'finished':
+          // Include trace data if trace mode was enabled
+          if (this.options.trace && step.payload) {
+            const traceData = toJsValue((step.payload as Record<string, unknown>).trace);
+            yield { type: 'finished', trace: Array.isArray(traceData) ? traceData : undefined } as DMLEvent;
+          } else {
+            yield { type: 'finished' };
+          }
+          return;
+
+        case 'error':
+          if (this.options.trace && step.payload) {
+            const traceData = toJsValue((step.payload as Record<string, unknown>).trace);
+            yield { type: 'error', content: step.content, trace: Array.isArray(traceData) ? traceData : undefined } as DMLEvent;
+          } else {
+            yield { type: 'error', content: step.content };
+          }
+          return;
+
+        default:
+          yield { type: 'error', content: `Unknown step status: ${step.status}` };
+          return;
+      }
+    }
+  }
+
+  /**
+   * Run a specific frame to completion, yielding its events.
+   *
+   * This is the reentrant entry point used by nested execution (the REPL's
+   * `execute` meta tool): the caller builds a child frame with
+   * `createNestedFrame`, runs it with this method while the parent frame is
+   * suspended, then posts the result back to the parent.
+   */
+  async *runFrame(frameId: string, options: InternalRunOptions): AsyncGenerator<DMLEvent> {
+    const frame = this.frames.get(frameId)?.frame;
+    if (!frame) {
+      yield { type: 'error', content: `Unknown frame: ${frameId}` };
+      return;
+    }
+    yield* this.stepLoop(frame, options);
   }
 
   /**
@@ -524,16 +583,21 @@ export class DMLRunner {
   /**
    * Create cooperative execution engine
    */
-  private createEngine(memoryId: string, args: string, params: string): { error?: string } {
+  private createEngine(memoryId: string, args: string, params: string): { error?: string; frameId?: string } {
     try {
       const initialMemory = this.serializeMemoryMessages(this.currentMemory);
+      // create_engine/6 registers the default `query` frame; default_frame/2
+      // returns its FrameId so the runner can address it explicitly.
       const result = this.query(
-        `deepclause_mi:create_engine('${this.sessionId}', '${memoryId}', ${args}, ${params}, [${initialMemory}], Engine)`
+        `deepclause_mi:create_engine('${this.sessionId}', '${memoryId}', ${args}, ${params}, [${initialMemory}], Engine), deepclause_mi:default_frame('${this.sessionId}', FrameId)`
       );
 
-      if (result && result.Engine) {
-        this.engine = result.Engine;
-        return {};
+      if (result && result.Engine && result.FrameId) {
+        const frameId = String(toJsValue(result.FrameId));
+        const frame: Frame = { id: frameId, kind: 'query', depth: 0 };
+        this.frames.set(frameId, { frame, engine: result.Engine });
+        this.defaultFrameId = frameId;
+        return { frameId };
       }
 
       return { error: 'Failed to create engine' };
@@ -544,9 +608,67 @@ export class DMLRunner {
   }
 
   /**
-   * Step the cooperative engine
+   * Create a nested frame that runs a Prolog goal in this session.
+   *
+   * `goalTerm` is inserted verbatim into create_frame/6, so callers MUST pass
+   * a term built with the runner's `toPrologTerm` escaping or parsed from DML
+   * via `read_term` — never raw user text (foot gun #18). `stateTerm` is an
+   * optional Prolog `state{...}` term; the default is an empty state with no
+   * gas limit.
+   *
+   * Returns the registered frame, or null on failure. The caller is
+   * responsible for running (`runFrame`) and ending (`endFrame`) it.
    */
-  private stepEngine(): {
+  createNestedFrame(params: {
+    kind: FrameKind;
+    goalTerm: string;
+    depth?: number;
+    stateTerm?: string;
+  }): Frame | null {
+    const depth = params.depth ?? 1;
+    const stateTerm = params.stateTerm
+      ?? 'state{memory: [], params: params{}, context_stack: [], depth: 0}';
+    const result = this.query(
+      `deepclause_mi:create_frame('${this.sessionId}', ${params.kind}, ${depth}, ${params.goalTerm}, ${stateTerm}, FrameId)`
+    );
+    if (!result || !result.FrameId) {
+      return null;
+    }
+    const id = String(toJsValue(result.FrameId));
+    const frame: Frame = { id, kind: params.kind, depth };
+    this.frames.set(id, { frame, engine: null });
+    return frame;
+  }
+
+  /** End a frame, destroying its engine in the Prolog session. */
+  endFrame(frameId: string): void {
+    this.query(`deepclause_mi:end_frame('${frameId}')`);
+    this.frames.delete(frameId);
+    if (this.defaultFrameId === frameId) {
+      this.defaultFrameId = null;
+    }
+  }
+
+  /**
+   * Step a specific frame exactly once and return its raw step result.
+   * Used by the reentrant driver and nested-execution tests.
+   */
+  stepFrameOnce(frameId: string): {
+    status: string;
+    content?: string;
+    prompt?: string;
+    payload?: unknown;
+  } | null {
+    if (!this.frames.has(frameId)) {
+      return null;
+    }
+    return this.stepFrame(frameId);
+  }
+
+  /**
+   * Step the cooperative engine for a frame
+   */
+  private stepFrame(frameId: string): {
     status: string;
     content?: string;
     prompt?: string;
@@ -554,7 +676,7 @@ export class DMLRunner {
   } {
     try {
       const result = this.query(
-        `deepclause_mi:step_engine('${this.sessionId}', Status, Content, Payload)`
+        `deepclause_mi:step_frame('${frameId}', Status, Content, Payload)`
       );
 
       // Convert swipl-wasm values to plain JS
@@ -2186,13 +2308,16 @@ export class DMLRunner {
    * Cleanup resources
    */
   private cleanup(): void {
-    if (this.engine) {
+    if (this.frames.size > 0) {
       try {
+        // destroy_engine/1 ends every frame registered for the session and
+        // retracts the session's dynamic state.
         this.query(`deepclause_mi:destroy_engine('${this.sessionId}')`);
       } catch {
         // Ignore cleanup errors
       }
-      this.engine = null;
+      this.frames.clear();
+      this.defaultFrameId = null;
     }
   }
 
