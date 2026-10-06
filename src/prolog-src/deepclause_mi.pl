@@ -892,7 +892,11 @@ read_repl_goal(SessionId, Text, Goal, Names) :-
     % preprocess_loaded_term/3 here: its file-load term expansion flattens a
     % list goal such as ["file.dml"] into its elements.
     transform_task_calls(RawGoal, Names0, Transformed),
-    expand_interpolations(Transformed, Names0, Goal),
+    % Use the body expander (not expand_term_interp/3) so a `{Var}` string is
+    % hoisted into a goal *before* the goal that uses it. expand_term_interp
+    % embeds the interpolation term in the argument position instead, which is
+    % wrong for a raw goal such as verify(X, "Is {X} > 0?", V).
+    expand_body_interp(Transformed, Names0, Goal),
     Names = Names0.
 
 %% repl_solve(+Goal, +Names, +SessionId, +State)
@@ -4253,6 +4257,17 @@ expand_body_interp(Goal, Bindings, ExpandedGoal) :-
         rebuild_goal(Functor, StringArg, ExpandedRestArgs, ExpandedGoal)
     ).
 
+% Goals whose interpolated string is NOT the first argument (verify/3, judge/2,
+% choose/4, rate/4, probability/3, holds/2,3, and any user predicate): hoist the
+% interpolation into a preceding goal.
+expand_body_interp(Goal, Bindings, ExpandedGoal) :-
+    compound(Goal),
+    Goal =.. [Functor|Args],
+    expand_args_hoist(Args, Bindings, PreGoals, ExpandedArgs, true),
+    !,
+    Bare =.. [Functor|ExpandedArgs],
+    prepend_goals(PreGoals, Bare, ExpandedGoal).
+
 % Other goals - expand arguments
 expand_body_interp(Goal, Bindings, ExpandedGoal) :-
     compound(Goal), !,
@@ -4316,6 +4331,34 @@ expand_rest_args([], _, []).
 expand_rest_args([A|As], Bindings, [EA|EAs]) :-
     expand_body_interp(A, Bindings, EA),
     expand_rest_args(As, Bindings, EAs).
+
+%% expand_args_hoist(+Args, +Bindings, -PreGoals, -Args2, -Hoisted)
+%% Expand each argument; any interpolated string becomes a goal in PreGoals and
+%% its argument becomes the temp variable that goal binds.
+expand_args_hoist([], _, [], [], false).
+expand_args_hoist([Arg|Args], Bindings, PreGoals, [Expanded|EArgs], Hoisted) :-
+    expand_arg_hoist(Arg, Bindings, Pre, Expanded, ThisHoisted),
+    expand_args_hoist(Args, Bindings, Rest, EArgs, RestHoisted),
+    append(Pre, Rest, PreGoals),
+    (   ThisHoisted == true
+    ->  Hoisted = true
+    ;   Hoisted = RestHoisted
+    ).
+
+expand_arg_hoist(Arg, Bindings, [FormatGoal], TempVar, true) :-
+    (   string(Arg)
+    ;   atom(Arg)
+    ),
+    string_needs_interpolation(Arg),
+    !,
+    build_format_call(Arg, Bindings, TempVar, FormatGoal).
+expand_arg_hoist(Arg, _, [], Arg, false).
+
+%% prepend_goals(+PreGoals, +Goal, -Expanded)
+prepend_goals([], Goal, Goal) :- !.
+prepend_goals(Goals, Goal, Expanded) :-
+    list_to_conjunction(Goals, Conj),
+    Expanded = (Conj, Goal).
 
 %% flatten_conjunction(+A, +B, -Conj)
 %% Flatten nested conjunctions properly

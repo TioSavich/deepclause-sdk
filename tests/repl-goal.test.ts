@@ -65,6 +65,11 @@ describe('goal mode', () => {
     expect(solutionValues(events, 'F')).toEqual(['120']);
   });
 
+  it('interpolates {Var} inside a raw goal', async () => {
+    const events = await collect(repl.query('X = "hi", output("got {X}")'));
+    expect(events.filter((event) => event.type === 'output').map((event) => event.content)).toContain('got hi');
+  });
+
   it('reports undefined predicates as an error event instead of hanging', async () => {
     const events = await collect(repl.query('no_such_predicate(X)'));
     expect(events.some((event) => event.type === 'error')).toBe(true);

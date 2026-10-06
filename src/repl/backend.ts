@@ -65,11 +65,22 @@ export interface PiCompletionResult {
   errorMessage?: string;
 }
 
+export interface PiStreamEventLike {
+  type: string;
+  delta?: string;
+}
+
+export interface PiStreamLike extends AsyncIterable<PiStreamEventLike> {
+  result(): Promise<PiCompletionResult>;
+}
+
 export interface PiRegistryLike {
   getAvailable(): PiModelLike[];
   find?(provider: string, modelId: string): PiModelLike | undefined;
   hasConfiguredAuth(model: PiModelLike): boolean;
   complete(model: PiModelLike, context: PiCompletionRequest, options: unknown): Promise<PiCompletionResult>;
+  /** Streaming API; when present, `complete` forwards text/thinking deltas. */
+  streamSimple?(model: PiModelLike, context: PiCompletionRequest, options: unknown): PiStreamLike;
 }
 
 /** Resolve pi's agent dir, models.json, and auth.json paths. */
@@ -178,23 +189,42 @@ export function createPiAdapter(
         .map((message) => message.content)
         .join('\n\n');
 
-      const response = await registry.complete(
-        model,
-        {
-          systemPrompt: systemPrompt || undefined,
-          messages: toPiMessages(request.messages, model),
-          tools: request.tools?.map((tool) => ({
-            name: tool.name,
-            description: tool.description,
-            parameters: tool.parameters,
-          })),
-        },
-        {
-          signal: request.signal,
-          maxTokens: request.maxTokens ?? maxTokens,
-          cacheRetention: 'none',
-        },
-      );
+      const context: PiCompletionRequest = {
+        systemPrompt: systemPrompt || undefined,
+        messages: toPiMessages(request.messages, model),
+        tools: request.tools?.map((tool) => ({
+          name: tool.name,
+          description: tool.description,
+          parameters: tool.parameters,
+        })),
+      };
+      const options = {
+        signal: request.signal,
+        maxTokens: request.maxTokens ?? maxTokens,
+        cacheRetention: 'none',
+      };
+
+      let response: PiCompletionResult;
+      if (registry.streamSimple) {
+        // Stream text/thinking deltas as they arrive; the final message carries
+        // the full text, tool calls, and usage.
+        const stream = registry.streamSimple(model, context, options);
+        for await (const event of stream) {
+          if (event.type === 'text_delta') {
+            if (event.delta) request.onText?.(event.delta);
+          } else if (event.type === 'thinking_delta') {
+            if (event.delta) request.onReasoning?.(event.delta);
+          }
+        }
+        response = await stream.result();
+      } else {
+        response = await registry.complete(model, context, options);
+        const streamedText = response.content
+          .filter((content): content is { type: 'text'; text: string } => content.type === 'text')
+          .map((content) => content.text)
+          .join('');
+        if (streamedText) request.onText?.(streamedText);
+      }
 
       if (response.stopReason === 'error' || response.stopReason === 'aborted') {
         throw new Error(response.errorMessage || `pi model request ${response.stopReason}`);
@@ -204,7 +234,6 @@ export function createPiAdapter(
         .filter((content): content is { type: 'text'; text: string } => content.type === 'text')
         .map((content) => content.text)
         .join('');
-      if (text) request.onText?.(text);
 
       return {
         text,

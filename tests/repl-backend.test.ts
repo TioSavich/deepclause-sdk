@@ -110,6 +110,42 @@ describe('createPiAdapter', () => {
     expect((calls[0].options as { maxTokens: number }).maxTokens).toBe(128);
   });
 
+  it('streams text and thinking deltas when the registry exposes streamSimple', async () => {
+    const registry = stubRegistry({
+      streamSimple: () => {
+        const events = [
+          { type: 'text_delta', delta: 'hel' },
+          { type: 'text_delta', delta: 'lo' },
+          { type: 'thinking_delta', delta: 'think' },
+          { type: 'done' },
+        ];
+        return {
+          async *[Symbol.asyncIterator]() {
+            for (const event of events) yield event;
+          },
+          result: async () => ({
+            content: [{ type: 'text' as const, text: 'hello' }],
+            usage: { input: 1, output: 1, totalTokens: 2 },
+            stopReason: 'stop' as const,
+          }),
+        };
+      },
+    });
+    const { backend } = createPiAdapter(registry, MODEL);
+
+    const text: string[] = [];
+    const reasoning: string[] = [];
+    const response = await backend.complete({
+      messages: [{ role: 'user', content: 'hi' }],
+      onText: (chunk) => text.push(chunk),
+      onReasoning: (chunk) => reasoning.push(chunk),
+    });
+
+    expect(text).toEqual(['hel', 'lo']);
+    expect(reasoning).toEqual(['think']);
+    expect(response.text).toBe('hello');
+  });
+
   it('throws when pi has no configured auth for the model', () => {
     const registry = stubRegistry({ hasConfiguredAuth: () => false });
     expect(() => createPiAdapter(registry, MODEL)).toThrow(/configured authentication/);
