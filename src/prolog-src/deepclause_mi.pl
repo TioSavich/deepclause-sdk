@@ -63,6 +63,7 @@
     repl_history_load/2,
     repl_history_record/2,
     repl_history_summary/2,
+    repl_rollback/3,
     repl_user_predicates/2,
     repl_user_predicates_text/2,
     repl_set_meta_catalog/2,
@@ -720,6 +721,21 @@ create_session(SessionId, Params, HarnessMemory, MetaMemory) :-
     retractall(session_locked(SessionId, _)),
     assertz(session_locked(SessionId, false)).
 
+%% repl_abolish_user_predicates(+SessionId)
+%% Removes only the harness's own predicates; imported builtins are untouched.
+repl_abolish_user_predicates(SessionId) :-
+    (   current_module(SessionId)
+    ->  findall(Name/Arity,
+            (   current_predicate(SessionId:Name/Arity),
+                repl_user_predicate(SessionId, Name, Arity)
+            ),
+            UserPreds0),
+        sort(UserPreds0, UserPreds),
+        forall(member(Name/Arity, UserPreds),
+            catch(abolish(SessionId:Name/Arity), _, true))
+    ;   true
+    ).
+
 %% clear_session(+SessionId)
 %% Empties the living module, ends all frames, and resets memories. Session
 %% params (workspace/gas limit) are preserved so the REPL stays configured.
@@ -742,18 +758,7 @@ clear_session(SessionId) :-
     retractall(repl_snapshot(SessionId, _)),
     retractall(session_user_tools(SessionId, _)),
     retractall(session_user_tool_schema(SessionId, _, _)),
-    (   current_module(SessionId)
-    ->  % Retract only user predicates so imported builtins are never touched.
-        findall(Name/Arity,
-            (   current_predicate(SessionId:Name/Arity),
-                repl_user_predicate(SessionId, Name, Arity)
-            ),
-            UserPreds0),
-        sort(UserPreds0, UserPreds),
-        forall(member(Name/Arity, UserPreds),
-            catch(abolish(SessionId:Name/Arity), _, true))
-    ;   true
-    ).
+    repl_abolish_user_predicates(SessionId).
 
 %% destroy_session(+SessionId)
 %% Tears a REPL session down completely: clears the module/frames and removes
@@ -1561,8 +1566,43 @@ repl_history_assert_term(Term, SessionId) :-
         callable(Term),
         functor(Term, Name, _),
         history_predicate(Name)
-    ->  assertz(SessionId:Term)
+    ->  % harness_head is a singleton: keep the latest (rollback moves it back).
+        (   Name == harness_head
+        ->  retractall(SessionId:harness_head(_, _, _, _))
+        ;   true
+        ),
+        assertz(SessionId:Term)
     ;   true
+    ).
+
+%% repl_rollback(+SessionId, +Source, -Result)
+%% Restores the living module from a history version's serialized source:
+%% abolishes the user predicates and reloads the source (directives, tools and
+%% entries come from the source too). Refused when frozen. Runtime conversation
+%% memory is preserved.
+repl_rollback(SessionId, Source, Result) :-
+    catch(
+        (   guard_not_frozen(SessionId),
+            repl_abolish_user_predicates(SessionId),
+            retractall(session_directive(SessionId, _)),
+            retractall(session_user_tools(SessionId, _)),
+            retractall(session_user_tool_schema(SessionId, _, _)),
+            (   current_predicate(SessionId:tool_source/2)
+            ->  retractall(SessionId:tool_source(_, _))
+            ;   true
+            ),
+            retractall(session_repl_entry(SessionId, _)),
+            (   Source == ""
+            ->  Result = ok
+            ;   load_code(SessionId, Source, LoadError),
+                (   LoadError == none
+                ->  Result = ok
+                ;   format(atom(Result), 'error(~w)', [LoadError])
+                )
+            )
+        ),
+        RollbackError,
+        format(atom(Result), 'error(~w)', [RollbackError])
     ).
 
 %% repl_user_predicates(+SessionId, -Preds)

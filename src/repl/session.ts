@@ -345,7 +345,7 @@ export class DMLSession {
         after,
         kind === 'commit' ? this.touchedPredicates() : after,
       );
-      const { facts } = await this.history.recordChange({
+      const { facts, version } = await this.history.recordChange({
         kind,
         sessionId: this.sessionId,
         turn,
@@ -356,7 +356,7 @@ export class DMLSession {
         manifest: this.manifestText(),
       });
       this.assertHistoryFacts(facts);
-      return this.history.currentVersion;
+      return version;
     } catch (error) {
       this.warnHistory(error);
       return undefined;
@@ -557,6 +557,30 @@ export class DMLSession {
     this.prologQuery(`deepclause_mi:clear_session('${this.sessionId}')`);
     this.runner.clearFrames();
     await this.recordHistoryChange('reset', this.turnCounter, before, '');
+  }
+
+  /**
+   * Undo the most recent harness transaction by restoring the previous history
+   * version. No-op when there is nothing to undo; refused when frozen. The
+   * rollback itself is recorded as a change (harness_rollback/5).
+   */
+  async rollback(): Promise<{ ok: boolean; from?: number; to?: number; error?: string }> {
+    if (this.disposed) return { ok: false, error: 'Session has been disposed' };
+    if (!this.history) return { ok: false, error: 'history is not enabled; rollback is unavailable' };
+    if (this.isFrozen()) return { ok: false, error: 'harness is frozen; rollback is disabled' };
+    const plan = await this.history.prepareRollback();
+    if (!plan) return { ok: false, error: 'no harness changes to roll back' };
+    const result = this.prologQuery(
+      `deepclause_mi:repl_rollback('${this.sessionId}', ${quoteString(plan.module)}, Result)`
+    );
+    const outcome = plainValue(result?.Result);
+    if (outcome !== 'ok') {
+      return { ok: false, error: String(outcome ?? 'rollback failed') };
+    }
+    this.assertHistoryFacts(
+      await this.history.recordRollback(plan.from, plan.to, this.turnCounter, this.sessionId)
+    );
+    return { ok: true, from: plan.from, to: plan.to };
   }
 
   // ---- Freeze lock (M2) ----

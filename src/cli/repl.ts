@@ -56,6 +56,7 @@ export type ReplInput =
   | { kind: 'help' }
   | { kind: 'listing'; filter?: string }
   | { kind: 'reset' }
+  | { kind: 'rollback' }
   | { kind: 'export'; path?: string }
   | { kind: 'freeze' }
   | { kind: 'unfreeze' }
@@ -65,7 +66,7 @@ export type ReplInput =
   | { kind: 'goal'; goal: string }
   | { kind: 'prompt'; prompt: string };
 
-const OUT_OF_BAND = new Set(['halt', 'help', 'reset', 'freeze', 'unfreeze', 'trace', 'notrace', 'params']);
+const OUT_OF_BAND = new Set(['halt', 'help', 'reset', 'rollback', 'freeze', 'unfreeze', 'trace', 'notrace', 'params']);
 
 /**
  * Classify one REPL input line.
@@ -373,6 +374,15 @@ export async function dispatchReplInput(
       await repl.reset();
       print('harness reset');
       return true;
+    case 'rollback': {
+      const result = await repl.rollback();
+      if (result.ok) {
+        print(`rolled back harness: version ${result.from} → ${result.to}`);
+      } else {
+        print(`ERROR: ${result.error ?? 'rollback failed'}`);
+      }
+      return true;
+    }
     case 'export': {
       const target = input.path ?? options.exportPath ?? 'harness.dml';
       try {
@@ -430,6 +440,7 @@ function helpText(runtime: ReplRuntime): string {
     '  listing.            list the living module',
     '  listing(Name/Arity). list one predicate',
     '  reset.              empty the harness',
+    '  rollback.           undo the last harness change',
     '  export <file>.      write a self-contained harness',
     '  freeze. / unfreeze. read-only lock',
     '  params.             show session parameters',

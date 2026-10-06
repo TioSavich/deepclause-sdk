@@ -49,6 +49,7 @@ A small set of whole-line commands is matched before the classifier:
 | `help.` | help |
 | `listing.` / `listing(Name/Arity).` | list the living module |
 | `reset.` | empty the harness (refused when frozen) |
+| `rollback.` | undo the last harness change (requires history) |
 | `export <file>.` | write a self-contained `.dml` harness |
 | `freeze.` / `unfreeze.` | read-only lock |
 | `trace.` / `notrace.` | toggle verbose logging |
@@ -278,12 +279,17 @@ recent(N, Cs) :-
 ```
 
 `harness_session/5`, `harness_session_end/2`, `harness_turn/5`,
-`harness_change/6`, `harness_changed/4`, `harness_head/4`, and
-`harness_trace/3` are system-owned: queryable from DML, but never committed,
-exported, or listed as harness predicates (`listing(history)` shows a tail). A
-new session loads the persisted `history.dml` at startup. See
+`harness_change/6`, `harness_changed/4`, `harness_head/4`,
+`harness_rollback/5`, and `harness_trace/3` are system-owned: queryable from
+DML, but never committed, exported, or listed as harness predicates
+(`listing(history)` shows a tail). A new session loads the persisted
+`history.dml` at startup. See
 [`DML_REPL_SESSION_HISTORY.md`](./DML_REPL_SESSION_HISTORY.md). Set
 `repl.history.enabled: false` (or omit `history` when embedding) to disable it.
+
+`rollback.` restores the previous version (moving `harness_head` back one), so
+repeating it walks the harness history backwards; it is refused when frozen and
+reports `no harness changes to roll back` when there is nothing to undo.
 
 ## Export, freeze, and `-l`
 

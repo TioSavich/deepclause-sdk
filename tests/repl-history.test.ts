@@ -144,4 +144,44 @@ describe('harness history', () => {
     const listing = await repl.list('all');
     expect(listing).not.toContain('harness_');
   });
+
+  it('rolls back the last harness transaction, step by step', async () => {
+    const backend = new CannedBackend([
+      commitResponse('repl_entry(demo).\ndemo :- output(one).', 'demo'),
+      commitResponse('repl_entry(demo).\ndemo :- output(two).', 'demo'),
+    ]);
+    repl = await createHarnessRepl({
+      workspacePath: workspace,
+      model: 'test-model',
+      provider: 'openai',
+      streaming: true,
+      llmBackend: backend,
+      tools: new Map(),
+      history: HISTORY,
+    });
+
+    await collect(repl.prompt('first version'));
+    expect(outputs(await collect(repl.prompt('second version')))).toContain('two');
+
+    // Undo the second commit -> back to version 1.
+    expect(await repl.rollback()).toEqual({ ok: true, from: 2, to: 1 });
+    expect(outputs(await collect(repl.query('demo')))).toContain('one');
+
+    // Undo the first commit -> empty harness.
+    expect(await repl.rollback()).toEqual({ ok: true, from: 1, to: 0 });
+    expect((await collect(repl.query('demo'))).some((event) => event.type === 'error')).toBe(true);
+
+    // Nothing left to undo.
+    const nothing = await repl.rollback();
+    expect(nothing.ok).toBe(false);
+    expect(nothing.error).toMatch(/no harness changes/);
+
+    const history = await fs.readFile(path.join(workspace, '.deepclause/repl/history.dml'), 'utf8');
+    expect(history).toContain('harness_rollback(');
+    const head = JSON.parse(
+      await fs.readFile(path.join(workspace, '.deepclause/repl/harness/HEAD.json'), 'utf8'),
+    );
+    expect(head.version).toBe(0);
+    expect(head.maxVersion).toBe(2);
+  });
 });

@@ -67,6 +67,9 @@ harness_changed(Version, Name, Arity, Action).
 % Current version pointer (singleton) and the per-turn trace path.
 harness_head(Version, Timestamp, SessionId, Turn).
 harness_trace(SessionId, Turn, TracePath).
+
+% A rollback moved HEAD from FromVersion back to ToVersion.
+harness_rollback(FromVersion, ToVersion, Timestamp, SessionId, Turn).
 ```
 
 Sessions are split into `harness_session/5` + `harness_session_end/2` (rather
@@ -164,7 +167,22 @@ diffable.
   `harness_change/6` and `harness_session/5` from a `goal:`;
 * history facts are not listed as harness predicates.
 
-## 9. Follow-ups
+## 9. Rollback
+
+`rollback.` (also `repl.rollback()` / `session.rollback()`) undoes the last
+harness transaction: it reads `HEAD`'s `parentVersion`, restores that version's
+serialized module (or empties the module when there is no parent), and records
+the action as `harness_rollback/5` + a `harness_head` move. It is refused when
+the harness is frozen and reports `no harness changes to roll back` when HEAD is
+already 0.
+
+Version numbers stay monotonic: `HEAD.json` tracks both `version` (where HEAD
+is) and `maxVersion` (the highest ever issued), so a commit after a rollback
+still gets a fresh number. Repeating `rollback.` walks further back; a commit in
+between branches forward from the restored version. Rollback preserves runtime
+conversation memory (it restores code, not the conversation).
+
+## 10. Follow-ups
 
 * `export --with-history` to bundle `history.dml` + `HEAD.json`.
 * CLI: `deepclause repl history`, `--session`, `--version`, `diff v1 v2`.

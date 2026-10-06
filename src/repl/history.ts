@@ -92,7 +92,9 @@ export class HistoryStore {
   private readonly maxVersions: number;
   private readonly redactions: RegExp[];
   private eventBuffer: string[] = [];
-  private versionCounter = 0;
+  /** Current HEAD version (0 = empty harness) and the highest ever issued. */
+  private headVersion = 0;
+  private maxVersion = 0;
 
   constructor(
     workspacePath: string,
@@ -111,7 +113,7 @@ export class HistoryStore {
   }
 
   get currentVersion(): number {
-    return this.versionCounter;
+    return this.headVersion;
   }
 
   get tracePath(): string {
@@ -139,8 +141,12 @@ export class HistoryStore {
     await fs.mkdir(this.sessionDirAbs, { recursive: true });
     await fs.mkdir(path.join(this.harnessDir, 'versions'), { recursive: true });
     try {
-      const head = JSON.parse(await fs.readFile(this.headFile, 'utf8')) as { version?: number };
-      if (typeof head.version === 'number') this.versionCounter = head.version;
+      const head = JSON.parse(await fs.readFile(this.headFile, 'utf8')) as {
+        version?: number;
+        maxVersion?: number;
+      };
+      if (typeof head.version === 'number') this.headVersion = head.version;
+      this.maxVersion = typeof head.maxVersion === 'number' ? head.maxVersion : this.headVersion;
     } catch {
       // no HEAD yet
     }
@@ -206,8 +212,9 @@ export class HistoryStore {
    * Record a harness version. Returns the facts to assert and the new version.
    */
   async recordChange(record: HistoryChangeRecord): Promise<{ facts: string[]; version: number }> {
-    const version = this.versionCounter + 1;
-    this.versionCounter = version;
+    const version = this.maxVersion + 1;
+    this.maxVersion = version;
+    const parentVersion = this.headVersion;
     const ts = nowIso();
     const hash = createHash('sha256')
       .update(record.module)
@@ -241,7 +248,7 @@ export class HistoryStore {
       {
         version,
         ts,
-        parentVersion: version > 1 ? version - 1 : null,
+        parentVersion: parentVersion > 0 ? parentVersion : null,
         kind: record.kind,
         sessionId: record.sessionId,
         turn: record.turn,
@@ -255,12 +262,65 @@ export class HistoryStore {
     );
     await this.writeJson(this.headFile, {
       version,
+      maxVersion: this.maxVersion,
       ts,
       sessionId: record.sessionId,
       turn: record.turn,
       hash,
     });
+    this.headVersion = version;
     return { facts, version };
+  }
+
+  /**
+   * Plan a rollback to the parent of HEAD. Returns null when there is nothing
+   * to undo, otherwise the module source to restore.
+   */
+  async prepareRollback(): Promise<{ from: number; to: number; module: string } | null> {
+    if (this.headVersion <= 0) return null;
+    const current = await this.readVersion(this.headVersion);
+    const to = current?.parentVersion ?? Math.max(this.headVersion - 1, 0);
+    const target = to > 0 ? await this.readVersion(to) : null;
+    return { from: this.headVersion, to, module: target?.module ?? '' };
+  }
+
+  /** Persist a rollback (facts + HEAD + change log); does not touch the module. */
+  async recordRollback(from: number, to: number, turn: number, sessionId: string): Promise<string[]> {
+    const ts = nowIso();
+    const facts = [
+      `harness_rollback(${from}, ${to}, ${prologAtom(ts)}, ${prologAtom(sessionId)}, ${turn}).`,
+      `harness_head(${to}, ${prologAtom(ts)}, ${prologAtom(sessionId)}, ${turn}).`,
+    ];
+    await this.appendFacts(facts);
+    await this.appendJsonl(this.changesFile, { ts, sessionId, turn, kind: 'rollback', from, to });
+    await this.writeJson(this.headFile, {
+      version: to,
+      maxVersion: this.maxVersion,
+      ts,
+      sessionId,
+      turn,
+      rollback: true,
+    });
+    this.headVersion = to;
+    return facts;
+  }
+
+  private async readVersion(
+    version: number,
+  ): Promise<{ module: string; parentVersion: number | null } | null> {
+    const dir = path.join(this.harnessDir, 'versions');
+    try {
+      const prefix = `${String(version).padStart(4, '0')}_`;
+      const name = (await fs.readdir(dir)).find((entry) => entry.startsWith(prefix));
+      if (!name) return null;
+      const data = JSON.parse(await fs.readFile(path.join(dir, name), 'utf8')) as {
+        module?: string;
+        parentVersion?: number | null;
+      };
+      return { module: data.module ?? '', parentVersion: data.parentVersion ?? null };
+    } catch {
+      return null;
+    }
   }
 
   /** Buffer one event line (flushed at turn end / dispose). */

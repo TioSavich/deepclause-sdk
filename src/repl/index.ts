@@ -67,6 +67,13 @@ export interface HarnessReplOptions {
   history?: HistoryOptions;
 }
 
+export interface RollbackResult {
+  ok: boolean;
+  from?: number;
+  to?: number;
+  error?: string;
+}
+
 export interface HarnessRepl {
   /** Goal mode: run a goal, enumerating solutions/events. */
   query(goal: string, opts?: RunOpts): AsyncGenerator<DMLQueryEvent>;
@@ -87,6 +94,8 @@ export interface HarnessRepl {
   export(file?: string, options?: HarnessExportOptions): Promise<HarnessExportResult>;
   isFrozen(): boolean;
   reset(): Promise<void>;
+  /** Undo the last harness transaction (requires history). */
+  rollback(): Promise<RollbackResult>;
   dispose(): Promise<void>;
   /** The underlying session (used by the CLI for session id / frame kind). */
   readonly session: DMLSession;
@@ -141,6 +150,10 @@ class HarnessReplImpl implements HarnessRepl {
 
   reset(): Promise<void> {
     return this.session.reset();
+  }
+
+  rollback(): Promise<RollbackResult> {
+    return this.session.rollback();
   }
 
   dispose(): Promise<void> {
