@@ -602,7 +602,7 @@ async function runInteractive(runtime: ReplRuntime, options: ReplCliOptions): Pr
       holder.turn = controller;
       try {
         if (input.kind === 'goal') {
-          await runInteractiveGoal(runtime, input.goal, options, ask, controller.signal);
+          await runInteractiveGoal(runtime.repl, runtime.renderer, input.goal, options, ask, controller.signal);
         } else {
           const keepGoing = await dispatchReplInput(runtime, input, {
             first: options.first,
@@ -622,14 +622,14 @@ async function runInteractive(runtime: ReplRuntime, options: ReplCliOptions): Pr
   return 0;
 }
 
-async function runInteractiveGoal(
-  runtime: ReplRuntime,
+export async function runInteractiveGoal(
+  repl: HarnessRepl,
+  renderer: ReplRenderer,
   goal: string,
   options: ReplCliOptions,
   ask: (query: string) => Promise<string | null>,
   signal?: AbortSignal,
 ): Promise<void> {
-  const { renderer, repl } = runtime;
   const iterator = repl.query(goal, { signal })[Symbol.asyncIterator]();
   let answered = false;
   let pageAll = false;
@@ -659,6 +659,11 @@ async function runInteractiveGoal(
           }
         }
       } else if (value.type === 'error') {
+        renderer.render(value);
+      } else if (value.type !== 'finished') {
+        // Render output/stream/tool_call/task_activity/usage/reasoning, exactly
+        // like the `-g` path (runGoalWithRenderer); otherwise an interactive
+        // goal is silent until its first solution.
         renderer.render(value);
       }
     }

@@ -10,6 +10,8 @@ import * as os from 'os';
 import * as path from 'path';
 
 import { createHarnessRepl, type HarnessRepl } from '../src/repl/index.js';
+import { ReplRenderer } from '../src/repl/render.js';
+import { runInteractiveGoal } from '../src/cli/repl.js';
 import type { DMLEvent } from '../src/types.js';
 
 let workspace: string;
@@ -63,6 +65,16 @@ describe('goal mode', () => {
 
     const events = await collect(repl.query('fact(5, F)'));
     expect(solutionValues(events, 'F')).toEqual(['120']);
+  });
+
+  it('renders output events in the interactive goal pager (not only solutions)', async () => {
+    const sink: string[] = [];
+    const renderer = new ReplRenderer({ mode: 'plain', color: false, sink: (text) => sink.push(text) });
+    // The pager stops after the first solution ('.'); output events must still render.
+    await runInteractiveGoal(repl, renderer, 'X = 1, output("val {X}")', {}, async () => '.');
+    const rendered = sink.join('');
+    expect(rendered).toContain('val 1');
+    expect(rendered).toContain('X = 1');
   });
 
   it('interpolates {Var} inside a raw goal', async () => {
