@@ -93,6 +93,22 @@ A prompt is an **edit transaction**:
 If the model returns invalid DML, the REPL makes one repair attempt with the
 parse error, then aborts without touching the harness.
 
+### Cancelling a turn
+
+Press **Ctrl-C** while a turn is running to abort it. The turn stays
+transactional: the harness is restored to its last committed state, and the
+*current* module (including any scratch `assert`/`execute` edits) is written to
+a temp `.dml` file so nothing is lost:
+
+```text
+^C
+(cancelling current turn… press Ctrl-C again to exit)
+ERROR: turn aborted; current harness saved to /tmp/deepclause-repl-<id>-<ts>.dml
+```
+
+Load that file with `deepclause repl -l <file>` to resume. Ctrl-C while idle
+exits the REPL. The same applies to `goal:` queries and `-g` runs.
+
 ### Direct questions
 
 For a simple question that can be answered directly — "what did we just do?",

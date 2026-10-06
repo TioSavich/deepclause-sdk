@@ -110,11 +110,11 @@ export function classifyReplInput(line: string): ReplInput {
 export async function runGoalWithRenderer(
   repl: HarnessRepl,
   goal: string,
-  options: { first?: boolean; renderer: ReplRenderer },
+  options: { first?: boolean; renderer: ReplRenderer; signal?: AbortSignal },
 ): Promise<number> {
   let hadError = false;
   let printedAny = false;
-  for await (const event of repl.query(goal)) {
+  for await (const event of repl.query(goal, { signal: options.signal })) {
     if (event.type === 'solution') {
       options.renderer.solution(event.solution?.bindings ?? []);
       printedAny = true;
@@ -309,7 +309,7 @@ function printBanner(runtime: ReplRuntime, loaded: string[]): void {
 export async function dispatchReplInput(
   runtime: ReplRuntime,
   input: ReplInput,
-  options: { first?: boolean; print?: (text: string) => void; exportPath?: string } = {},
+  options: { first?: boolean; print?: (text: string) => void; exportPath?: string; signal?: AbortSignal } = {},
 ): Promise<boolean> {
   const { repl, renderer } = runtime;
   const print = options.print ?? ((text: string) => renderer.writeLine(text));
@@ -367,14 +367,14 @@ export async function dispatchReplInput(
       print('params: (see session configuration)');
       return true;
     case 'goal':
-      await runGoalWithRenderer(repl, input.goal, { first: options.first, renderer });
+      await runGoalWithRenderer(repl, input.goal, { first: options.first, renderer, signal: options.signal });
       return true;
     case 'prompt': {
       if (runtime.missingCredential) {
         print(`ERROR: ${runtime.missingCredential}`);
         return true;
       }
-      for await (const event of repl.prompt(input.prompt)) {
+      for await (const event of repl.prompt(input.prompt, { signal: options.signal })) {
         renderer.render(event);
       }
       return true;
@@ -415,17 +415,56 @@ async function executeLoad(runtime: ReplRuntime, files: string[]): Promise<numbe
 }
 
 /** Non-interactive mode: read classified inputs line by line until EOF. */
+/**
+ * Route Ctrl-C to the active turn. While a turn is running the first Ctrl-C
+ * aborts it (the session then saves the harness to a temp file); a Ctrl-C while
+ * idle exits.
+ */
+function installSigint(
+  runtime: ReplRuntime,
+  holder: { turn: AbortController | null },
+  rl?: readline.Interface,
+): () => void {
+  const handler = () => {
+    if (holder.turn) {
+      holder.turn.abort(new Error('cancelled by user'));
+      runtime.renderer.writeErrorLine('(cancelling current turn… press Ctrl-C again to exit)');
+    } else {
+      process.exit(130);
+    }
+  };
+  process.on('SIGINT', handler);
+  rl?.on('SIGINT', handler);
+  return () => {
+    process.off('SIGINT', handler);
+    rl?.off('SIGINT', handler);
+  };
+}
+
 async function runNonInteractive(runtime: ReplRuntime, options: ReplCliOptions): Promise<number> {
   let exitCode = 0;
   const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
+  const holder: { turn: AbortController | null } = { turn: null };
+  const removeSigint = installSigint(runtime, holder, rl);
   try {
     for await (const line of rl) {
       const input = classifyReplInput(line);
       if (input.kind === 'halt') break;
-      const keepGoing = await dispatchReplInput(runtime, input, { first: options.first, exportPath: options.exportPath });
-      if (!keepGoing) break;
+      const controller = new AbortController();
+      holder.turn = controller;
+      try {
+        const keepGoing = await dispatchReplInput(runtime, input, {
+          first: options.first,
+          exportPath: options.exportPath,
+          signal: controller.signal,
+        });
+        if (!keepGoing) break;
+      } finally {
+        holder.turn = null;
+      }
     }
   } finally {
+    removeSigint();
     rl.close();
   }
   return exitCode;
@@ -444,6 +483,8 @@ async function runInteractive(runtime: ReplRuntime, options: ReplCliOptions): Pr
     const { value, done } = await lines.next();
     return done ? null : String(value);
   };
+  const holder: { turn: AbortController | null } = { turn: null };
+  const removeSigint = installSigint(runtime, holder, rl);
 
   try {
     while (true) {
@@ -453,14 +494,25 @@ async function runInteractive(runtime: ReplRuntime, options: ReplCliOptions): Pr
       const input = classifyReplInput(line);
       if (input.kind === 'halt') break;
 
-      if (input.kind === 'goal') {
-        await runInteractiveGoal(runtime, input.goal, options, nextLine);
-      } else {
-        const keepGoing = await dispatchReplInput(runtime, input, { first: options.first, exportPath: options.exportPath });
-        if (!keepGoing) break;
+      const controller = new AbortController();
+      holder.turn = controller;
+      try {
+        if (input.kind === 'goal') {
+          await runInteractiveGoal(runtime, input.goal, options, nextLine, controller.signal);
+        } else {
+          const keepGoing = await dispatchReplInput(runtime, input, {
+            first: options.first,
+            exportPath: options.exportPath,
+            signal: controller.signal,
+          });
+          if (!keepGoing) break;
+        }
+      } finally {
+        holder.turn = null;
       }
     }
   } finally {
+    removeSigint();
     rl.close();
   }
   return 0;
@@ -471,9 +523,10 @@ async function runInteractiveGoal(
   goal: string,
   options: ReplCliOptions,
   nextLine: () => Promise<string | null>,
+  signal?: AbortSignal,
 ): Promise<void> {
   const { renderer, repl } = runtime;
-  const iterator = repl.query(goal)[Symbol.asyncIterator]();
+  const iterator = repl.query(goal, { signal })[Symbol.asyncIterator]();
   let answered = false;
   let pageAll = false;
   try {
@@ -530,12 +583,20 @@ export async function startRepl(options: ReplCliOptions): Promise<number> {
     const goals = options.goal ?? [];
     if (goals.length > 0) {
       let exitCode = 0;
-      for (const goal of goals) {
-        const code = await runGoalWithRenderer(runtime.repl, goal, {
-          first: options.first,
-          renderer: runtime.renderer,
-        });
-        if (code !== 0) exitCode = code;
+      const controller = new AbortController();
+      const removeSigint = installSigint(runtime, { turn: controller });
+      try {
+        for (const goal of goals) {
+          if (controller.signal.aborted) break;
+          const code = await runGoalWithRenderer(runtime.repl, goal, {
+            first: options.first,
+            renderer: runtime.renderer,
+            signal: controller.signal,
+          });
+          if (code !== 0) exitCode = code;
+        }
+      } finally {
+        removeSigint();
       }
       return exitCode;
     }

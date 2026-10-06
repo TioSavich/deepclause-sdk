@@ -7,6 +7,7 @@
  */
 
 import * as fs from 'fs/promises';
+import * as os from 'os';
 import * as path from 'path';
 
 import { loadProlog, mountWorkspace, type SWIPLModule } from '../prolog/loader.js';
@@ -233,6 +234,36 @@ export class DMLSession {
     } finally {
       this.runner.endFrame(frame.id);
     }
+
+    // An aborted goal may have asserted scratch state; preserve it.
+    if (options.signal?.aborted) {
+      const saved = await this.saveCurrentHarness('cancelled');
+      yield {
+        type: 'error',
+        content: saved ? `turn aborted; current harness saved to ${saved}` : 'turn aborted',
+      };
+    }
+  }
+
+  /**
+   * Serialize the *current* living module (including any scratch edits) to a
+   * temp .dml file. Used as an abort safety net so a cancelled turn's work is
+   * not lost.
+   */
+  async saveCurrentHarness(reason: string): Promise<string | null> {
+    const result = this.prologQuery(
+      `deepclause_mi:export_harness('${this.sessionId}', ${quoteString(`aborted turn: ${reason}`)}, Text)`
+    );
+    const text = String(plainValue(result?.Text) ?? '');
+    if (!text.trim()) {
+      return null;
+    }
+    const file = path.join(
+      os.tmpdir(),
+      `deepclause-repl-${this.sessionId}-${Date.now()}.dml`,
+    );
+    await fs.writeFile(file, text, 'utf8');
+    return file;
   }
 
   /** Clear the living module and memories (the `reset.` command). */
@@ -464,6 +495,19 @@ export class DMLSession {
         } finally {
           this.runner.endFrame(metaFrame.id);
           this.frameDepth = 0;
+        }
+
+        // Aborted turn: preserve the scratch state to a temp file, then restore
+        // the committed harness (the turn stays atomic).
+        if (options.signal?.aborted) {
+          const saved = await this.saveCurrentHarness('cancelled');
+          this.prologQuery(`deepclause_mi:repl_snapshot_restore('${this.sessionId}')`);
+          yield {
+            type: 'error',
+            content: saved ? `turn aborted; current harness saved to ${saved}` : 'turn aborted',
+          };
+          lastError = 'turn aborted';
+          break;
         }
 
         // 4. Discard scratch edits.

@@ -144,6 +144,35 @@ describe('prompt mode', () => {
     expect(await repl.list('all')).toBe(before);
   });
 
+  it('saves the current harness to a temp file when a turn is aborted', async () => {
+    const controller = new AbortController();
+    let calls = 0;
+    backend = new CannedBackend(() => {
+      calls += 1;
+      if (calls === 1) {
+        return { text: '', toolCalls: [{ name: 'assert', arguments: { clause: 'scratch_from_abort(1).' } }] };
+      }
+      controller.abort(new Error('cancelled by user'));
+      return finalResponse('kept(1).', '');
+    });
+    repl = await openRepl();
+
+    const events = await collect(repl.prompt('abort me', { signal: controller.signal }));
+    const abortEvent = events.find((event) => event.type === 'error' && event.content?.includes('saved to'));
+    expect(abortEvent).toBeDefined();
+
+    // The scratch assert is discarded from the session...
+    const scratch = await collect(repl.query('scratch_from_abort(_)'));
+    expect(scratch.some((event) => event.type === 'solution')).toBe(false);
+
+    // ...but preserved in the temp file.
+    const savedPath = abortEvent!.content!.match(/saved to (.+)$/)?.[1]?.trim();
+    expect(savedPath).toBeTruthy();
+    const text = await fs.readFile(savedPath!, 'utf8');
+    expect(text).toContain('scratch_from_abort');
+    await fs.rm(savedPath!, { force: true });
+  });
+
   it('replaces by predicate on redefinition', async () => {
     const first = [
       'fact(0, 1).',
