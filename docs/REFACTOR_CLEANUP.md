@@ -1,8 +1,18 @@
 # SDK refactor / cleanup plan
 
-Status: in progress. Goal: reduce the SDK to **REPL + run + TS SDK**, remove the
-TUI, the Markdown→DML compiler, and the old coding-harness DMLs, unify the
+Status: done (P0–P6). Goal: reduce the SDK to **REPL + run + TS SDK**, remove
+the TUI, the Markdown→DML compiler, and the old coding-harness DMLs, unify the
 runtime backend (pi/env), harmonize `run`/REPL rendering, and simplify docs.
+
+Outcome: the compiler, TUI, conductor/planner/skill-creator DMLs, recipes,
+skill catalog, and `list-tools`/`list-commands` are gone; `run` and the REPL
+share `resolveLlmBackend` and `ReplRenderer`; `validateWithProlog` moved to
+`deepclause-sdk/validate` (with a `./compiler` alias); the README was rewritten.
+
+Note: the sibling apps (`deepclause-pi`, `sop2harness`) still import
+`deepclause-sdk/compiler` because `sop2harness` uses the *published* SDK, which
+has no `./validate` yet. Migrate them to `deepclause-sdk/validate` after the
+next SDK publish (one import each).
 
 ## Decisions
 

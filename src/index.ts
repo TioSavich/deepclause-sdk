@@ -25,9 +25,6 @@ export type {
   LLMUsage,
   MemoryMessage,
   RunOptions,
-  CompileOptions,
-  CompileResult,
-  CompileTool,
   DMLEvent,
   TraceEntry,
   ToolDefinition,
@@ -62,15 +59,9 @@ export type {
   HistoryEventContext,
 } from './repl/history.js';
 
-// Compiler utilities — also available via the 'deepclause-sdk/compiler' subpath
-export {
-  compileToDML,
-  extractParameters,
-  extractToolDependencies,
-  extractDescription,
-  validateWithProlog,
-  analyzeDML,
-} from './compiler.js';
+// DML validation and linting — also available via 'deepclause-sdk/validate'
+export { validateWithProlog } from './validate.js';
+export type { ValidationResult } from './validate.js';
 
 // Judgment layer: generic judge primitives with pluggable backends
 export {

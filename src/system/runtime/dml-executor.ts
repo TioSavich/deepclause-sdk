@@ -1,54 +1,50 @@
+/**
+ * One-shot DML execution for `deepclause run`.
+ *
+ * Uses the shared pi/env backend (`llmBackend` when pi) and renders every
+ * runtime event through the REPL's `ReplRenderer`, so `run` and `repl` present
+ * events identically.
+ */
+
 import * as path from 'path';
+
 import { createDeepClause } from '../../sdk.js';
 import type { Config } from '../../cli/config.js';
-import { applyResolvedModelConfig, resolveCompactionConfig } from '../../cli/config.js';
-import { formatToolArgs } from '../../cli/tool-args.js';
-import type { DMLEvent, DeepClauseSDK, MemoryMessage } from '../../types.js';
+import { resolveCompactionConfig } from '../../cli/config.js';
+import type { DMLEvent, LLMBackend, MemoryMessage } from '../../types.js';
+import { ReplRenderer, type RenderMode } from '../../repl/render.js';
 import { recordTokenUsage, type TokenUsageByModel } from './token-usage.js';
-import {
-  createLocalSkillCatalogRuntime,
-  type ExecuteNestedSkillRequest,
-} from './catalog-skills.js';
-import type { ResolvedModelConfig } from '../config/model-slots.js';
-import { withCapturedConsole } from './console-capture.js';
 import { registerLocalRuntimeTools } from './runtime-tools.js';
-import { createShellManager, type ShellManager } from './shell-manager.js';
-
-export interface DmlExecutionContext {
-  config: Config;
-  workspacePath: string;
-  selection: ResolvedModelConfig;
-  shell: ShellManager;
-}
+import { createShellManager } from './shell-manager.js';
 
 export interface ExecuteDmlOptions {
   dmlCode: string;
   config: Config;
   workspaceRoot?: string;
   workspacePath: string;
-  selection: ResolvedModelConfig;
+  /** Env-backend model/provider; ignored when `llmBackend` is set (pi). */
+  model: string;
+  provider: string;
+  temperature?: number;
+  maxTokens?: number;
+  apiKey?: string;
+  baseUrl?: string;
+  /** Injected backend (pi). */
+  llmBackend?: LLMBackend;
   args?: unknown[];
   params?: Record<string, unknown>;
   gasLimit?: number;
   stream?: boolean;
   trace?: boolean;
   verbose?: boolean;
-  headless?: boolean;
+  /** Event rendering: `rich` | `plain` | `json`. */
+  render?: RenderMode;
   sandbox?: boolean;
   signal?: AbortSignal;
   toolAbortSignalRef?: { signal?: AbortSignal };
   onUserInput?: (prompt: string) => Promise<string>;
   initialMessages?: MemoryMessage[];
   onEvent?: (event: DMLEvent) => void;
-  skillCatalog?: {
-    workspaceRoot: string;
-    currentSkillSlug?: string;
-    invocationStack?: string[];
-    maxDepth?: number;
-    includeSystemSkillsInList?: boolean;
-    onChildEvent?: (slug: string, event: DMLEvent) => void;
-  };
-  registerAdditionalTools?: (sdk: DeepClauseSDK, context: DmlExecutionContext) => Promise<void> | void;
 }
 
 export interface ExecuteDmlResult {
@@ -61,21 +57,6 @@ export interface ExecuteDmlResult {
 }
 
 export async function executeDml(options: ExecuteDmlOptions): Promise<ExecuteDmlResult> {
-  if (options.headless && options.onEvent) {
-    return withCapturedConsole(
-      (entry) => options.onEvent?.({
-        type: 'log',
-        content: `[${entry.level}] ${entry.text}`,
-      }),
-      () => executeDmlInternal(options),
-    );
-  }
-
-  return executeDmlInternal(options);
-}
-
-async function executeDmlInternal(options: ExecuteDmlOptions): Promise<ExecuteDmlResult> {
-  applyResolvedModelConfig(options.selection);
   const resolvedWorkspaceRoot = path.resolve(options.workspaceRoot ?? process.cwd());
 
   const shell = createShellManager({
@@ -86,114 +67,60 @@ async function executeDmlInternal(options: ExecuteDmlOptions): Promise<ExecuteDm
   });
 
   const sdk = await createDeepClause({
-    model: options.selection.model,
-    provider: options.selection.provider,
-    apiKey: options.selection.apiKey,
-    baseUrl: options.selection.baseUrl,
-    temperature: options.selection.temperature,
+    model: options.model,
+    provider: options.provider as 'openai' | 'anthropic' | 'google' | 'openrouter',
+    apiKey: options.apiKey,
+    baseUrl: options.baseUrl,
+    temperature: options.temperature,
     trace: !!options.trace,
     streaming: options.stream,
     debug: options.verbose,
-    maxTokens: options.selection.maxOutputTokens ?? 65536,
+    maxTokens: options.maxTokens ?? 65536,
+    llmBackend: options.llmBackend,
     compaction: resolveCompactionConfig(options.config, resolvedWorkspaceRoot),
-    reasoningType: options.selection.reasoningType,
-    reasoningBudgetMap: options.selection.reasoningBudgetMap,
-    contextWindow: options.selection.contextWindow,
   });
 
-  const result: ExecuteDmlResult = {
-    output: [],
-    events: [],
-  };
+  const renderer = new ReplRenderer({
+    mode: options.render ?? 'plain',
+    color: false,
+    verbose: options.verbose ?? false,
+  });
+
+  const result: ExecuteDmlResult = { output: [], events: [] };
   const usageByModel: TokenUsageByModel = {};
   let finished = false;
 
-  const handleEvent = (event: DMLEvent) => {
+  const handleEvent = (event: DMLEvent): void => {
     result.events.push(event);
     options.onEvent?.(event);
 
     switch (event.type) {
       case 'output':
-        if (event.content) {
-          result.output.push(event.content);
-          if (!options.headless) {
-            console.log(event.content);
-          }
-        }
+        if (event.content) result.output.push(event.content);
         break;
-
-      case 'stream':
-        if (options.stream && !options.headless && event.content) {
-          process.stdout.write(event.content);
-        }
-        if (options.stream && !options.headless && event.done) {
-          process.stdout.write('\n');
-        }
-        break;
-
-      case 'log':
-        if (options.verbose && event.content && !options.headless) {
-          console.log(`[log] ${event.content}`);
-        }
-        break;
-
-      case 'tool_call':
-        if (!options.headless && options.verbose && event.toolName) {
-          console.log(`  🔧 ${event.toolName}(${formatToolArgs(event.toolArgs)})`);
-        }
-        break;
-
       case 'answer':
         result.answer = event.content;
         break;
-
       case 'error':
         result.error = event.content;
-        if (event.trace) {
-          result.trace = event.trace;
-        }
+        if (event.trace) result.trace = event.trace;
         finished = true;
         break;
-
       case 'finished':
-        if (event.trace) {
-          result.trace = event.trace;
-        }
+        if (event.trace) result.trace = event.trace;
         finished = true;
         break;
-
-      case 'input_required':
-        if (options.verbose && event.prompt && !options.headless) {
-          console.log(`[input_required] ${event.prompt}`);
-        }
-        break;
-
       case 'usage':
-        if (event.usage) {
-          recordTokenUsage(usageByModel, options.selection.id, event.usage);
-        }
+        if (event.usage) recordTokenUsage(usageByModel, options.model, event.usage);
         break;
-
-      case 'task_activity':
+      default:
         break;
     }
+
+    renderer.render(event);
   };
 
   try {
-    const skillCatalog = options.skillCatalog
-      ? createLocalSkillCatalogRuntime({
-        workspaceRoot: options.skillCatalog.workspaceRoot,
-        workspacePath: options.workspacePath,
-        config: options.config,
-        selection: options.selection,
-        currentSkillSlug: options.skillCatalog.currentSkillSlug,
-        invocationStack: options.skillCatalog.invocationStack,
-        maxDepth: options.skillCatalog.maxDepth,
-        includeSystemSkillsInList: options.skillCatalog.includeSystemSkillsInList,
-        executeNestedSkill: (child) => executeNestedSkill(options, child),
-      })
-      : undefined;
-
     registerLocalRuntimeTools(sdk, {
       workspaceRoot: options.workspaceRoot,
       workspacePath: options.workspacePath,
@@ -201,85 +128,27 @@ async function executeDmlInternal(options: ExecuteDmlOptions): Promise<ExecuteDm
       signal: options.signal,
       toolAbortSignalRef: options.toolAbortSignalRef,
       onEvent: handleEvent,
-      skillCatalog,
     });
-
-    await options.registerAdditionalTools?.(sdk, {
-      config: options.config,
-      workspacePath: options.workspacePath,
-      selection: options.selection,
-      shell,
-    });
-
-    const modelInfo = {
-      modelId: options.selection.model,
-      complexity: options.selection.complexity ?? 'medium',
-      reasoning: options.selection.reasoning ?? false,
-      contextWindow: options.selection.contextWindow,
-      maxOutputTokens: options.selection.maxOutputTokens,
-    };
 
     for await (const event of sdk.runDML(options.dmlCode, {
       args: options.args,
-      params: { ...options.params, model_info: modelInfo },
+      params: options.params,
       workspacePath: options.workspacePath,
       gasLimit: options.gasLimit,
       signal: options.signal,
       onUserInput: options.onUserInput,
       initialMessages: options.initialMessages,
     })) {
-      if (finished) {
-        break;
-      }
-
+      if (finished) break;
       handleEvent(event);
     }
 
     if (Object.keys(usageByModel).length > 0) {
       result.usageByModel = usageByModel;
     }
-
     return result;
   } finally {
     await sdk.dispose();
     await shell.dispose();
   }
-}
-
-function executeNestedSkill(
-  parentOptions: ExecuteDmlOptions,
-  child: ExecuteNestedSkillRequest,
-): Promise<ExecuteDmlResult> {
-  return executeDml({
-    dmlCode: child.dmlCode,
-    config: parentOptions.config,
-    workspacePath: parentOptions.workspacePath,
-    selection: parentOptions.selection,
-    args: child.args,
-    params: child.params,
-    gasLimit: parentOptions.gasLimit,
-    stream: parentOptions.stream,
-    trace: parentOptions.trace,
-    verbose: parentOptions.verbose,
-    headless: true,
-    sandbox: parentOptions.sandbox,
-    signal: parentOptions.signal,
-    toolAbortSignalRef: parentOptions.toolAbortSignalRef,
-    onUserInput: parentOptions.onUserInput
-      ? (prompt) => parentOptions.onUserInput!(`[${child.slug}] ${prompt}`)
-      : undefined,
-    onEvent: parentOptions.skillCatalog?.onChildEvent
-      ? (event) => parentOptions.skillCatalog?.onChildEvent?.(child.slug, event)
-      : undefined,
-    skillCatalog: parentOptions.skillCatalog
-      ? {
-        workspaceRoot: parentOptions.skillCatalog.workspaceRoot,
-        currentSkillSlug: child.currentSkillSlug,
-        invocationStack: child.invocationStack,
-        maxDepth: parentOptions.skillCatalog.maxDepth,
-        includeSystemSkillsInList: parentOptions.skillCatalog.includeSystemSkillsInList,
-        onChildEvent: parentOptions.skillCatalog.onChildEvent,
-      }
-      : undefined,
-  });
 }

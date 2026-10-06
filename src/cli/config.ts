@@ -5,17 +5,12 @@
  */
 
 import { z } from 'zod';
-import { readFileSync, readdirSync } from 'fs';
+import { readFileSync } from 'fs';
 import * as fs from 'fs/promises';
 import * as path from 'path';
-import { ensureDefaultSkillSeeds, writeDefaultSkillSeeds } from './default-skills.js';
 import {
   getSystemCompactorAssetPath,
-  getPackagedRecipeAssetsDir,
-  getSystemPromptAssetPath,
-  getSystemSkillAssetPath,
   getWorkspaceDocAssetPath,
-  getWorkspaceRecipeAssetsDir,
 } from '../system/assets/index.js';
 import type { CompactionOptions } from '../types.js';
 import {
@@ -364,9 +359,7 @@ export async function initConfig(
 `;
   await fs.writeFile(gitignorePath, gitignoreContent);
 
-  await writeDefaultSkillSeeds(toolsDir, initialModelId);
   await ensureSystemOverrideSeeds(workspaceRoot, { overwrite: true });
-  await writeRecipeSeeds(workspaceRoot, { overwrite: true });
   await ensureWorkspaceDocSeeds(workspaceRoot, { overwrite: true });
 }
 
@@ -381,38 +374,6 @@ export async function ensureSystemOverrideSeeds(
 
 async function copySystemOverrideSeeds(systemDir: string, overwrite: boolean): Promise<void> {
   const packagedAssets = [
-    {
-      fileName: 'conductor.dml',
-      content: readFileSync(getSystemSkillAssetPath('conductor'), 'utf8'),
-    },
-    {
-      fileName: 'skill-creator.dml',
-      content: readFileSync(getSystemSkillAssetPath('skill-creator'), 'utf8'),
-    },
-    {
-      fileName: 'plan.dml',
-      content: readFileSync(getSystemSkillAssetPath('plan'), 'utf8'),
-    },
-    {
-      fileName: 'deep-planner.dml',
-      content: readFileSync(getSystemSkillAssetPath('deep-planner'), 'utf8'),
-    },
-    {
-      fileName: 'security-planner.dml',
-      content: readFileSync(getSystemSkillAssetPath('security-planner'), 'utf8'),
-    },
-    {
-      fileName: 'CONDUCTOR_PROMPT.md',
-      content: readFileSync(getSystemPromptAssetPath('conductor'), 'utf8'),
-    },
-    {
-      fileName: 'DML_COMPILER_PROMPT.md',
-      content: readFileSync(getSystemPromptAssetPath('skill-creator'), 'utf8'),
-    },
-    {
-      fileName: 'TASK_PROMPT.md',
-      content: readFileSync(getSystemPromptAssetPath('task'), 'utf8'),
-    },
     {
       fileName: 'default-session-compactor.dml',
       content: readFileSync(getSystemCompactorAssetPath('default-session-compactor'), 'utf8'),
@@ -437,45 +398,6 @@ async function copySystemOverrideSeeds(systemDir: string, overwrite: boolean): P
   }));
 }
 
-async function writeRecipeSeeds(
-  workspaceRoot: string,
-  options: { overwrite?: boolean } = {},
-): Promise<void> {
-  const sourceRoot = getPackagedRecipeAssetsDir();
-  const targetRoot = getWorkspaceRecipeAssetsDir(workspaceRoot);
-  await fs.mkdir(targetRoot, { recursive: true });
-  await copyRecipeSeedDirectory(sourceRoot, targetRoot, options.overwrite ?? false);
-}
-
-async function copyRecipeSeedDirectory(
-  sourceDir: string,
-  targetDir: string,
-  overwrite: boolean,
-): Promise<void> {
-  const entries = readdirSync(sourceDir, { withFileTypes: true });
-  for (const entry of entries) {
-    const sourcePath = path.join(sourceDir, entry.name);
-    const targetPath = path.join(targetDir, entry.name);
-
-    if (entry.isDirectory()) {
-      await fs.mkdir(targetPath, { recursive: true });
-      await copyRecipeSeedDirectory(sourcePath, targetPath, overwrite);
-      continue;
-    }
-
-    if (!overwrite) {
-      try {
-        await fs.access(targetPath);
-        continue;
-      } catch {
-        // Seed the packaged recipe file when it is missing.
-      }
-    }
-
-    await fs.writeFile(targetPath, readFileSync(sourcePath, 'utf8'), 'utf8');
-  }
-}
-
 export async function ensureWorkspaceDocSeeds(
   workspaceRoot: string,
   options: { overwrite?: boolean } = {},
@@ -488,12 +410,12 @@ export async function ensureWorkspaceDocSeeds(
 async function copyWorkspaceDocSeeds(docsDir: string, overwrite: boolean): Promise<void> {
   const packagedDocs = [
     {
-      fileName: 'TUI.md',
-      content: readFileSync(getWorkspaceDocAssetPath('tui'), 'utf8'),
-    },
-    {
       fileName: 'DML_REFERENCE.md',
       content: readFileSync(getWorkspaceDocAssetPath('dml-reference'), 'utf8'),
+    },
+    {
+      fileName: 'DML_AUTHORING.md',
+      content: readFileSync(getWorkspaceDocAssetPath('dml-authoring'), 'utf8'),
     },
   ];
 
@@ -537,7 +459,6 @@ export async function loadConfig(workspaceRoot: string): Promise<Config> {
   // Validate
   const config = validateConfig(migratedConfig);
   await ensureSystemOverrideSeeds(workspaceRoot);
-  await ensureDefaultSkillSeeds(getToolsDir(workspaceRoot), config.models.run);
   await ensureWorkspaceDocSeeds(workspaceRoot);
   return config;
 }

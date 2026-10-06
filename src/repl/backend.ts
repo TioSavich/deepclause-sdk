@@ -437,3 +437,51 @@ export async function createPiBackend(options: CreatePiBackendOptions = {}): Pro
   const model = selectPiModel(registry, requested);
   return createPiAdapter(registry, model, options.maxTokens);
 }
+
+export interface ResolveBackendOptions {
+  kind?: BackendKind;
+  model?: string;
+  provider?: string;
+  maxTokens?: number;
+  agentDir?: string;
+  modelsPath?: string | null;
+  authPath?: string | null;
+}
+
+export interface ResolvedBackend {
+  kind: BackendKind;
+  /** Injected backend for pi; undefined for env (the runner builds it). */
+  llmBackend?: LLMBackend;
+  provider: string;
+  /** Bare model id. */
+  model: string;
+  /** `provider/model` (pi) or bare id (env), for display/persistence. */
+  modelId: string;
+}
+
+/**
+ * Resolve the shared pi/env model backend used by both `deepclause run` and the
+ * REPL. `pi` (the default) returns an injected `LLMBackend`; `env` returns the
+ * provider/model so the runner builds the SDK provider backend.
+ */
+export async function resolveLlmBackend(options: ResolveBackendOptions = {}): Promise<ResolvedBackend> {
+  const kind = options.kind ?? 'pi';
+  if (kind === 'pi') {
+    const pi = await createPiBackend({
+      agentDir: options.agentDir,
+      modelsPath: options.modelsPath ?? undefined,
+      authPath: options.authPath ?? undefined,
+      model: options.model,
+      maxTokens: options.maxTokens,
+    });
+    return {
+      kind: 'pi',
+      llmBackend: pi.backend,
+      provider: pi.provider,
+      model: pi.modelId.split('/').slice(1).join('/') || pi.modelId,
+      modelId: pi.modelId,
+    };
+  }
+  const model = options.model ?? 'gpt-4o';
+  return { kind: 'env', provider: options.provider ?? 'openai', model, modelId: model };
+}

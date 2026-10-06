@@ -14,6 +14,10 @@
       "import": "./dist/index.js",
       "types": "./dist/index.d.ts"
     },
+    "./validate": {
+      "import": "./dist/validate.js",
+      "types": "./dist/validate.d.ts"
+    },
     "./compiler": {
       "import": "./dist/compiler.js",
       "types": "./dist/compiler.d.ts"
@@ -22,7 +26,7 @@
   "scripts": {
     "build": "tsc && npm run copy:prolog && npm run copy:assets",
     "copy:prolog": "cp src/prolog-src/*.pl dist/prolog-src/",
-    "copy:assets": "mkdir -p dist/system/assets/skills dist/system/assets/compactors dist/system/assets/docs dist/system/assets/recipes && cp src/system/assets/skills/*.dml dist/system/assets/skills/ && cp src/system/assets/compactors/*.dml dist/system/assets/compactors/ && cp src/system/assets/docs/*.md dist/system/assets/docs/ && cp src/system/assets/model-database.json dist/system/assets/ && cp -R src/system/assets/recipes/. dist/system/assets/recipes/",
+    "copy:assets": "mkdir -p dist/system/assets/compactors dist/system/assets/docs && cp src/system/assets/compactors/*.dml dist/system/assets/compactors/ && cp src/system/assets/docs/*.md dist/system/assets/docs/ && cp src/system/assets/model-database.json dist/system/assets/",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",

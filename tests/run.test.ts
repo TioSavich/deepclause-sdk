@@ -202,7 +202,7 @@ describe('run integration', () => {
     
     const nonExistentPath = join(tempDir, 'nonexistent.dml');
     
-    await expect(run(nonExistentPath, [], {}))
+    await expect(run(nonExistentPath, [], { configRoot: tempDir }))
       .rejects.toThrow('Failed to read DML file');
   });
 
@@ -235,13 +235,13 @@ describe('run integration', () => {
     
     const { run } = await import('../src/cli/run.js');
     
-    const result = await run(dmlPath, ['AI'], { dryRun: true });
+    const result = await run(dmlPath, ['AI'], { dryRun: true, configRoot: tempDir, model: 'gpt-4o', backend: 'env' });
     
     expect(result.dryRun).toBe(true);
     expect(result.wouldExecute).toContain('DRY RUN');
     expect(result.wouldExecute).toContain('test.dml');
-    expect(result.wouldExecute).toContain('Research task');
-    expect(result.wouldExecute).toContain('topic');
+    expect(result.wouldExecute).toContain('backend:');
+    expect(result.wouldExecute).toContain('model:');
   });
 });
 
