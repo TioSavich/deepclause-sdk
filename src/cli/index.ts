@@ -18,6 +18,7 @@ import { buildModelOverride, type ModelSlot } from '../system/config/model-slots
 import { runPromptHeadless, startTui } from './tui.js';
 import { registerReplCommand } from './repl.js';
 import { registerSetBackendCommand } from './set-backend.js';
+import { registerLoginCommands } from './login.js';
 import { readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
@@ -683,6 +684,7 @@ program
 
 registerReplCommand(program);
 registerSetBackendCommand(program);
+registerLoginCommands(program);
 
 // =============================================================================
 // Helper Functions

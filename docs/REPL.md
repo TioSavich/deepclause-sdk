@@ -50,6 +50,7 @@ A small set of whole-line commands is matched before the classifier:
 | `listing.` / `listing(Name/Arity).` | list the living module |
 | `reset.` | empty the harness (refused when frozen) |
 | `rollback.` | undo the last harness change (requires history) |
+| `model.` / `model <provider/id>.` | show / set the default model |
 | `export <file>.` | write a self-contained `.dml` harness |
 | `freeze.` / `unfreeze.` | read-only lock |
 | `trace.` / `notrace.` | toggle verbose logging |
@@ -326,49 +327,46 @@ relays a question to the human.
 
 ## Backends
 
-The `pi` backend does not run an LLM of its own: it borrows pi's **model
-catalog and credential store** (`@earendil-works/pi-coding-agent`). You do not
-need the `pi` CLI or a pre-existing pi session — the SDK discovers an existing
-install, or you can ask it to install the package.
+The **`pi` backend is the default**. It does not run an LLM of its own: it
+borrows pi's **model catalog and credential store**.
+`@earendil-works/pi-coding-agent` and `@earendil-works/pi-ai` are regular
+dependencies of the SDK, so **no global `pi` install is needed** — a globally
+installed `pi` is deliberately ignored so the version is deterministic. The
+`env` backend (the SDK's own provider/API-key path) is still supported.
 
 ```bash
-# Full setup: discover/install pi, list its catalog, pick a model, log in.
-deepclause set-backend pi
+# Sign in (the terminal port of pi's /login) and pick a default model.
+deepclause login
+deepclause login --provider anthropic                 # skip the provider picker
+deepclause login --provider openai --api-key sk-…      # non-interactive API key
+deepclause login --model anthropic/claude-sonnet-4     # skip the model picker
+deepclause login --no-model                            # authenticate only
 
-# Non-interactive / scripted:
-deepclause set-backend pi --list                    # providers + chat models (no change)
-deepclause set-backend pi --list --json             # machine-readable catalog
-deepclause set-backend pi --model anthropic/claude-sonnet-4   # pin a model
-deepclause set-backend pi --provider openai         # restrict the picker
-deepclause set-backend pi --api-key sk-…            # store a key via pi credentials
-deepclause set-backend pi --install                 # npm install the pi package first
-deepclause set-backend pi --no-login                # never start an interactive login
+deepclause logout [provider]                           # pi's /logout
 
-# Inspect / revert:
+# Inspect / switch:
 deepclause set-backend status
-deepclause set-backend status --json
-deepclause set-backend env                          # SDK provider/API-key backend
+deepclause set-backend pi --list [--json]              # providers + chat models
+deepclause set-backend env                             # SDK provider/API-key backend
 ```
 
-Setup flow:
+Login flow (`deepclause login`, `set-backend pi`):
 
-1. **Discover or install.** The SDK looks for the pi package next to itself, in
-   the current project's `node_modules`, on `PATH` (`which pi`), and in common
-   global locations (`~/.local/share/pi-node/*`, `/usr/local/lib/node_modules`,
-   `$PI_PACKAGE_DIR`). `--install` runs `npm install
-   @earendil-works/pi-coding-agent` if it is missing.
-2. **Choose a model.** The picker lists pi's chat models with reasoning flags;
-   `--model`/`--provider` skip the prompt.
-3. **Authenticate.** If pi has no credentials for the chosen provider, the CLI
-   runs pi's own login flow (API key or OAuth/subscription) and stores the
-   credential through pi. In non-interactive runs it fails with guidance
-   instead of hanging.
-4. **Persist.** The choice is written to `.deepclause/config.json` under
+1. **Provider picker.** The readline picker filters instead of listing the whole
+   catalog; entries show the auth method (API key / OAuth/subscription) and
+   whether the provider is already configured.
+2. **Auth method.** Chosen automatically when a provider offers only one; a
+   short prompt picks between API key and OAuth/subscription otherwise.
+3. **pi login.** pi's own flow runs (API-key prompt, OAuth URL, or device code)
+   and stores the credential through pi (`~/.pi/agent/auth.json` by default;
+   `backend.agentDir` overrides it).
+4. **Model picker.** Always shown (unless `--model`/`--no-model`), filtered by
+   the picker; the choice is written to `.deepclause/config.json` under
    `backend` (`kind`, `model`, `agentDir`, `modelsPath`, `authPath`).
 
 With `backend = pi`, the REPL never asks for API keys, never writes provider
-environment variables, and never guesses a provider. Resolution order: explicit
-CLI/config paths → `<cwd>/.pi` → `~/.pi/agent`.
+environment variables, and never guesses a provider. `deepclause login --json`
+is available for scripted use.
 
 ### Judgment backends
 

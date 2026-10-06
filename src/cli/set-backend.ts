@@ -13,7 +13,6 @@
  */
 
 import type { Command } from 'commander';
-import { spawn } from 'child_process';
 import * as readline from 'readline';
 
 import { loadConfig, updateConfig } from './config.js';
@@ -21,11 +20,12 @@ import {
   createPiBackend,
   isPiPackageAvailable,
   openPiRuntime,
-  type PiAuthInteractionLike,
   type PiModelInfo,
   type PiProviderInfo,
   type PiRuntimeHandle,
 } from '../repl/backend.js';
+import { apiKeyInteraction, createTerminalAuthInteraction } from '../repl/auth.js';
+import { pickFromList } from '../repl/picker.js';
 
 export type BackendKind = 'env' | 'pi';
 
@@ -64,76 +64,11 @@ function ask(question: string): Promise<string> {
   });
 }
 
-/** Terminal implementation of pi's login interaction callbacks. */
-export function terminalAuthInteraction(): PiAuthInteractionLike {
-  return {
-    async prompt(prompt) {
-      if (prompt.options && prompt.options.length > 0) {
-        const lines = prompt.options.map((option, index) => {
-          const description = option.description ? ` — ${option.description}` : '';
-          return `  ${index + 1}. ${option.label}${description}`;
-        });
-        const answer = await ask(`${prompt.message}\n${lines.join('\n')}\n> `);
-        const byIndex = Number(answer.trim()) - 1;
-        if (Number.isInteger(byIndex) && prompt.options[byIndex]) {
-          return prompt.options[byIndex].id;
-        }
-        const byId = prompt.options.find((option) => option.id === answer.trim());
-        return byId ? byId.id : answer.trim();
-      }
-      const placeholder = prompt.placeholder ? ` (${prompt.placeholder})` : '';
-      return ask(`${prompt.message}${placeholder}\n> `);
-    },
-    notify(event) {
-      if (event.type === 'auth_url' && event.url) {
-        console.log(`\nOpen this URL to authorize:\n  ${event.url}`);
-        if (event.instructions) console.log(event.instructions);
-      } else if (event.type === 'device_code') {
-        console.log(`\nVisit ${event.verificationUri} and enter code: ${event.userCode}`);
-      } else if (event.message) {
-        console.log(event.message);
-      }
-      for (const link of event.links ?? []) {
-        console.log(`  ${link.label ?? link.url}: ${link.url}`);
-      }
-    },
-  };
-}
-
-function apiKeyInteraction(apiKey: string): PiAuthInteractionLike {
-  return {
-    prompt: async () => apiKey,
-    notify: (event) => {
-      if (event.message) console.log(event.message);
-    },
-  };
-}
-
-async function installPiPackage(): Promise<void> {
-  console.log(`Installing ${PI_PACKAGE} (this provides pi's model catalog and credential store)…`);
-  await new Promise<void>((resolve, reject) => {
-    const child = spawn('npm', ['install', `${PI_PACKAGE}@^1.0.0`], { stdio: 'inherit' });
-    child.on('error', reject);
-    child.on('exit', (code) => {
-      if (code === 0) {
-        resolve();
-      } else {
-        reject(new Error(`npm install exited with code ${code}`));
-      }
-    });
-  });
-}
-
-async function requirePiPackage(options: SetBackendOptions): Promise<void> {
+async function requirePiPackage(): Promise<void> {
   if (isPiPackageAvailable()) return;
-  if (options.install) {
-    await installPiPackage();
-    if (isPiPackageAvailable()) return;
-  }
   throw new Error(
-    `pi backend needs the ${PI_PACKAGE} package. Install it with `
-    + `\`npm install ${PI_PACKAGE}\` (or re-run with --install), `
-    + 'or run `deepclause set-backend env` to use the SDK provider/API-key backend.',
+    `pi backend needs ${PI_PACKAGE} (a dependency of this SDK). `
+    + 'Reinstall dependencies, or run `deepclause set-backend env`.',
   );
 }
 
@@ -178,18 +113,22 @@ export async function choosePiModel(
     );
   }
 
-  console.log(`\nAvailable pi models (${models.length}):\n`);
-  models.forEach((model, index) => {
-    const label = model.name && model.name !== model.id ? ` — ${model.name}` : '';
-    const reasoning = model.reasoning ? ' [reasoning]' : '';
-    console.log(`  ${index + 1}. ${model.provider}/${model.id}${label}${reasoning}`);
+  const picked = await pickFromList({
+    message: `Choose a pi model (${models.length} available)`,
+    items: models.map((model) => ({
+      id: `${model.provider}/${model.id}`,
+      label: `${model.provider}/${model.id}${model.name && model.name !== model.id ? ` — ${model.name}` : ''}`,
+      hint: model.reasoning ? '[reasoning]' : undefined,
+    })),
   });
-  const answer = await ask(`\nChoose a model (1-${models.length}): `);
-  const index = Number(answer.trim()) - 1;
-  if (!Number.isInteger(index) || index < 0 || index >= models.length) {
+  if (!picked) {
+    throw new Error('model selection cancelled');
+  }
+  const chosen = models.find((model) => `${model.provider}/${model.id}` === picked);
+  if (!chosen) {
     throw new Error('invalid model selection');
   }
-  return models[index];
+  return chosen;
 }
 
 /** Ensure pi has credentials for the chosen provider (using pi's login flow). */
@@ -225,14 +164,14 @@ export async function ensurePiAuth(
   }
 
   console.log(`\nStarting pi login for '${provider}' (${type})…`);
-  await handle.login(provider, terminalAuthInteraction(), type);
+  await handle.login(provider, createTerminalAuthInteraction(), type);
 }
 
 async function setupPiBackend(
   workspaceRoot: string,
   options: SetBackendOptions,
 ): Promise<SetBackendResult> {
-  await requirePiPackage(options);
+  await requirePiPackage();
 
   const handle = await openPiRuntime({
     agentDir: options.agentDir,
@@ -315,7 +254,7 @@ export function registerSetBackendCommand(program: Command): void {
     .option('--model <provider/model>', 'pin the default model (skips the picker)')
     .option('--provider <id>', 'restrict the catalog/picker to one provider')
     .option('--api-key <key>', 'store an API key for the provider in pi credentials')
-    .option('--install', `install ${PI_PACKAGE} if it is missing`)
+    .option('--install', `(no-op) ${PI_PACKAGE} ships as a dependency`)
     .option('--list', 'list pi providers and models without changing the backend')
     .option('--json', 'machine-readable output (with --list or status)')
     .option('--no-login', 'do not start an interactive login; fail if unauthenticated')

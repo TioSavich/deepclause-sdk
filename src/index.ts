@@ -42,6 +42,16 @@ export type { DMLSessionOptions, DMLQueryOptions } from './repl/session.js';
 export type { HarnessExportOptions, HarnessExportResult } from './repl/export.js';
 export { createPiBackend, createPiAdapter, resolvePiPaths, selectPiModel } from './repl/backend.js';
 export { createReplToolset, buildToolCatalog } from './repl/toolset.js';
+export { pickFromList, filterItems, renderPick } from './repl/picker.js';
+export type { PickItem, PickOptions } from './repl/picker.js';
+export {
+  apiKeyInteraction,
+  createTerminalAuthInteraction,
+  listLoginProviders,
+  loginToProvider,
+  logoutProvider,
+} from './repl/auth.js';
+export type { LoginProviderOption } from './repl/auth.js';
 export { HistoryStore } from './repl/history.js';
 export type {
   HistoryOptions,

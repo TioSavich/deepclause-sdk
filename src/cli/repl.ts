@@ -17,7 +17,7 @@ import { ReplRenderer, type RenderMode } from '../repl/render.js';
 import { createPiBackend } from '../repl/backend.js';
 import { createReplToolset, type ReplToolset } from '../repl/toolset.js';
 import { parseModelId, type Provider } from '../system/config/model-slots.js';
-import { loadReplConfig } from './config.js';
+import { loadReplConfig, updateConfig } from './config.js';
 
 export interface ReplCliOptions {
   goal?: string[];
@@ -57,6 +57,7 @@ export type ReplInput =
   | { kind: 'listing'; filter?: string }
   | { kind: 'reset' }
   | { kind: 'rollback' }
+  | { kind: 'model'; model?: string }
   | { kind: 'export'; path?: string }
   | { kind: 'freeze' }
   | { kind: 'unfreeze' }
@@ -95,6 +96,12 @@ export function classifyReplInput(line: string): ReplInput {
   if (commandLine.startsWith('listing(') && commandLine.endsWith(')')) {
     const filter = commandLine.slice('listing('.length, -1).trim();
     return { kind: 'listing', filter: filter || undefined };
+  }
+  if (commandLine === 'model') {
+    return { kind: 'model' };
+  }
+  if (commandLine.startsWith('model ')) {
+    return { kind: 'model', model: commandLine.slice('model '.length).trim() || undefined };
   }
   if (commandLine === 'export') {
     return { kind: 'export' };
@@ -391,6 +398,17 @@ export async function dispatchReplInput(
       }
       return true;
     }
+    case 'model': {
+      if (input.model) {
+        await updateConfig(runtime.workspace, { backend: { kind: 'pi', model: input.model } });
+        print(`default model set to ${input.model} (takes effect on the next start)`);
+      } else {
+        print(`model: ${runtime.model}`);
+        print(`backend: ${runtime.backend}`);
+        print("set with 'model <provider/id>.' or 'deepclause login'");
+      }
+      return true;
+    }
     case 'export': {
       const target = input.path ?? options.exportPath ?? 'harness.dml';
       try {
@@ -449,6 +467,7 @@ function helpText(runtime: ReplRuntime): string {
     '  listing(Name/Arity). list one predicate',
     '  reset.              empty the harness',
     '  rollback.           undo the last harness change',
+    '  model.              show the model; model <provider/id>. sets it',
     '  export <file>.      write a self-contained harness',
     '  freeze. / unfreeze. read-only lock',
     '  params.             show session parameters',

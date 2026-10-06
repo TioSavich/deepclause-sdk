@@ -51,6 +51,8 @@ describe('classifyReplInput', () => {
     expect(classifyReplInput('help.')).toEqual({ kind: 'help' });
     expect(classifyReplInput('reset.')).toEqual({ kind: 'reset' });
     expect(classifyReplInput('rollback.')).toEqual({ kind: 'rollback' });
+    expect(classifyReplInput('model.')).toEqual({ kind: 'model' });
+    expect(classifyReplInput('model anthropic/claude.')).toEqual({ kind: 'model', model: 'anthropic/claude' });
     expect(classifyReplInput('freeze.')).toEqual({ kind: 'freeze' });
     expect(classifyReplInput('unfreeze.')).toEqual({ kind: 'unfreeze' });
     expect(classifyReplInput('trace.')).toEqual({ kind: 'trace' });
