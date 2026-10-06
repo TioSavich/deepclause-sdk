@@ -1251,11 +1251,18 @@ repl_set_meta_catalog(SessionId, CatalogText) :-
     assertz(session_meta_catalog(SessionId, CatalogText)).
 
 %% repl_read_clause(+SessionId, +ClauseText, -Clause)
+%% Reads exactly one clause. Trailing content is an error so `assert` can never
+%% silently drop clauses that `assert_many` would have kept.
 repl_read_clause(SessionId, ClauseText, Clause) :-
     ensure_full_stop(ClauseText, Text1),
     open_string(Text1, Stream),
     read_term(Stream, Clause, [module(SessionId)]),
-    close(Stream).
+    (   read_term(Stream, Extra, [module(SessionId)]),
+        Extra \== end_of_file
+    ->  close(Stream),
+        throw(error(syntax_error('assert expects a single clause; use assert_many for multiple'), _))
+    ;   close(Stream)
+    ).
 
 %% repl_assert(+SessionId, +ClauseText, -Result)
 %% Parses and asserts generated DML through process_clause/2 (so tool schemas,
@@ -1349,9 +1356,13 @@ repl_extract_code(Text, Source) :-
     atom_string(TextAtom, Text),
     (   sub_string(TextAtom, Start0, _, _, "```dml")
     ->  Start is Start0 + 6,
-        sub_string(TextAtom, Start, _, _, Rest),
-        (   sub_string(Rest, 0, End, _, "```")
-        ->  sub_string(Rest, 0, End, _, Source)
+        % After = 0 takes the remainder of the text (an unbound After would
+        % bind Rest to the empty prefix first).
+        sub_string(TextAtom, Start, _, 0, Rest),
+        % Search for the closing fence by offset: binding Before=0 here would
+        % require the fence to be at the very start of Rest.
+        (   sub_string(Rest, FenceEnd, _, _, "```")
+        ->  sub_string(Rest, 0, FenceEnd, _, Source)
         ;   Source = Rest
         )
     ;   Source = TextAtom

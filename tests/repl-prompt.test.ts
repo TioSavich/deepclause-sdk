@@ -161,6 +161,19 @@ describe('prompt mode', () => {
     expect(persisted).toContain('committed p1/1');
   });
 
+  it('extracts and commits a fenced dml block', async () => {
+    const fenced = ['```dml', 'repl_entry(demo).', 'demo :- output("fenced-ok").', '```'].join('\n');
+    backend = new CannedBackend([finalResponse(fenced, 'demo')]);
+    repl = await openRepl();
+
+    const events = await collect(repl.prompt('add a fenced block'));
+    expect(events.some((event) => event.type === 'error')).toBe(false);
+    expect(events.some((event) => event.type === 'output' && event.content === 'fenced-ok')).toBe(true);
+    const listing = await repl.list('all');
+    expect(listing).toContain('demo/0');
+    expect(listing).not.toContain('```');
+  });
+
   it('keeps the turn alive when an execute child goal fails', async () => {
     backend = new CannedBackend([{
       text: '',
