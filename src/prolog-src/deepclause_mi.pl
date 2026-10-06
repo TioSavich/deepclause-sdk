@@ -1204,7 +1204,12 @@ tool_predicate_name(tool_source).
 %% Workspace-relative files linked by script_file/2 facts; the host bundles them.
 repl_script_files(SessionId, Paths) :-
     (   current_predicate(SessionId:script_file/2)
-    ->  findall(Path, SessionId:script_file(_, Path), Paths0),
+    ->  % Only literal paths count; a stray variable path is ignored.
+        findall(Path,
+            (   SessionId:script_file(_, Path),
+                (atom(Path) ; string(Path))
+            ),
+            Paths0),
         sort(Paths0, Paths)
     ;   Paths = []
     ).

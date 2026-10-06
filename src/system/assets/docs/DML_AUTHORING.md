@@ -36,7 +36,8 @@ report :-
 ```
 
 `script_file/2` is just a fact: it tells `export` which files belong to the
-harness. `export harness.zip` bundles the `.dml` plus every linked file;
+harness. Use a literal workspace-relative path and one fact per name.
+`export harness.zip` bundles the `.dml` plus every linked file;
 `export harness.dml` inlines them so the single file stays portable.
 
 Other files are ordinary workspace paths. There is no fixed extension.
