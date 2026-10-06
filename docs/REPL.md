@@ -186,15 +186,49 @@ relays a question to the human.
 
 ## Backends
 
+The `pi` backend does not run an LLM of its own: it borrows pi's **model
+catalog and credential store** (`@earendil-works/pi-coding-agent`). You do not
+need the `pi` CLI or a pre-existing pi session — the SDK discovers an existing
+install, or you can ask it to install the package.
+
 ```bash
-deepclause set-backend pi      # use pi's configured model and credentials
-deepclause set-backend env     # revert to SDK provider/API keys
+# Full setup: discover/install pi, list its catalog, pick a model, log in.
+deepclause set-backend pi
+
+# Non-interactive / scripted:
+deepclause set-backend pi --list                    # providers + chat models (no change)
+deepclause set-backend pi --list --json             # machine-readable catalog
+deepclause set-backend pi --model anthropic/claude-sonnet-4   # pin a model
+deepclause set-backend pi --provider openai         # restrict the picker
+deepclause set-backend pi --api-key sk-…            # store a key via pi credentials
+deepclause set-backend pi --install                 # npm install the pi package first
+deepclause set-backend pi --no-login                # never start an interactive login
+
+# Inspect / revert:
 deepclause set-backend status
+deepclause set-backend status --json
+deepclause set-backend env                          # SDK provider/API-key backend
 ```
 
-With `backend = pi`, the REPL reuses pi's model registry and credential store:
-it never asks for API keys, never writes provider environment variables, and
-never guesses a provider.
+Setup flow:
+
+1. **Discover or install.** The SDK looks for the pi package next to itself, in
+   the current project's `node_modules`, on `PATH` (`which pi`), and in common
+   global locations (`~/.local/share/pi-node/*`, `/usr/local/lib/node_modules`,
+   `$PI_PACKAGE_DIR`). `--install` runs `npm install
+   @earendil-works/pi-coding-agent` if it is missing.
+2. **Choose a model.** The picker lists pi's chat models with reasoning flags;
+   `--model`/`--provider` skip the prompt.
+3. **Authenticate.** If pi has no credentials for the chosen provider, the CLI
+   runs pi's own login flow (API key or OAuth/subscription) and stores the
+   credential through pi. In non-interactive runs it fails with guidance
+   instead of hanging.
+4. **Persist.** The choice is written to `.deepclause/config.json` under
+   `backend` (`kind`, `model`, `agentDir`, `modelsPath`, `authPath`).
+
+With `backend = pi`, the REPL never asks for API keys, never writes provider
+environment variables, and never guesses a provider. Resolution order: explicit
+CLI/config paths → `<cwd>/.pi` → `~/.pi/agent`.
 
 ## Host tools
 

@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest';
 import {
   createPiAdapter,
   createPiBackend,
+  resolvePiPackageEntry,
   resolvePiPaths,
   selectPiModel,
   type PiModelLike,
@@ -125,6 +126,18 @@ describe('createPiAdapter', () => {
     });
     const { backend } = createPiAdapter(registry, MODEL);
     await expect(backend.complete({ messages: [{ role: 'user', content: 'x' }] })).rejects.toThrow('boom');
+  });
+});
+
+describe('existing pi install discovery', () => {
+  it('resolves an installed pi package entry to an importable file URL', () => {
+    const entry = resolvePiPackageEntry();
+    if (entry === null) {
+      // pi is not installed in this environment; the install hint path applies.
+      return;
+    }
+    expect(entry.startsWith('file://')).toBe(true);
+    expect(entry.endsWith('.js')).toBe(true);
   });
 });
 
