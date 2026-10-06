@@ -25,6 +25,7 @@ import {
   type HarnessExportOptions,
   type HarnessExportResult,
 } from './export.js';
+import { createMetaTools, type ExecuteResult } from './tools.js';
 
 export interface DMLSessionOptions {
   /** Optional explicit session id; generated when omitted. */
@@ -39,6 +40,12 @@ export interface DMLSessionOptions {
   toolPolicy?: ToolPolicy | null;
   onInputRequired?: (prompt: string) => Promise<string>;
   initialHarnessMemory?: MemoryMessage[];
+  /** Prompt-mode repair attempts after an invalid commit (default 1). */
+  repairRounds?: number;
+  /** Host tool catalog text injected into the meta prompt (M5). */
+  hostToolsCatalog?: string;
+  /** Human-in-the-loop channel for the meta ask_user tool (M6). */
+  askUser?: (prompt: string, options?: string[]) => Promise<{ answer: string } | { cancelled: true }>;
 }
 
 export interface DMLQueryOptions {
@@ -69,6 +76,9 @@ export class DMLSession {
   private tools: Map<string, ToolDefinition>;
   private toolPolicy: ToolPolicy | null;
   private onInputRequired: (prompt: string) => Promise<string>;
+  private repairRounds: number;
+  private hostToolsCatalog?: string;
+  private askUser?: (prompt: string, options?: string[]) => Promise<{ answer: string } | { cancelled: true }>;
   private disposed = false;
 
   private constructor(swipl: SWIPLModule, options: DMLSessionOptions) {
@@ -81,6 +91,9 @@ export class DMLSession {
     this.tools = options.tools ?? new Map();
     this.toolPolicy = options.toolPolicy ?? null;
     this.onInputRequired = options.onInputRequired ?? (async () => '');
+    this.repairRounds = options.repairRounds ?? 1;
+    this.hostToolsCatalog = options.hostToolsCatalog;
+    this.askUser = options.askUser;
     this.runner = new DMLRunner(swipl, options.runnerOptions);
     this.runner.bindSession(this.sessionId);
   }
@@ -267,6 +280,207 @@ export class DMLSession {
       tools: Number(plainValue(stats?.Tools) ?? 0),
       scripts: Number(plainValue(stats?.Scripts) ?? 0),
     };
+  }
+
+  /**
+   * Run a goal in an isolated `execute` child frame and collect its result.
+   * Used by the meta `execute` tool. The child frame uses the living scratch
+   * module and may itself call task() (RLM-style recursion).
+   */
+  async executeGoal(goal: string, limit = 5): Promise<ExecuteResult> {
+    const start = this.prologQuery(
+      `deepclause_mi:repl_execute_frame('${this.sessionId}', ${quoteString(goal)}, FrameId, Error)`
+    );
+    const error = plainValue(start?.Error);
+    if (error === undefined || error === null) {
+      return { bindings: [], solutions: [], output: '', error: 'Failed to start execute frame' };
+    }
+    if (error !== 'none') {
+      return { bindings: [], solutions: [], output: '', error: String(error) };
+    }
+
+    const frameId = String(plainValue(start?.FrameId));
+    const frame = this.runner.registerFrame(frameId, 'nested', 1);
+    const solutions: ExecuteResult['solutions'] = [];
+    let output = '';
+    let runError: string | undefined;
+    try {
+      for await (const event of this.runner.runFrame(frame.id, this.buildRunOptions({}))) {
+        if (event.type === 'solution' && solutions.length < limit) {
+          solutions.push(event.solution?.bindings ?? []);
+        } else if (event.type === 'output' || event.type === 'answer') {
+          output += `${event.content ?? ''}\n`;
+        } else if (event.type === 'error') {
+          runError = event.content;
+        }
+      }
+    } finally {
+      this.runner.endFrame(frame.id);
+    }
+
+    return {
+      bindings: solutions[0] ?? [],
+      solutions,
+      output: output.slice(0, 4000),
+      error: runError,
+    };
+  }
+
+  /**
+   * Prompt mode: English request -> meta task -> DML -> commit -> entry run.
+   *
+   * The meta task runs in a `meta` frame with exactly the host meta tools.
+   * Its scratch edits are discarded; the returned DML source is the single
+   * source of truth and is committed replace-by-predicate. A failed commit
+   * triggers at most one repair round; any failure leaves the harness
+   * byte-identical.
+   */
+  async *prompt(request: string, options: DMLQueryOptions = {}): AsyncGenerator<DMLEvent> {
+    if (this.disposed) {
+      yield { type: 'error', content: 'Session has been disposed' };
+      return;
+    }
+
+    const runOptions = this.buildRunOptions(options);
+    let succeeded = false;
+    let lastError: string | undefined;
+    let currentRequest = request;
+
+    yield { type: 'task_activity', taskState: 'started', taskDescription: request };
+
+    try {
+      for (let attempt = 0; attempt <= this.repairRounds && !succeeded; attempt += 1) {
+        // 1. Snapshot the living module + bookkeeping + harness memory.
+        this.prologQuery(`deepclause_mi:repl_snapshot_save('${this.sessionId}')`);
+
+        const catalog = this.hostToolsCatalog
+          ?? 'No capability host tools are registered. Use DML/Prolog, or embed a script as a fact and run it with bash.';
+        this.prologQuery(
+          `deepclause_mi:repl_set_meta_catalog('${this.sessionId}', ${quoteString(catalog)})`
+        );
+
+        // 2. Assemble the prompt and create the meta frame.
+        const promptResult = this.prologQuery(
+          `deepclause_mi:repl_meta_prompt('${this.sessionId}', ${quoteString(currentRequest)}, Prompt)`
+        );
+        const promptText = String(plainValue(promptResult?.Prompt) ?? '');
+        if (!promptText) {
+          this.prologQuery(`deepclause_mi:repl_snapshot_restore('${this.sessionId}')`);
+          lastError = 'failed to assemble the meta prompt';
+          break;
+        }
+
+        const meta = this.prologQuery(
+          `deepclause_mi:repl_run_meta('${this.sessionId}', ${quoteString(promptText)}, FrameId, Error)`
+        );
+        const metaError = plainValue(meta?.Error);
+        if (metaError !== 'none' || !meta?.FrameId) {
+          this.prologQuery(`deepclause_mi:repl_snapshot_restore('${this.sessionId}')`);
+          lastError = String(metaError ?? 'failed to create the meta frame');
+          break;
+        }
+
+        // 3. Run the meta task, streaming its events.
+        const metaFrame = this.runner.registerFrame(String(plainValue(meta.FrameId)), 'meta', 0);
+        const metaTools = createMetaTools({
+          sessionId: this.sessionId,
+          prologQuery: (goal) => this.prologQuery(goal),
+          isFrozen: () => this.isFrozen(),
+          executeGoal: (goal, limit) => this.executeGoal(goal, limit),
+          askUser: this.askUser,
+        });
+
+        let code = '';
+        let entry = '';
+        let metaFailed: string | undefined;
+        try {
+          for await (const event of this.runner.runFrame(metaFrame.id, { ...runOptions, metaTools })) {
+            if (event.type === 'meta_result') {
+              code = event.metaResult?.code ?? '';
+              entry = event.metaResult?.entry ?? '';
+            } else if (event.type === 'error') {
+              metaFailed = event.content;
+              yield event;
+            } else if (event.type !== 'finished') {
+              yield event;
+            }
+          }
+        } finally {
+          this.runner.endFrame(metaFrame.id);
+        }
+
+        // 4. Discard scratch edits.
+        this.prologQuery(`deepclause_mi:repl_snapshot_restore('${this.sessionId}')`);
+
+        if (metaFailed) {
+          lastError = `meta task failed: ${metaFailed}`;
+          break;
+        }
+        if (!code.trim()) {
+          lastError = 'the meta task returned no DML source';
+          break;
+        }
+
+        // 5. Strip an optional ```dml fence, then commit.
+        const extract = this.prologQuery(
+          `deepclause_mi:repl_extract_code(${quoteString(code)}, Source)`
+        );
+        const source = String(plainValue(extract?.Source) ?? code);
+        const commit = this.prologQuery(
+          `deepclause_mi:repl_commit('${this.sessionId}', ${quoteString(source)}, ${quoteString(entry)}, Result)`
+        );
+        const result = plainValue(commit?.Result);
+        if (result !== 'ok') {
+          lastError = String(result ?? 'commit failed');
+          currentRequest = `${request}\n\nYour previous response was rejected: ${lastError}. Return the complete corrected DML.`;
+          continue;
+        }
+        succeeded = true;
+
+        // 6. Run the declared entry (EntryGoal or repl_entry/1), if any.
+        const start = this.prologQuery(
+          `deepclause_mi:repl_start_entry('${this.sessionId}', HasEntry, Error)`
+        );
+        const startError = plainValue(start?.Error);
+        if (startError !== 'none') {
+          yield { type: 'error', content: String(startError) };
+          continue;
+        }
+        const hasEntry = String(plainValue(start?.HasEntry)) === 'true';
+
+        let summary = `committed ${source.trim().split('\n').length} source lines`;
+        if (hasEntry) {
+          const entryFrame = this.runner.registerDefaultFrame('object');
+          if (entryFrame) {
+            try {
+              for await (const event of this.runner.runFrame(entryFrame.id, runOptions)) {
+                yield event;
+              }
+            } finally {
+              this.runner.endFrame(entryFrame.id);
+            }
+          }
+          summary += ' and ran the declared entry';
+        } else {
+          summary += ' (definitions only)';
+        }
+
+        // 7. Record the prompt + outcome in bounded meta memory.
+        this.prologQuery(
+          `deepclause_mi:repl_record_meta('${this.sessionId}', ${quoteString(request)}, ${quoteString(summary)})`
+        );
+      }
+    } finally {
+      yield {
+        type: 'task_activity',
+        taskState: succeeded ? 'completed' : 'failed',
+        taskDescription: request,
+      };
+    }
+
+    if (!succeeded) {
+      yield { type: 'error', content: lastError ?? 'prompt failed' };
+    }
   }
 
   async dispose(): Promise<void> {

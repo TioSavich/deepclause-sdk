@@ -26,6 +26,18 @@ export interface ReplRendererOptions {
   errorSink?: (text: string) => void;
 }
 
+function formatArgs(args: Record<string, unknown> | undefined): string {
+  if (!args || Object.keys(args).length === 0) {
+    return '';
+  }
+  const parts = Object.entries(args).map(([key, value]) => {
+    const text = typeof value === 'string' ? value : JSON.stringify(value);
+    const compact = text.length > 60 ? `${text.slice(0, 57)}…` : text;
+    return `${key}=${compact}`;
+  });
+  return `(${parts.join(', ')})`;
+}
+
 const ANSI = {
   reset: '\u001b[0m',
   bold: '\u001b[1m',
@@ -92,6 +104,11 @@ export class ReplRenderer {
       case 'stream':
         this.sink(event.content ?? '');
         break;
+      case 'reasoning':
+        if (event.content) {
+          this.sink(this.paint(event.content, ANSI.dim));
+        }
+        break;
       case 'log':
         if (this.verbose) {
           this.writeLine(this.paint(`[log] ${event.content ?? ''}`, ANSI.dim));
@@ -103,8 +120,8 @@ export class ReplRenderer {
         }
         break;
       case 'tool_call':
-        if (this.verbose && event.toolName) {
-          this.writeLine(this.paint(`[tool] ${event.toolName}`, ANSI.dim));
+        if (event.toolName) {
+          this.writeLine(this.paint(`  ⚙ ${event.toolName}${formatArgs(event.toolArgs)}`, ANSI.dim));
         }
         break;
       case 'input_required':
@@ -123,6 +140,7 @@ export class ReplRenderer {
         break;
       case 'finished':
       case 'memory_compaction':
+      case 'meta_result':
       default:
         break;
     }

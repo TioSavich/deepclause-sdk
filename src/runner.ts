@@ -233,6 +233,12 @@ export interface InternalRunOptions {
   compaction?: CompactionOptions;
   /** Per-run default judgment backend name override. */
   judgeBackend?: string;
+  /**
+   * Host-backed meta tools for `meta` frames. When set, a meta frame's agent
+   * tool set is replaced with exactly these tools (the harness's DML tools are
+   * hidden from the code-writing model).
+   */
+  metaTools?: Map<string, ToolDefinition>;
 }
 
 interface RunnerExecutionContext {
@@ -459,13 +465,28 @@ export class DMLRunner {
         }
 
         case 'request_agent_loop':
-          // Run agent loop for task() predicate
+          // Run agent loop for task() predicate. The frame kind decides the
+          // tool set: `meta` frames get the host meta tools and hide the
+          // harness's own DML tools (proposal §9.2).
           yield* this.handleAgentLoop(
             step.payload,
             '',
-            options
+            options,
+            frame
           );
           break;
+
+        case 'meta_result': {
+          const payload = (step.payload ?? {}) as Record<string, unknown>;
+          yield {
+            type: 'meta_result',
+            metaResult: {
+              code: String(toJsValue(payload.code) ?? ''),
+              entry: String(toJsValue(payload.entry) ?? ''),
+            },
+          };
+          break;
+        }
 
         case 'request_exec':
           // Execute external tool
@@ -731,6 +752,16 @@ export class DMLRunner {
   }
 
   /**
+   * Adopt a Prolog-created frame into the runner's frame table. Used by the
+   * REPL for `execute` child frames (`repl_execute_frame/4`).
+   */
+  registerFrame(frameId: string, kind: FrameKind, depth = 0): Frame {
+    const frame: Frame = { id: frameId, kind, depth };
+    this.frames.set(frameId, { frame, engine: null });
+    return frame;
+  }
+
+  /**
    * Drop all runner-side frame bookkeeping without touching Prolog. Used after
    * the REPL clears a session (the Prolog side already ended every frame).
    */
@@ -792,7 +823,8 @@ export class DMLRunner {
   private async *handleAgentLoop(
     payload: unknown,
     _memoryId: string, // No longer used - memory comes from payload
-    options: InternalRunOptions
+    options: InternalRunOptions,
+    frame?: Frame
   ): AsyncGenerator<DMLEvent> {
     const rawPayload = payload as Record<string, unknown>;
     const taskDescription = String(toJsValue(rawPayload.taskDescription) ?? '');
@@ -908,29 +940,36 @@ export class DMLRunner {
       emitToolEvent({ type: 'tool_call', toolName, toolArgs: args });
     };
 
-    // Build available tools for agent - SIMPLIFIED: tools run in isolated engines
-    // The callback runs DML tools in isolated engines with no shared state.
-    const availableTools = this.buildAgentTools(
-      userTools,
-      options.toolPolicy,
-      async (toolName: string, args: Record<string, unknown>) => {
-        return this.executeToolIsolated(
-          toolName,
-          args,
-          augmentedTools,
-          onToolOutput,
-          {
-            workspacePath: options.workspacePath,
-            signal: options.signal,
-            compaction: options.compaction,
-            toolPolicy: options.toolPolicy,
-          },
-          [],
-          emitToolCall,
-          emitToolEvent,
-        );
-      }
-    );
+    // Build available tools for the agent.
+    //
+    // For `meta` frames the tool set is *replaced* (not augmented) with the
+    // host meta tools; the harness's own DML tools are hidden from the
+    // code-writing model. For all other frames only DML tool/2 predicates are
+    // offered, and registered TS tools remain reachable via exec/2.
+    const isMetaFrame = frame?.kind === 'meta';
+    const availableTools = isMetaFrame && options.metaTools
+      ? new Map(options.metaTools)
+      : this.buildAgentTools(
+        userTools,
+        options.toolPolicy,
+        async (toolName: string, args: Record<string, unknown>) => {
+          return this.executeToolIsolated(
+            toolName,
+            args,
+            augmentedTools,
+            onToolOutput,
+            {
+              workspacePath: options.workspacePath,
+              signal: options.signal,
+              compaction: options.compaction,
+              toolPolicy: options.toolPolicy,
+            },
+            [],
+            emitToolCall,
+            emitToolEvent,
+          );
+        }
+      );
 
     // Run agent loop with streaming support
     const resultPromise = runAgentLoop({
@@ -952,6 +991,13 @@ export class DMLRunner {
       onOutput: (_text) => { /* Final outputs handled after completion */ },
       onStream: (chunk: string, done: boolean) => {
         streamQueue.push({ type: 'stream', content: chunk, done });
+        if (streamResolve) {
+          streamResolve();
+          streamResolve = null;
+        }
+      },
+      onReasoning: (chunk: string, done: boolean) => {
+        streamQueue.push({ type: 'reasoning', content: chunk, done });
         if (streamResolve) {
           streamResolve();
           streamResolve = null;
@@ -2000,6 +2046,9 @@ export class DMLRunner {
                 },
                 onStream: (chunk, done) => {
                   onToolEvent?.({ type: 'stream', content: chunk, done });
+                },
+                onReasoning: (chunk, done) => {
+                  onToolEvent?.({ type: 'reasoning', content: chunk, done });
                 },
                 onUsage: (usage) => {
                   onToolEvent?.({ type: 'usage', usage });

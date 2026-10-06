@@ -47,6 +47,22 @@
     repl_try_unfreeze/2,
     export_harness/3,
     export_stats/4,
+    % Prompt mode (M3)
+    repl_meta_prompt/2,
+    repl_meta_prompt/3,
+    repl_extract_code/2,
+    repl_entry_goal/2,
+    repl_assert/3,
+    repl_retract/3,
+    repl_manifest/2,
+    repl_set_meta_catalog/2,
+    repl_run_meta/4,
+    repl_snapshot_save/1,
+    repl_snapshot_restore/1,
+    repl_commit/4,
+    repl_start_entry/3,
+    repl_execute_frame/4,
+    repl_record_meta/3,
     post_agent_result/4,
     post_exec_result/3,
     post_sample_token_result/3,
@@ -79,6 +95,9 @@
 :- dynamic session_frozen/2.        % session_frozen(SessionId, true/false) - read-only lock
 :- dynamic session_locked/2.        % session_locked(SessionId, true/false) - irreversibly frozen (--locked)
 :- dynamic session_directive/2.     % session_directive(SessionId, Directive) - recorded :- directives for export
+:- dynamic session_meta_catalog/2.  % session_meta_catalog(SessionId, CatalogText) - host tool catalog for the meta prompt
+:- dynamic session_repl_entry/2.    % session_repl_entry(SessionId, EntryGoal) - resolved entry for the pending commit
+:- dynamic repl_snapshot/2.         % repl_snapshot(SessionId, Snapshot) - transactional edit snapshot
 :- dynamic session_params/2.       % session_params(SessionId, ParamsDict)
 :- dynamic session_user_tools/2.   % session_user_tools(SessionId, ToolName)
 :- dynamic session_user_tool_schema/3. % session_user_tool_schema(SessionId, ToolName, Schema)
@@ -695,6 +714,8 @@ clear_session(SessionId) :-
     assertz(session_repl_memory(SessionId, [])),
     retractall(session_meta_memory(SessionId, _)),
     assertz(session_meta_memory(SessionId, [])),
+    retractall(session_repl_entry(SessionId, _)),
+    retractall(repl_snapshot(SessionId, _)),
     retractall(session_user_tools(SessionId, _)),
     retractall(session_user_tool_schema(SessionId, _, _)),
     (   current_module(SessionId)
@@ -721,6 +742,9 @@ destroy_session(SessionId) :-
     retractall(session_frozen(SessionId, _)),
     retractall(session_locked(SessionId, _)),
     retractall(session_directive(SessionId, _)),
+    retractall(session_meta_catalog(SessionId, _)),
+    retractall(session_repl_entry(SessionId, _)),
+    retractall(repl_snapshot(SessionId, _)),
     retractall(session_params(SessionId, _)),
     retractall(session_trace_enabled(SessionId, _)),
     retractall(session_trace_log(SessionId, _)).
@@ -901,6 +925,8 @@ repl_listing_match(_, _, _).
 %% Excludes reserved and internal predicates from listing/export.
 repl_user_predicate(_SessionId, Name, _Arity) :-
     repl_reserved_name(Name),
+    % repl_entry/1 is a legitimate harness predicate (entry declaration).
+    Name \== repl_entry,
     !,
     fail.
 repl_user_predicate(_SessionId, Name, _Arity) :-
@@ -1151,6 +1177,429 @@ script_predicate_name(python_source, 2).
 script_predicate_name(js_source, 2).
 script_predicate_name(shell_source, 2).
 
+%% ============================================================
+%% Prompt Mode (M3)
+%% ============================================================
+
+%% repl_protected_name(+Name)
+%% Reserved names that generated code may not (re)define. repl_entry and
+%% repl_delete are legitimate harness directives and are allowed through.
+repl_protected_name(Name) :-
+    repl_reserved_name(Name),
+    Name \== repl_entry,
+    Name \== repl_delete.
+
+repl_protected_clause((Head :- _)) :-
+    callable(Head),
+    functor(Head, Name, _),
+    repl_protected_name(Name).
+repl_protected_clause(Head) :-
+    callable(Head),
+    functor(Head, Name, _),
+    repl_protected_name(Name).
+
+%% repl_set_meta_catalog(+SessionId, +CatalogText)
+repl_set_meta_catalog(SessionId, CatalogText) :-
+    retractall(session_meta_catalog(SessionId, _)),
+    assertz(session_meta_catalog(SessionId, CatalogText)).
+
+%% repl_read_clause(+SessionId, +ClauseText, -Clause)
+repl_read_clause(SessionId, ClauseText, Clause) :-
+    ensure_full_stop(ClauseText, Text1),
+    open_string(Text1, Stream),
+    read_term(Stream, Clause, [module(SessionId)]),
+    close(Stream).
+
+%% repl_assert(+SessionId, +ClauseText, -Result)
+%% Parses and asserts generated DML through process_clause/2 (so tool schemas,
+%% dict-dot expansion, and interpolation behave exactly as on load).
+%% Refused when frozen; reserved names are rejected.
+repl_assert(SessionId, ClauseText, Result) :-
+    catch(
+        (   guard_not_frozen(SessionId),
+            repl_read_clause(SessionId, ClauseText, Clause),
+            (   repl_protected_clause(Clause)
+            ->  throw(error(permission_error(modify, reserved_name, Clause),
+                        context(repl_assert/3, 'cannot define a reserved predicate')))
+            ;   process_clause(Clause, SessionId)
+            ),
+            Result = ok
+        ),
+        AssertError,
+        format(atom(Result), 'error(~w)', [AssertError])
+    ).
+
+%% repl_retract(+SessionId, +ClausePattern, -Result)
+%% Retracts matching user clauses. Reserved names are protected.
+repl_retract(SessionId, ClauseText, Result) :-
+    catch(
+        (   guard_not_frozen(SessionId),
+            repl_read_clause(SessionId, ClauseText, Clause),
+            (   repl_protected_clause(Clause)
+            ->  throw(error(permission_error(modify, reserved_name, Clause),
+                        context(repl_retract/3, 'cannot retract a reserved predicate')))
+            ;   true
+            ),
+            functor(Clause, Name, Arity),
+            functor(Head, Name, Arity),
+            retractall(SessionId:Head),
+            (   session_user_tools(SessionId, Name)
+            ->  retractall(session_user_tools(SessionId, Name)),
+                retractall(session_user_tool_schema(SessionId, Name, _)),
+                retractall(SessionId:tool_source(Name, _))
+            ;   true
+            ),
+            Result = ok
+        ),
+        RetractError,
+        format(atom(Result), 'error(~w)', [RetractError])
+    ).
+
+%% repl_extract_code(+Text, -Source)
+%% Extracts a ```dml fenced block; falls back to the whole answer.
+repl_extract_code(Text, Source) :-
+    atom_string(TextAtom, Text),
+    (   sub_string(TextAtom, Start0, _, _, "```dml")
+    ->  Start is Start0 + 6,
+        sub_string(TextAtom, Start, _, _, Rest),
+        (   sub_string(Rest, 0, End, _, "```")
+        ->  sub_string(Rest, 0, End, _, Source)
+        ;   Source = Rest
+        )
+    ;   Source = TextAtom
+    ).
+
+%% repl_entry_goal(+SessionId, -Goal)
+repl_entry_goal(SessionId, Goal) :-
+    (   current_predicate(SessionId:repl_entry/1),
+        SessionId:repl_entry(Entry)
+    ->  Goal = Entry
+    ;   Goal = none
+    ).
+
+%% repl_manifest(+SessionId, -ManifestText)
+%% Compact signatures + tools + entries + directives for the meta prompt.
+repl_manifest(SessionId, Manifest) :-
+    findall(Name/Arity,
+        (   current_predicate(SessionId:Name/Arity),
+            repl_user_predicate(SessionId, Name, Arity)
+        ),
+        Preds0),
+    sort(Preds0, Preds),
+    (   current_predicate(SessionId:repl_entry/1)
+    ->  findall(Entry, SessionId:repl_entry(Entry), Entries0)
+    ;   Entries0 = []
+    ),
+    sort(Entries0, Entries),
+    findall(Name, session_user_tool_schema(SessionId, Name, _), Tools0),
+    sort(Tools0, Tools),
+    findall(Directive, session_directive(SessionId, Directive), Directives0),
+    sort(Directives0, Directives),
+    with_output_to(string(Manifest),
+        (   format("- predicates: ~w~n", [Preds]),
+            format("- tools: ~w~n", [Tools]),
+            format("- entries: ~w~n", [Entries]),
+            format("- directives: ~w~n", [Directives])
+        )).
+
+%% repl_meta_memory_text(+SessionId, -Text)
+repl_meta_memory_text(SessionId, Text) :-
+    (   session_meta_memory(SessionId, Memory)
+    ->  true
+    ;   Memory = []
+    ),
+    findall(Content,
+        (   member(message{role: Role, content: Content}, Memory),
+            (Role == user ; Role == assistant)
+        ),
+        Contents0),
+    last_n(Contents0, 6, Recent),
+    with_output_to(string(Text), forall(member(C, Recent), format("- ~w~n", [C]))).
+
+last_n(List, N, Tail) :-
+    length(List, Len),
+    (   Len =< N
+    ->  Tail = List
+    ;   Skip is Len - N,
+        length(Prefix, Skip),
+        append(Prefix, Tail, List)
+    ).
+
+%% repl_meta_prompt(+SessionId, +Request, -PromptText)
+%% Assembles the deterministic code-writing prompt: authoring contract, host
+%% tool catalog, harness manifest, recent meta memory, the request, and the
+%% output contract.
+repl_meta_prompt(SessionId, Request, Prompt) :-
+    (   session_meta_catalog(SessionId, Catalog) -> true ; Catalog = "" ),
+    repl_manifest(SessionId, Manifest),
+    repl_meta_memory_text(SessionId, MemoryText),
+    with_output_to(string(Prompt),
+        (   format("You are the DeepClause REPL harness author. Grow a living DML module.~n~n"),
+            format("AUTHORING CONTRACT~n"),
+            format("- Emit only valid DML. There is no Markdown->DML compiler; the code you return is loaded directly.~n"),
+            format("- Reserve the repl_* and meta_* namespaces. Never define repl_entry or repl_delete as logic; repl_entry(Goal) declares the default entry.~n"),
+            format("- For every predicate you change, return its COMPLETE definition. The commit replaces by predicate, so partial definitions lose clauses.~n"),
+            format("- Define facts with head. and rules with 'head :- body.'.~n"),
+            format("- Use task(Desc, ...Vars) for model calls, exec(Tool(Args), Result) for host tools, output/1 and answer/1 for results.~n"),
+            format("- Prefer CLP(FD)/CLP(Q) for arithmetic constraints. File I/O uses the MI predicates open/3, close/1, read_string/3, write/2, write_file/2, read_file/2, append_file/2 (paths resolve under the workspace).~n"),
+            format("- SELF-CONTAINMENT: any Python/JS/shell/SQL code a tool needs must be embedded in the harness as a string fact (script_body/2, python_source/2, js_source/2, shell_source/2) and materialized at run time with write_file/2. Never leave it only as a side file.~n"),
+            format("- Naming: there is no agent_main requirement. Name predicates descriptively and declare entries with repl_entry/1. To delete a predicate, emit repl_delete(Name/Arity) as a directive fact.~n"),
+            format("- Call the listing tool before writing so you build on the current harness.~n~n"),
+            format("HOST TOOL CATALOG (only these names may be called through exec/2; listing(tools) has full schemas)~n~w~n~n", [Catalog]),
+            format("CURRENT HARNESS MANIFEST~n~w~n~n", [Manifest]),
+            format("RECENT PROMPTS~n~w~n~n", [MemoryText]),
+            format("USER REQUEST~n~w~n~n", [Request]),
+            format("OUTPUT CONTRACT~n"),
+            format("Return the complete DML definitions for every predicate this turn touches.~n"),
+            format("Set the DMLCode output variable to the DML source (optionally wrapped in a fenced dml block).~n"),
+            format("Set the EntryGoal output variable to the goal to run after committing (for example weekly_report), or leave it empty for a definitions-only commit.~n")
+        )).
+
+repl_meta_prompt(Request, Prompt) :-
+    get_session_id(SessionId),
+    repl_meta_prompt(SessionId, Request, Prompt).
+
+%% repl_run_meta(+SessionId, +PromptText, -FrameId, -Error)
+%% Creates the meta frame running the code-writing task.
+repl_run_meta(SessionId, PromptText, FrameId, Error) :-
+    catch(
+        (   repl_initial_state(SessionId, meta, BaseState),
+            (   session_meta_memory(SessionId, MetaMemory)
+            ->  true
+            ;   MetaMemory = []
+            ),
+            State = BaseState.put(memory, MetaMemory),
+            create_frame_raw(SessionId, meta, 0,
+                deepclause_mi:repl_meta_solve(PromptText, SessionId, State),
+                FrameId),
+            Error = none
+        ),
+        CreateError,
+        format(atom(Error), '~w', [CreateError])
+    ).
+
+repl_meta_solve(PromptText, SessionId, State) :-
+    nb_setval(current_session_id, SessionId),
+    catch(
+        (   mi_call(
+                task_named(PromptText, [DMLCode, EntryGoal],
+                    [typed_var{name:'DMLCode', type:string},
+                     typed_var{name:'EntryGoal', type:string}]),
+                State, StateOut),
+            store_meta_memory(SessionId, StateOut),
+            engine_yield(meta_result(DMLCode, EntryGoal))
+        ),
+        MetaError,
+        (   format(atom(Msg), '~w', [MetaError]),
+            engine_yield(error(Msg))
+        )
+    ).
+
+store_meta_memory(SessionId, State) :-
+    (   is_dict(State),
+        get_dict(memory, State, Memory)
+    ->  retractall(session_meta_memory(SessionId, _)),
+        assertz(session_meta_memory(SessionId, Memory))
+    ;   true
+    ).
+
+%% repl_record_meta(+SessionId, +Request, +Summary)
+%% Appends a short outcome note to meta memory (bounded).
+repl_record_meta(SessionId, Request, Summary) :-
+    (   session_meta_memory(SessionId, Memory)
+    ->  true
+    ;   Memory = []
+    ),
+    append(Memory,
+        [message{role: user, content: Request},
+         message{role: assistant, content: Summary}],
+        Combined),
+    last_n(Combined, 12, Bounded),
+    retractall(session_meta_memory(SessionId, _)),
+    assertz(session_meta_memory(SessionId, Bounded)).
+
+%% ---- Edit transactions ----
+
+%% repl_snapshot_save(+SessionId)
+%% Snapshots the living module, tool bookkeeping, directives, and harness
+%% memory so a failed prompt leaves the harness untouched.
+repl_snapshot_save(SessionId) :-
+    retractall(repl_snapshot(SessionId, _)),
+    findall(Clause,
+        (   current_predicate(SessionId:Name/Arity),
+            repl_user_predicate(SessionId, Name, Arity),
+            functor(Head, Name, Arity),
+            clause(SessionId:Head, Body),
+            (   Body == true
+            ->  Clause = Head
+            ;   Clause = (Head :- Body)
+            )
+        ),
+        Clauses),
+    findall(Name, session_user_tools(SessionId, Name), Tools),
+    findall(Name-Schema, session_user_tool_schema(SessionId, Name, Schema), Schemas),
+    (   current_predicate(SessionId:tool_source/2)
+    ->  findall(Name-Source, SessionId:tool_source(Name, Source), ToolSources)
+    ;   ToolSources = []
+    ),
+    findall(Directive, session_directive(SessionId, Directive), Directives),
+    (   session_repl_memory(SessionId, Memory) -> true ; Memory = [] ),
+    assertz(repl_snapshot(SessionId, snapshot{
+        clauses: Clauses,
+        tools: Tools,
+        schemas: Schemas,
+        tool_sources: ToolSources,
+        directives: Directives,
+        memory: Memory
+    })).
+
+%% repl_snapshot_restore(+SessionId)
+repl_snapshot_restore(SessionId) :-
+    (   repl_snapshot(SessionId, Snapshot)
+    ->  retract(repl_snapshot(SessionId, Snapshot)),
+        findall(Name/Arity,
+            (   current_predicate(SessionId:Name/Arity),
+                repl_user_predicate(SessionId, Name, Arity)
+            ),
+            Preds),
+        forall(member(AbName/AbArity, Preds),
+            catch(abolish(SessionId:AbName/AbArity), _, true)),
+        forall(member(Clause, Snapshot.clauses), assertz(SessionId:Clause)),
+        retractall(session_user_tools(SessionId, _)),
+        forall(member(Tool, Snapshot.tools), assertz(session_user_tools(SessionId, Tool))),
+        retractall(session_user_tool_schema(SessionId, _, _)),
+        forall(member(SchemaName-Schema, Snapshot.schemas),
+            assertz(session_user_tool_schema(SessionId, SchemaName, Schema))),
+        (   current_predicate(SessionId:tool_source/2)
+        ->  retractall(SessionId:tool_source(_, _))
+        ;   true
+        ),
+        forall(member(SourceName-Source, Snapshot.tool_sources),
+            assertz(SessionId:tool_source(SourceName, Source))),
+        retractall(session_directive(SessionId, _)),
+        forall(member(Directive, Snapshot.directives),
+            assertz(session_directive(SessionId, Directive))),
+        retractall(session_repl_memory(SessionId, _)),
+        assertz(session_repl_memory(SessionId, Snapshot.memory))
+    ;   true
+    ).
+
+%% repl_parse_source(+Source, -Preds, -Error)
+%% Validates generated DML and collects the predicates it defines.
+repl_parse_source(Source, Preds, Error) :-
+    catch(
+        (   open_string(Source, Stream),
+            repl_collect_source_predicates(Stream, Preds0),
+            close(Stream),
+            sort(Preds0, Preds),
+            Error = none
+        ),
+        ParseError,
+        format(atom(Error), '~w', [ParseError])
+    ).
+
+repl_collect_source_predicates(Stream, Preds) :-
+    read_term(Stream, Term, []),
+    (   Term == end_of_file
+    ->  Preds = []
+    ;   (   Term = (:- _)
+        ->  Preds = Rest
+        ;   Term = repl_delete(_)
+        ->  Preds = Rest
+        ;   Term = (Head :- _)
+        ->  functor(Head, Name, Arity),
+            Preds = [Name/Arity|Rest]
+        ;   functor(Term, Name, Arity),
+            Preds = [Name/Arity|Rest]
+        ),
+        repl_collect_source_predicates(Stream, Rest)
+    ).
+
+%% repl_commit(+SessionId, +Source, +EntryGoalText, -Result)
+%% Transactional commit: validate, replace-by-predicate, then load the returned
+%% source. Result = ok | 'error(Message)'. Never throws; failures are reported
+%% through Result so the caller can decide whether to repair.
+repl_commit(SessionId, Source, EntryGoalText, Result) :-
+    catch(
+        repl_commit_unsafe(SessionId, Source, EntryGoalText, Result),
+        CommitError,
+        format(atom(Result), 'error(~w)', [CommitError])
+    ).
+
+repl_commit_unsafe(SessionId, Source, EntryGoalText, Result) :-
+    guard_not_frozen(SessionId),
+    repl_parse_source(Source, Preds, ParseError),
+    repl_commit_from_parse(SessionId, Source, Preds, EntryGoalText, ParseError, Result).
+
+repl_commit_from_parse(_SessionId, _Source, _Preds, _EntryGoalText, ParseError, Result) :-
+    ParseError \== none,
+    !,
+    commit_error(ParseError, Result).
+repl_commit_from_parse(SessionId, Source, Preds, EntryGoalText, none, Result) :-
+    forall(member(Name/Arity, Preds),
+        catch(abolish(SessionId:Name/Arity), _, true)),
+    load_code(SessionId, Source, LoadError),
+    repl_commit_from_load(SessionId, EntryGoalText, LoadError, Result).
+
+repl_commit_from_load(_SessionId, _EntryGoalText, LoadError, Result) :-
+    LoadError \== none,
+    !,
+    commit_error(LoadError, Result).
+repl_commit_from_load(SessionId, EntryGoalText, none, Result) :-
+    (   EntryGoalText \== "", EntryGoalText \== none
+    ->  (   catch(read_repl_goal(SessionId, EntryGoalText, Goal, _), _, fail)
+        ->  retractall(session_repl_entry(SessionId, _)),
+            assertz(session_repl_entry(SessionId, Goal)),
+            Result = ok
+        ;   Result = 'error(invalid EntryGoal)'
+        )
+    ;   repl_entry_goal(SessionId, EntryGoal),
+        retractall(session_repl_entry(SessionId, _)),
+        assertz(session_repl_entry(SessionId, EntryGoal)),
+        Result = ok
+    ).
+
+commit_error(Message, Result) :-
+    format(atom(Result), 'error(~w)', [Message]).
+
+%% repl_start_entry(+SessionId, -HasEntry, -Error)
+%% Creates an object frame for the resolved entry goal (if any).
+repl_start_entry(SessionId, HasEntry, Error) :-
+    catch(
+        (   (   session_repl_entry(SessionId, Goal),
+                Goal \== none,
+                Goal \== ''
+            ->  repl_initial_state(SessionId, object, State),
+                create_frame(SessionId, object, 0, Goal, State, FrameId),
+                retractall(session_default_frame(SessionId, _)),
+                assertz(session_default_frame(SessionId, FrameId)),
+                session_frame_engine(FrameId, Engine),
+                retractall(session_engine(SessionId, _)),
+                assertz(session_engine(SessionId, Engine)),
+                HasEntry = true
+            ;   HasEntry = false
+            ),
+            Error = none
+        ),
+        StartError,
+        format(atom(Error), '~w', [StartError])
+    ).
+
+%% repl_execute_frame(+SessionId, +GoalText, -FrameId, -Error)
+%% Creates a child frame for the meta `execute` tool.
+repl_execute_frame(SessionId, GoalText, FrameId, Error) :-
+    catch(
+        (   read_repl_goal(SessionId, GoalText, Goal, Names),
+            repl_initial_state(SessionId, nested, State),
+            create_frame_raw(SessionId, nested, 1,
+                deepclause_mi:repl_solve(Goal, Names, SessionId, State),
+                FrameId),
+            Error = none
+        ),
+        ExecuteError,
+        format(atom(Error), '~w', [ExecuteError])
+    ).
+
 %% determine_agent_goal(+SessionId, +Args, -Goal)
 %% Args is a list of positional arguments - passed directly to agent_main
 %% Prefers arity that matches the number of arguments provided
@@ -1227,6 +1676,9 @@ process_engine_result(tool_result(Result), tool_result, '',
 %% Goal-mode solution: bindings is a list of Name-RenderedText pairs.
 process_engine_result(solution(Bindings, Deterministic), solution, '',
     payload{bindings: Bindings, deterministic: Deterministic}) :- !.
+%% Prompt-mode meta task result: the generated DML source and entry goal.
+process_engine_result(meta_result(Code, Entry), meta_result, '',
+    payload{code: Code, entry: Entry}) :- !.
 process_engine_result(wait_input(Prompt), wait_input, Prompt, none) :- !.
 process_engine_result(error(Msg), error, Msg, none) :- !.
 process_engine_result(Other, error, Msg, none) :-

@@ -94,6 +94,8 @@ export interface LLMBackendRequest {
   signal?: AbortSignal;
   /** Receives model text as it becomes available. Backends may emit one final chunk. */
   onText?: (chunk: string) => void;
+  /** Receives reasoning/thinking text as it becomes available (display only). */
+  onReasoning?: (chunk: string) => void;
 }
 
 export interface LLMBackendResponse {
@@ -101,6 +103,8 @@ export interface LLMBackendResponse {
   toolCalls?: LLMBackendToolCall[];
   usage?: LLMUsage;
   finishReason?: 'stop' | 'length' | 'tool_use' | 'error' | 'aborted';
+  /** Accumulated reasoning/thinking text (display only; not written to DML memory). */
+  reasoning?: string;
   /** Opaque host-native assistant message to replay on a subsequent backend call. */
   providerData?: unknown;
 }
@@ -236,10 +240,12 @@ export interface FrameEventMeta {
 }
 
 export interface DMLEvent extends FrameEventMeta {
-  type: 'output' | 'log' | 'answer' | 'input_required' | 'error' | 'finished' | 'stream' | 'tool_call' | 'usage' | 'memory_compaction' | 'task_activity' | 'solution';
+  type: 'output' | 'log' | 'answer' | 'input_required' | 'error' | 'finished' | 'stream' | 'reasoning' | 'tool_call' | 'usage' | 'memory_compaction' | 'task_activity' | 'solution' | 'meta_result';
   content?: string;
   /** Goal-mode solution (only for 'solution' events). */
   solution?: DMLSolution;
+  /** Prompt-mode meta task result (only for 'meta_result' events). */
+  metaResult?: { code: string; entry: string };
   prompt?: string;
   /** Execution trace (only present in 'finished' event when trace mode enabled) */
   trace?: TraceEntry[];

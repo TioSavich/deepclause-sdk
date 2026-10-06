@@ -241,9 +241,12 @@ export async function dispatchReplInput(
     case 'goal':
       await runGoalWithRenderer(repl, input.goal, { first: options.first, renderer });
       return true;
-    case 'prompt':
-      print('prompt mode not yet available (M3)');
+    case 'prompt': {
+      for await (const event of repl.prompt(input.prompt)) {
+        renderer.render(event);
+      }
       return true;
+    }
     default:
       return true;
   }

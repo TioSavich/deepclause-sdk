@@ -32,11 +32,19 @@ export interface HarnessReplOptions {
   provider: 'openai' | 'anthropic' | 'google' | 'openrouter';
   temperature?: number;
   maxTokens?: number;
+  /** Stream model text/reasoning/tool events. Defaults to true for the REPL. */
+  streaming?: boolean;
   llmBackend?: LLMBackend;
   tools?: Map<string, ToolDefinition>;
   toolPolicy?: ToolPolicy | null;
   onInputRequired?: (prompt: string) => Promise<string>;
   initialHarnessMemory?: MemoryMessage[];
+  /** Prompt-mode repair attempts after an invalid commit (default 1). */
+  repairRounds?: number;
+  /** Host tool catalog text injected into the meta prompt (M5). */
+  hostToolsCatalog?: string;
+  /** Human-in-the-loop channel for the meta ask_user tool (M6). */
+  askUser?: (prompt: string, options?: string[]) => Promise<{ answer: string } | { cancelled: true }>;
 }
 
 export interface HarnessRepl {
@@ -73,9 +81,8 @@ class HarnessReplImpl implements HarnessRepl {
     return this.session.query(goal, opts);
   }
 
-  // eslint-disable-next-line require-yield
-  async *prompt(): AsyncGenerator<ReplEvent> {
-    throw new Error('Prompt mode is not available yet (M3)');
+  prompt(request: string, opts?: RunOpts): AsyncGenerator<ReplEvent> {
+    return this.session.prompt(request, opts);
   }
 
   load(file: string): Promise<{ error?: string }> {
@@ -125,11 +132,15 @@ export async function createHarnessRepl(options: HarnessReplOptions): Promise<Ha
     tools: options.tools,
     toolPolicy: options.toolPolicy,
     onInputRequired: options.onInputRequired,
+    repairRounds: options.repairRounds,
+    hostToolsCatalog: options.hostToolsCatalog,
+    askUser: options.askUser,
     runnerOptions: {
       model: options.model,
       provider: options.provider,
       temperature: options.temperature ?? 0.7,
       maxTokens: options.maxTokens ?? 65536,
+      streaming: options.streaming ?? true,
       llmBackend: options.llmBackend,
     },
   });

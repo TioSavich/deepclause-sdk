@@ -73,6 +73,8 @@ export interface AgentLoopOptions {
   };
   onOutput: (text: string) => void;
   onStream?: (chunk: string, done: boolean) => void;
+  /** Reasoning/thinking deltas, surfaced as the `reasoning` DMLEvent. */
+  onReasoning?: (chunk: string, done: boolean) => void;
   onToolCall?: (toolName: string, args: Record<string, unknown>) => void;
   onUsage?: (usage: import('./types.js').LLMUsage) => void;
   onBeforeModelCall?: (messages: MemoryMessage[], lastInputTokens?: number) => Promise<MemoryMessage[]>;
@@ -629,6 +631,7 @@ async function runInjectedAgentLoop(
     if (options.signal?.aborted) break;
 
     let emittedText = false;
+    let emittedReasoning = false;
     const response = await backend.complete({
       messages,
       tools: backendTools,
@@ -641,6 +644,12 @@ async function runInjectedAgentLoop(
             options.onStream?.(chunk, false);
           }
         : undefined,
+      onReasoning: options.streaming && options.onReasoning
+        ? (chunk) => {
+            emittedReasoning = emittedReasoning || chunk.length > 0;
+            options.onReasoning?.(chunk, false);
+          }
+        : undefined,
     });
 
     if (response.usage) options.onUsage?.(response.usage);
@@ -649,6 +658,13 @@ async function runInjectedAgentLoop(
     }
     if (options.streaming && options.onStream && response.text) {
       options.onStream('', true);
+    }
+    if (options.streaming && options.onReasoning && response.reasoning && !emittedReasoning) {
+      options.onReasoning(response.reasoning, false);
+      emittedReasoning = true;
+    }
+    if (options.streaming && options.onReasoning && emittedReasoning) {
+      options.onReasoning('', true);
     }
     if (response.text) {
       state.outputs.push(response.text);
@@ -739,6 +755,7 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<AgentLoop
     modelOptions,
     onOutput,
     onStream,
+    onReasoning,
     onToolCall,
     onUsage,
     signal,
@@ -1047,6 +1064,7 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<AgentLoop
               }
               reasoningChunks++;
               reasoningChars += (part as { text?: string }).text?.length ?? 0;
+              onReasoning?.((part as { text?: string }).text ?? '', false);
               break;
 
             case 'tool-input-delta':
@@ -1105,6 +1123,9 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<AgentLoop
 
         if (fullText) {
           onStream('', true);
+        }
+        if (reasoningChunks > 0) {
+          onReasoning?.('', true);
         }
 
         // Emit usage data from the last step
