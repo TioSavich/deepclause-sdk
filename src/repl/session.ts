@@ -42,6 +42,10 @@ export interface DMLSessionOptions {
   initialHarnessMemory?: MemoryMessage[];
   /** Prompt-mode repair attempts after an invalid commit (default 1). */
   repairRounds?: number;
+  /** Maximum nested frame depth (meta -> execute -> object task). Default 3. */
+  maxDepth?: number;
+  /** Maximum model calls across all frames for one turn (default 24; 0 = unlimited). */
+  maxModelCalls?: number;
   /** Host tool catalog text injected into the meta prompt (M5). */
   hostToolsCatalog?: string;
   /** Human-in-the-loop channel for the meta ask_user tool (M6). */
@@ -77,8 +81,14 @@ export class DMLSession {
   private toolPolicy: ToolPolicy | null;
   private onInputRequired: (prompt: string) => Promise<string>;
   private repairRounds: number;
+  private maxDepth: number;
+  private maxModelCalls: number;
   private hostToolsCatalog?: string;
   private askUser?: (prompt: string, options?: string[]) => Promise<{ answer: string } | { cancelled: true }>;
+  /** Current nested frame depth (used for the depth budget). */
+  private frameDepth = 0;
+  /** Model calls made in the current turn (shared across all frames). */
+  private modelCallsThisTurn = 0;
   private disposed = false;
 
   private constructor(swipl: SWIPLModule, options: DMLSessionOptions) {
@@ -92,6 +102,8 @@ export class DMLSession {
     this.toolPolicy = options.toolPolicy ?? null;
     this.onInputRequired = options.onInputRequired ?? (async () => '');
     this.repairRounds = options.repairRounds ?? 1;
+    this.maxDepth = options.maxDepth ?? 3;
+    this.maxModelCalls = options.maxModelCalls ?? 24;
     this.hostToolsCatalog = options.hostToolsCatalog;
     this.askUser = options.askUser;
     this.runner = new DMLRunner(swipl, options.runnerOptions);
@@ -183,6 +195,7 @@ export class DMLSession {
       yield { type: 'error', content: 'Session has been disposed' };
       return;
     }
+    this.modelCallsThisTurn = 0;
     const frameKind = options.frameKind ?? 'object';
     const start = this.prologQuery(
       `deepclause_mi:repl_initial_state('${this.sessionId}', ${frameKind}, State), `
@@ -288,6 +301,16 @@ export class DMLSession {
    * module and may itself call task() (RLM-style recursion).
    */
   async executeGoal(goal: string, limit = 5): Promise<ExecuteResult> {
+    const childDepth = this.frameDepth + 1;
+    if (childDepth > this.maxDepth) {
+      return {
+        bindings: [],
+        solutions: [],
+        output: '',
+        error: `maximum frame depth (${this.maxDepth}) exceeded`,
+      };
+    }
+
     const start = this.prologQuery(
       `deepclause_mi:repl_execute_frame('${this.sessionId}', ${quoteString(goal)}, FrameId, Error)`
     );
@@ -304,6 +327,7 @@ export class DMLSession {
     const solutions: ExecuteResult['solutions'] = [];
     let output = '';
     let runError: string | undefined;
+    this.frameDepth = childDepth;
     try {
       for await (const event of this.runner.runFrame(frame.id, this.buildRunOptions({}))) {
         if (event.type === 'solution' && solutions.length < limit) {
@@ -316,6 +340,7 @@ export class DMLSession {
       }
     } finally {
       this.runner.endFrame(frame.id);
+      this.frameDepth = childDepth - 1;
     }
 
     return {
@@ -342,6 +367,7 @@ export class DMLSession {
     }
 
     const runOptions = this.buildRunOptions(options);
+    this.modelCallsThisTurn = 0;
     let succeeded = false;
     let lastError: string | undefined;
     let currentRequest = request;
@@ -393,6 +419,7 @@ export class DMLSession {
         let code = '';
         let entry = '';
         let metaFailed: string | undefined;
+        this.frameDepth = 1;
         try {
           for await (const event of this.runner.runFrame(metaFrame.id, { ...runOptions, metaTools })) {
             if (event.type === 'meta_result') {
@@ -405,8 +432,12 @@ export class DMLSession {
               yield event;
             }
           }
+        } catch (error) {
+          metaFailed = error instanceof Error ? error.message : String(error);
+          yield { type: 'error', content: metaFailed };
         } finally {
           this.runner.endFrame(metaFrame.id);
+          this.frameDepth = 0;
         }
 
         // 4. Discard scratch edits.
@@ -452,12 +483,16 @@ export class DMLSession {
         if (hasEntry) {
           const entryFrame = this.runner.registerDefaultFrame('object');
           if (entryFrame) {
+            this.frameDepth = 1;
             try {
               for await (const event of this.runner.runFrame(entryFrame.id, runOptions)) {
                 yield event;
               }
+            } catch (error) {
+              yield { type: 'error', content: error instanceof Error ? error.message : String(error) };
             } finally {
               this.runner.endFrame(entryFrame.id);
+              this.frameDepth = 0;
             }
           }
           summary += ' and ran the declared entry';
@@ -499,7 +534,17 @@ export class DMLSession {
       toolPolicy: options.toolPolicy ?? this.toolPolicy,
       onInputRequired: options.onInputRequired ?? this.onInputRequired,
       signal: options.signal,
+      onModelCall: () => this.reserveModelCall(),
     };
+  }
+
+  /** Reserve one model call for the current turn; false when exhausted. */
+  private reserveModelCall(): boolean {
+    if (this.maxModelCalls > 0 && this.modelCallsThisTurn >= this.maxModelCalls) {
+      return false;
+    }
+    this.modelCallsThisTurn += 1;
+    return true;
   }
 
   private prologQuery(goal: string): Record<string, unknown> | null {

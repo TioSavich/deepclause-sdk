@@ -27,6 +27,8 @@ export interface ReplCliOptions {
   provider?: string;
   temperature?: number;
   gasLimit?: number;
+  depth?: number;
+  maxModelCalls?: number;
   param?: Record<string, string>;
   verbose?: boolean;
   color?: boolean;
@@ -166,6 +168,9 @@ export async function createReplRuntime(options: ReplCliOptions): Promise<ReplRu
     temperature: options.temperature ?? config.temperatures.run,
     params: options.param ?? {},
     gasLimit: options.gasLimit,
+    maxDepth: options.depth ?? config.repl.maxDepth,
+    maxModelCalls: options.maxModelCalls ?? config.repl.maxModelCalls,
+    repairRounds: config.repl.repairRounds,
     onInputRequired: async () => '',
   });
 
@@ -441,6 +446,8 @@ export function registerReplCommand(program: Command): void {
     .option('--provider <provider>', 'override the configured provider')
     .option('--temperature <number>', 'override temperature (0.0-2.0)', parseFloat)
     .option('--gas-limit <number>', 'per-frame step limit', parseInt)
+    .option('--depth <number>', 'maximum nested frame depth (default 3)', parseInt)
+    .option('--max-model-calls <number>', 'maximum model calls per turn (default 24)', parseInt)
     .option('-P, --param <key=value>', 'session parameter (repeatable)', collectParams, {})
     .option('-f, --freeze', 'start with the harness frozen (read-only lock)')
     .option('--locked', 'like --freeze, but forbid unfreeze for this process')
@@ -460,6 +467,8 @@ export function registerReplCommand(program: Command): void {
         provider: options.provider,
         temperature: options.temperature,
         gasLimit: options.gasLimit,
+        depth: options.depth,
+        maxModelCalls: options.maxModelCalls,
         param: options.param,
         verbose: Boolean(options.verbose || options.debug),
         color: options.color,

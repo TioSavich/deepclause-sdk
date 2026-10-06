@@ -96,10 +96,10 @@ export class ReplRenderer {
         this.solution(event.solution?.bindings ?? []);
         break;
       case 'output':
-        this.writeLine(event.content ?? '');
+        this.writeLine(`${this.indentFor(event)}${event.content ?? ''}`);
         break;
       case 'answer':
-        this.writeLine(this.paint(event.content ?? '', ANSI.bold));
+        this.writeLine(`${this.indentFor(event)}${this.paint(event.content ?? '', ANSI.bold)}`);
         break;
       case 'stream':
         this.sink(event.content ?? '');
@@ -111,24 +111,24 @@ export class ReplRenderer {
         break;
       case 'log':
         if (this.verbose) {
-          this.writeLine(this.paint(`[log] ${event.content ?? ''}`, ANSI.dim));
+          this.writeLine(this.paint(`${this.indentFor(event)}[log] ${event.content ?? ''}`, ANSI.dim));
         }
         break;
       case 'task_activity':
         if (this.verbose && event.taskState && event.taskDescription) {
-          this.writeLine(this.paint(`[task ${event.taskState}] ${event.taskDescription}`, ANSI.dim));
+          this.writeLine(this.paint(`${this.indentFor(event)}[task ${event.taskState}] ${event.taskDescription}`, ANSI.dim));
         }
         break;
       case 'tool_call':
         if (event.toolName) {
-          this.writeLine(this.paint(`  ⚙ ${event.toolName}${formatArgs(event.toolArgs)}`, ANSI.dim));
+          this.writeLine(this.paint(`${this.indentFor(event)}  ⚙ ${event.toolName}${formatArgs(event.toolArgs)}`, ANSI.dim));
         }
         break;
       case 'input_required':
-        this.writeLine(this.paint(`? ${event.prompt ?? ''}`, ANSI.bold));
+        this.writeLine(this.paint(`${this.indentFor(event)}? ${event.prompt ?? ''}`, ANSI.bold));
         break;
       case 'error':
-        this.writeErrorLine(this.paint(`ERROR: ${event.content ?? ''}`, ANSI.red));
+        this.writeErrorLine(this.paint(`${this.indentFor(event)}ERROR: ${event.content ?? ''}`, ANSI.red));
         break;
       case 'usage':
         if (this.verbose && event.usage) {
@@ -167,6 +167,12 @@ export class ReplRenderer {
     lines.forEach((line, index) => {
       this.writeLine(index === last ? `${line}${terminator ?? '.'}` : line);
     });
+  }
+
+  /** Indent nested frame activity (execute children run at depth >= 1). */
+  private indentFor(event: DMLEvent): string {
+    const depth = event.depth ?? 0;
+    return depth > 0 ? '  '.repeat(depth) : '';
   }
 
   private paint(text: string, code: string): string {

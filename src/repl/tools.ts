@@ -46,6 +46,17 @@ function textResult(message: string): Record<string, unknown> {
 export function createMetaTools(ctx: MetaToolContext): Map<string, ToolDefinition> {
   const tools = new Map<string, ToolDefinition>();
 
+  // The AI SDK may issue several tool calls from one assistant message and run
+  // them concurrently. Meta tools mutate the shared session and create child
+  // frames, so serialize them: a child frame must run to completion before the
+  // meta frame resumes (proposal §10.3).
+  let queue: Promise<unknown> = Promise.resolve();
+  const serialized = <T>(fn: () => Promise<T>): Promise<T> => {
+    const run = queue.then(fn, fn);
+    queue = run.then(() => undefined, () => undefined);
+    return run;
+  };
+
   tools.set('listing', {
     description: 'Read-only listing of the living harness: predicates, a Name/Arity, tools, or scripts.',
     parameters: {
@@ -58,14 +69,14 @@ export function createMetaTools(ctx: MetaToolContext): Map<string, ToolDefinitio
       },
       required: [],
     },
-    execute: async (args) => {
+    execute: (args) => serialized(async () => {
       const filter = String(args.filter ?? 'all').trim() || 'all';
       const result = ctx.prologQuery(
         `deepclause_mi:repl_listing('${ctx.sessionId}', ${listingFilterTerm(filter)}, Text)`
       );
       const text = plainValue(result?.Text);
       return textResult(typeof text === 'string' ? text : '');
-    },
+    }),
   });
 
   tools.set('assert', {
@@ -77,7 +88,7 @@ export function createMetaTools(ctx: MetaToolContext): Map<string, ToolDefinitio
       },
       required: ['clause'],
     },
-    execute: async (args) => {
+    execute: (args) => serialized(async () => {
       if (ctx.isFrozen()) {
         return { ok: false, error: 'harness is frozen; assert is disabled' };
       }
@@ -90,7 +101,7 @@ export function createMetaTools(ctx: MetaToolContext): Map<string, ToolDefinitio
         return { ok: true };
       }
       return { ok: false, error: String(outcome) };
-    },
+    }),
   });
 
   tools.set('retract', {
@@ -102,7 +113,7 @@ export function createMetaTools(ctx: MetaToolContext): Map<string, ToolDefinitio
       },
       required: ['clause'],
     },
-    execute: async (args) => {
+    execute: (args) => serialized(async () => {
       if (ctx.isFrozen()) {
         return { ok: false, error: 'harness is frozen; retract is disabled' };
       }
@@ -115,7 +126,7 @@ export function createMetaTools(ctx: MetaToolContext): Map<string, ToolDefinitio
         return { ok: true };
       }
       return { ok: false, error: String(outcome) };
-    },
+    }),
   });
 
   tools.set('execute', {
@@ -128,11 +139,11 @@ export function createMetaTools(ctx: MetaToolContext): Map<string, ToolDefinitio
       },
       required: ['goal'],
     },
-    execute: async (args) => {
+    execute: (args) => serialized(async () => {
       const goal = String(args.goal ?? '');
       const limit = typeof args.limit === 'number' ? args.limit : undefined;
       return ctx.executeGoal(goal, limit);
-    },
+    }),
   });
 
   if (ctx.askUser) {
@@ -146,11 +157,11 @@ export function createMetaTools(ctx: MetaToolContext): Map<string, ToolDefinitio
         },
         required: ['prompt'],
       },
-      execute: async (args) => {
+      execute: (args) => serialized(async () => {
         const prompt = String(args.prompt ?? '');
         const options = Array.isArray(args.options) ? args.options.map(String) : undefined;
         return ctx.askUser!(prompt, options);
-      },
+      }),
     });
   }
 

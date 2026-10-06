@@ -78,6 +78,8 @@ export interface AgentLoopOptions {
   onToolCall?: (toolName: string, args: Record<string, unknown>) => void;
   onUsage?: (usage: import('./types.js').LLMUsage) => void;
   onBeforeModelCall?: (messages: MemoryMessage[], lastInputTokens?: number) => Promise<MemoryMessage[]>;
+  /** Returns false to abort the turn when the model-call budget is exhausted. */
+  onModelCall?: () => boolean;
   onAskUser: (prompt: string) => Promise<string>;
   signal?: AbortSignal;
   streaming?: boolean;
@@ -630,6 +632,10 @@ async function runInjectedAgentLoop(
   for (let iteration = 0; iteration < maxIterations && !state.finished; iteration++) {
     if (options.signal?.aborted) break;
 
+    if (options.onModelCall && !options.onModelCall()) {
+      throw new Error('model-call budget exhausted for this turn');
+    }
+
     let emittedText = false;
     let emittedReasoning = false;
     const response = await backend.complete({
@@ -974,6 +980,9 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<AgentLoop
 
   while (!finished && iteration < maxIterations) {
     iteration++;
+    if (options.onModelCall && !options.onModelCall()) {
+      throw new Error('model-call budget exhausted for this turn');
+    }
     const iterStartMs = Date.now();
     debugLog(`Iteration ${iteration}`);
 

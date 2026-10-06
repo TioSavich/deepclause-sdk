@@ -324,7 +324,15 @@ var_to_name(Bindings, Var, Name) :-
     ).
 
 %% process_clause(+Term, +SessionId)
-%% Process a single clause and add to session
+%% Process a single clause and add to session.
+%% Reject reserved-name definitions (third place of the reserved guard, so
+%% consulted/generated code cannot shadow the REPL control surface).
+process_clause(Term, _SessionId) :-
+    repl_reserved_clause(Term),
+    !,
+    throw(error(permission_error(modify, reserved_name, Term),
+                context(process_clause/2, 'reserved predicate'))).
+
 process_clause((:- Directive), SessionId) :-
     !,
     process_directive(Directive, SessionId).
@@ -765,22 +773,34 @@ load_code(SessionId, Code, Error) :-
 %% repl_initial_state(+SessionId, +FrameKind, -InitialState)
 %% Builds the state{} threaded through a REPL frame. M1 seeds harness memory
 %% from session_repl_memory/2; M4 adds the meta/scratch slots.
-repl_initial_state(SessionId, _FrameKind, InitialState) :-
+repl_initial_state(SessionId, FrameKind, InitialState) :-
     session_params(SessionId, Params),
     (   get_dict(gas_limit, Params, GasLimit)
     ->  true
     ;   GasLimit = -1
     ),
-    (   session_repl_memory(SessionId, Memory)
-    ->  true
-    ;   Memory = []
+    % Two-level memory: meta (code-writing) and harness (runtime) are kept
+    % apart. The state carries the slot so write-back goes to the right one.
+    (   FrameKind == meta
+    ->  MemorySlot = meta,
+        (   session_meta_memory(SessionId, Memory)
+        ->  true
+        ;   Memory = []
+        )
+    ;   MemorySlot = harness,
+        (   session_repl_memory(SessionId, Memory)
+        ->  true
+        ;   Memory = []
+        )
     ),
     InitialState = state{
         memory: Memory,
         params: Params,
         context_stack: [],
         depth: 0,
-        gas_remaining: GasLimit
+        gas_remaining: GasLimit,
+        memory_slot: MemorySlot,
+        frame_kind: FrameKind
     }.
 
 %% query_start(+SessionId, +Text, +FrameKind, +InitialState, -Error)
@@ -850,7 +870,7 @@ repl_solve(Goal, Names, SessionId, State) :-
 repl_solve_loop(Goal, Names, SessionId, State) :-
     mi_call(Goal, State, StateOut),
     collect_bindings(Names, Bindings),
-    store_repl_memory(SessionId, StateOut),
+    store_memory_for_state(SessionId, StateOut),
     engine_yield(solution(Bindings, false)),
     fail.
 
@@ -869,11 +889,17 @@ render_binding(Var, '_') :-
 render_binding(Value, Text) :-
     with_output_to(string(Text), write_term(Value, [quoted(true), max_depth(20)])).
 
-store_repl_memory(SessionId, State) :-
+%% store_memory_for_state(+SessionId, +State)
+%% Writes the threaded memory back to the slot named by the state.
+store_memory_for_state(SessionId, State) :-
     (   is_dict(State),
         get_dict(memory, State, Memory)
-    ->  retractall(session_repl_memory(SessionId, _)),
-        assertz(session_repl_memory(SessionId, Memory))
+    ->  (   get_dict(memory_slot, State, meta)
+        ->  retractall(session_meta_memory(SessionId, _)),
+            assertz(session_meta_memory(SessionId, Memory))
+        ;   retractall(session_repl_memory(SessionId, _)),
+            assertz(session_repl_memory(SessionId, Memory))
+        )
     ;   true
     ).
 
@@ -951,6 +977,15 @@ internal_session_predicate('__session__').
 %% repl_reserved_name(+Name)
 %% Names owned by the REPL runtime. M4 uses repl_reserved/1 to refuse goals
 %% that try to re-enter or shadow the REPL control surface.
+%% Any repl_*/meta_* name is reserved (namespace guard), plus the explicit
+%% control names below. repl_entry/repl_delete are protected exceptions for
+%% definition purposes (see repl_protected_name/1).
+repl_reserved_name(Name) :-
+    atom(Name),
+    (   sub_atom(Name, 0, _, _, repl_)
+    ;   sub_atom(Name, 0, _, _, meta_)
+    ).
+
 repl_reserved_name(repl_meta_prompt).
 repl_reserved_name(repl_extract_code).
 repl_reserved_name(repl_entry_goal).
@@ -1363,12 +1398,7 @@ repl_meta_prompt(Request, Prompt) :-
 %% Creates the meta frame running the code-writing task.
 repl_run_meta(SessionId, PromptText, FrameId, Error) :-
     catch(
-        (   repl_initial_state(SessionId, meta, BaseState),
-            (   session_meta_memory(SessionId, MetaMemory)
-            ->  true
-            ;   MetaMemory = []
-            ),
-            State = BaseState.put(memory, MetaMemory),
+        (   repl_initial_state(SessionId, meta, State),
             create_frame_raw(SessionId, meta, 0,
                 deepclause_mi:repl_meta_solve(PromptText, SessionId, State),
                 FrameId),
@@ -1386,21 +1416,13 @@ repl_meta_solve(PromptText, SessionId, State) :-
                     [typed_var{name:'DMLCode', type:string},
                      typed_var{name:'EntryGoal', type:string}]),
                 State, StateOut),
-            store_meta_memory(SessionId, StateOut),
+            store_memory_for_state(SessionId, StateOut),
             engine_yield(meta_result(DMLCode, EntryGoal))
         ),
         MetaError,
         (   format(atom(Msg), '~w', [MetaError]),
             engine_yield(error(Msg))
         )
-    ).
-
-store_meta_memory(SessionId, State) :-
-    (   is_dict(State),
-        get_dict(memory, State, Memory)
-    ->  retractall(session_meta_memory(SessionId, _)),
-        assertz(session_meta_memory(SessionId, Memory))
-    ;   true
     ).
 
 %% repl_record_meta(+SessionId, +Request, +Summary)
@@ -1491,8 +1513,12 @@ repl_parse_source(Source, Preds, Error) :-
         (   open_string(Source, Stream),
             repl_collect_source_predicates(Stream, Preds0),
             close(Stream),
-            sort(Preds0, Preds),
-            Error = none
+            (   member(Name0/_, Preds0),
+                repl_protected_name(Name0)
+            ->  format(atom(Error), 'generated code defines reserved predicate ~w', [Name0])
+            ;   sort(Preds0, Preds),
+                Error = none
+            )
         ),
         ParseError,
         format(atom(Error), '~w', [ParseError])
@@ -1570,7 +1596,9 @@ repl_start_entry(SessionId, HasEntry, Error) :-
                 Goal \== none,
                 Goal \== ''
             ->  repl_initial_state(SessionId, object, State),
-                create_frame(SessionId, object, 0, Goal, State, FrameId),
+                create_frame_raw(SessionId, object, 0,
+                    deepclause_mi:repl_entry_solve(Goal, SessionId, State),
+                    FrameId),
                 retractall(session_default_frame(SessionId, _)),
                 assertz(session_default_frame(SessionId, FrameId)),
                 session_frame_engine(FrameId, Engine),
@@ -1585,11 +1613,29 @@ repl_start_entry(SessionId, HasEntry, Error) :-
         format(atom(Error), '~w', [StartError])
     ).
 
+%% repl_entry_solve(+Goal, +SessionId, +State)
+%% Runs the committed entry and persists harness memory (the entry run is the
+%% only place harness memory advances). answer/1 commits and stops.
+repl_entry_solve(Goal, SessionId, State) :-
+    nb_setval(current_session_id, SessionId),
+    catch(
+        (   mi_call(Goal, State, StateOut),
+            store_memory_for_state(SessionId, StateOut)
+        ),
+        '$answer_commit',
+        true
+    ).
+
 %% repl_execute_frame(+SessionId, +GoalText, -FrameId, -Error)
 %% Creates a child frame for the meta `execute` tool.
 repl_execute_frame(SessionId, GoalText, FrameId, Error) :-
     catch(
         (   read_repl_goal(SessionId, GoalText, Goal, Names),
+            (   repl_reserved(Goal)
+            ->  throw(error(permission_error(execute, reserved_predicate, Goal),
+                        context(repl_execute_frame/4, 'cannot execute a reserved predicate')))
+            ;   true
+            ),
             repl_initial_state(SessionId, nested, State),
             create_frame_raw(SessionId, nested, 1,
                 deepclause_mi:repl_solve(Goal, Names, SessionId, State),
@@ -3003,15 +3049,48 @@ mi_call(false, _StateIn, _StateOut) :-
 %% mi_call(retractall(Head), +StateIn, -StateOut)
 %% Database predicates must operate on the session module so DML-side facts
 %% (draft/4, claim/3, ...) are asserted/retracted in the right module.
+%% repl_reserved_clause(+Term)
+%% True when Term defines a reserved predicate. directives and the legitimate
+%% repl_delete/repl_entry harness forms are exempt.
+repl_reserved_clause((:- _)) :-
+    !,
+    fail.
+repl_reserved_clause(repl_delete(_)) :-
+    !,
+    fail.
+repl_reserved_clause((tool(ToolHead, _) :- _)) :-
+    !,
+    functor(ToolHead, Name, _),
+    repl_reserved_name(Name).
+repl_reserved_clause((tool(ToolHead) :- _)) :-
+    !,
+    functor(ToolHead, Name, _),
+    repl_reserved_name(Name).
+repl_reserved_clause((Head :- _)) :-
+    functor(Head, Name, _),
+    repl_protected_name(Name).
+repl_reserved_clause(Head) :-
+    functor(Head, Name, _),
+    repl_protected_name(Name).
+
 mi_call(assertz(Head), StateIn, StateIn) :-
     get_session_id(SessionId),
     guard_not_frozen(SessionId),
+    guard_reserved_clause(Head),
     assertz(SessionId:Head).
 
 mi_call(asserta(Head), StateIn, StateIn) :-
     get_session_id(SessionId),
     guard_not_frozen(SessionId),
+    guard_reserved_clause(Head),
     asserta(SessionId:Head).
+
+guard_reserved_clause(Head) :-
+    (   repl_reserved_clause(Head)
+    ->  throw(error(permission_error(modify, reserved_name, Head),
+                context(mi_call/3, 'cannot define a reserved predicate')))
+    ;   true
+    ).
 
 mi_call(retract(Head), StateIn, StateIn) :-
     get_session_id(SessionId),
@@ -3276,7 +3355,14 @@ consult_clauses(Stream, SessionId) :-
     ).
 
 %% consult_process_term(+Term, +SessionId)
-%% Process a single term read during consult
+%% Process a single term read during consult. Reserved-name definitions are
+%% refused so consulted files cannot shadow the REPL control surface.
+consult_process_term(Term, _SessionId) :-
+    repl_reserved_clause(Term),
+    !,
+    throw(error(permission_error(modify, reserved_name, Term),
+                context(consult_process_term/2, 'reserved predicate'))).
+
 consult_process_term(:-(Directive), SessionId) :-
     % Handle directives - route through mi_call so custom predicates like consult/1 work
     !,
@@ -3603,6 +3689,45 @@ is_mi_special_predicate(use_module(_)).
 is_mi_special_predicate(use_module(_,_)).
 is_mi_special_predicate([_]).
 is_mi_special_predicate([_|_]).
+
+%% mi_call(call(Goal), +StateIn, -StateOut)
+%% Route call/1 through the meta-interpreter so backtracking and the
+%% reserved-predicate guard apply (a bare call/repl_* would bypass them).
+mi_call(call(Goal), StateIn, StateOut) :-
+    guard_reserved_goal(Goal, StateIn),
+    !,
+    mi_call(Goal, StateIn, StateOut).
+
+%% Refuse reserved predicates invoked directly in non-meta frames. This is the
+%% second of the three-place reserved guard (execute, mi_call, assert/load).
+mi_call(Goal, StateIn, _StateOut) :-
+    guard_reserved_direct(Goal, StateIn),
+    !,
+    throw(error(permission_error(execute, reserved_predicate, Goal),
+                context(mi_call/3, 'cannot invoke a reserved REPL predicate'))).
+
+%% guard_reserved_goal(+Goal, +StateIn)
+%% Throws when Goal names a reserved predicate and the frame is not meta.
+guard_reserved_goal(Goal, StateIn) :-
+    (   is_dict(StateIn), get_dict(frame_kind, StateIn, meta)
+    ->  true
+    ;   nonvar(Goal),
+        callable(Goal),
+        functor(Goal, Name, _),
+        repl_reserved_name(Name)
+    ->  throw(error(permission_error(execute, reserved_predicate, Name),
+                context(mi_call/3, 'cannot invoke a reserved REPL predicate')))
+    ;   true
+    ).
+
+guard_reserved_direct(Goal, StateIn) :-
+    (   is_dict(StateIn), get_dict(frame_kind, StateIn, meta)
+    ->  fail
+    ;   nonvar(Goal),
+        callable(Goal),
+        functor(Goal, Name, _),
+        repl_reserved_name(Name)
+    ).
 
 %% mi_call(Goal, +StateIn, -StateOut)
 %% Catch-all for built-in and user-defined predicates

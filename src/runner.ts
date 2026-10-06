@@ -239,6 +239,11 @@ export interface InternalRunOptions {
    * hidden from the code-writing model).
    */
   metaTools?: Map<string, ToolDefinition>;
+  /**
+   * Called before each agent loop (model call). Return false to abort the
+   * turn when a budget is exhausted.
+   */
+  onModelCall?: () => boolean;
 }
 
 interface RunnerExecutionContext {
@@ -246,6 +251,7 @@ interface RunnerExecutionContext {
   signal?: AbortSignal;
   compaction?: CompactionOptions;
   toolPolicy?: ToolPolicy | null;
+  onModelCall?: () => boolean;
 }
 
 interface ParsedJudgment {
@@ -411,6 +417,17 @@ export class DMLRunner {
    * parent's engine.
    */
   private async *stepLoop(frame: Frame, options: InternalRunOptions): AsyncGenerator<DMLEvent> {
+    for await (const event of this.stepLoopInner(frame, options)) {
+      yield {
+        ...event,
+        frameId: frame.id,
+        depth: frame.depth,
+        frameKind: frame.kind,
+      };
+    }
+  }
+
+  private async *stepLoopInner(frame: Frame, options: InternalRunOptions): AsyncGenerator<DMLEvent> {
     // Cooperative execution loop
     while (true) {
       // Check for abort
@@ -835,6 +852,13 @@ export class DMLRunner {
     let stepSucceeded: boolean | null = null;
 
     try {
+    // Enforce the per-turn model-call budget before spending a call.
+    if (options.onModelCall && !options.onModelCall()) {
+      yield { type: 'error', content: 'model-call budget exhausted for this turn' };
+      this.postAgentResult({ success: false, outputs: [], variables: {}, messages: [] });
+      return;
+    }
+
     // Ensure outputVars is an array of either strings or TypedVar objects
     const outputVars = decodeAgentOutputVars(rawPayload.outputVars);
     
@@ -963,6 +987,7 @@ export class DMLRunner {
               signal: options.signal,
               compaction: options.compaction,
               toolPolicy: options.toolPolicy,
+              onModelCall: options.onModelCall,
             },
             [],
             emitToolCall,
@@ -1033,6 +1058,7 @@ export class DMLRunner {
         emitEvent: emitRunnerEvent,
       }),
       onAskUser: options.onInputRequired,
+      onModelCall: options.onModelCall,
       signal: options.signal,
       llmBackend: this.options.llmBackend,
     });
@@ -2070,6 +2096,7 @@ export class DMLRunner {
                   // If needed, the tool should use exec(ask_user, ...) instead
                   return ''; 
                 },
+                onModelCall: runContext.onModelCall,
                 signal: runContext.signal,
               });
               

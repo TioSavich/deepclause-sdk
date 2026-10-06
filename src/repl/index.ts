@@ -41,6 +41,10 @@ export interface HarnessReplOptions {
   initialHarnessMemory?: MemoryMessage[];
   /** Prompt-mode repair attempts after an invalid commit (default 1). */
   repairRounds?: number;
+  /** Maximum nested frame depth (default 3). */
+  maxDepth?: number;
+  /** Maximum model calls per turn (default 24; 0 = unlimited). */
+  maxModelCalls?: number;
   /** Host tool catalog text injected into the meta prompt (M5). */
   hostToolsCatalog?: string;
   /** Human-in-the-loop channel for the meta ask_user tool (M6). */
@@ -133,6 +137,8 @@ export async function createHarnessRepl(options: HarnessReplOptions): Promise<Ha
     toolPolicy: options.toolPolicy,
     onInputRequired: options.onInputRequired,
     repairRounds: options.repairRounds,
+    maxDepth: options.maxDepth,
+    maxModelCalls: options.maxModelCalls,
     hostToolsCatalog: options.hostToolsCatalog,
     askUser: options.askUser,
     runnerOptions: {
