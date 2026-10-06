@@ -563,6 +563,15 @@ Numbered as in proposal §20.
   meta-prompt authoring contract now names `system/1`/`user/1` and the judgment
   predicates. Covered by `tests/repl-judge.test.ts`.
 
+* **#32 — commit validation rejected library operators.** *Fixed.*
+  `repl_parse_source` read the generated source with `read_term/3` and an empty
+  option list, so `:- use_module(...)` directives were not applied and library
+  operators (CLP(FD)'s `#=`/`ins`) were unknown. `repl_collect_source_predicates`
+  now reads with `module(SessionId)` and processes `use_module` directives as it
+  scans, matching `parse_dml_string`/`load_code`. Regression test in
+  `tests/repl-prompt.test.ts`. The `:- use_module(library(clpfd)).` directive
+  must be top-level (inline `use_module` in a body is not run at read time).
+
 * **Scratch-assert duplicate clauses.** `assert`/`assert_many` append, so the
   scratch module accumulates duplicate clauses during a long debugging turn.
   This is display/backtracking noise only (the commit is replace-by-predicate),

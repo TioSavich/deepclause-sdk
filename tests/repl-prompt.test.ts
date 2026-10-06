@@ -126,6 +126,26 @@ describe('prompt mode', () => {
     expect(values(after, 'F')).toEqual(['120']);
   });
 
+  it('commits CLP(FD) source that uses a top-level use_module directive', async () => {
+    // Regression: commit validation used to read the source with an empty
+    // operator table, so library operators (#=/ins) were rejected even though
+    // the same source loads fine.
+    const code = ':- use_module(library(clpfd)).\nsolve(X) :- X #> 3, X #< 7, label([X]).';
+    backend = new CannedBackend([finalResponse(code, '')]);
+    repl = await openRepl();
+
+    const events = await collect(repl.prompt('add a clpfd solver'));
+    expect(events.some((event) => event.type === 'error')).toBe(false);
+
+    const solutions = await collect(repl.query('solve(X)'));
+    expect(values(solutions, 'X')).toEqual(['4', '5', '6']);
+
+    // The directive is recorded so an exported harness reloads with clpfd.
+    const exported = await repl.export('harness.dml');
+    const exportedPath = path.isAbsolute(exported.path) ? exported.path : path.join(workspace, exported.path);
+    expect(await fs.readFile(exportedPath, 'utf8')).toContain('use_module(library(clpfd))');
+  });
+
   it('does not synthesize agent_main', async () => {
     backend = new CannedBackend([finalResponse(FACTORIAL, 'demo')]);
     repl = await openRepl();

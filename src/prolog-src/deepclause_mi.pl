@@ -1832,12 +1832,12 @@ repl_snapshot_restore(SessionId) :-
     ;   true
     ).
 
-%% repl_parse_source(+Source, -Preds, -Error)
+%% repl_parse_source(+SessionId, +Source, -Preds, -Error)
 %% Validates generated DML and collects the predicates it defines.
-repl_parse_source(Source, Preds, Error) :-
+repl_parse_source(SessionId, Source, Preds, Error) :-
     catch(
         (   open_string(Source, Stream),
-            repl_collect_source_predicates(Stream, Preds0),
+            repl_collect_source_predicates(Stream, SessionId, Preds0),
             close(Stream),
             (   member(Name0/_, Preds0),
                 repl_protected_name(Name0)
@@ -1850,12 +1850,19 @@ repl_parse_source(Source, Preds, Error) :-
         format(atom(Error), '~w', [ParseError])
     ).
 
-repl_collect_source_predicates(Stream, Preds) :-
-    read_term(Stream, Term, []),
+%% repl_collect_source_predicates(+Stream, +SessionId, -Preds)
+%% Reads with the session's operator table and executes `:- use_module(...)`
+%% directives as it goes, exactly like the load path. This is what lets library
+%% operators (CLP(FD)'s #=/ins, etc.) be used in committed source: without it,
+%% validation parsed the source with an empty operator table and rejected code
+%% that loads fine.
+repl_collect_source_predicates(Stream, SessionId, Preds) :-
+    read_term(Stream, Term, [module(SessionId)]),
     (   Term == end_of_file
     ->  Preds = []
-    ;   (   Term = (:- _)
-        ->  Preds = Rest
+    ;   (   Term = (:- Directive)
+        ->  catch(process_directive(Directive, SessionId), _, true),
+            Preds = Rest
         ;   Term = repl_delete(_)
         ->  Preds = Rest
         ;   Term = (Head :- _)
@@ -1864,7 +1871,7 @@ repl_collect_source_predicates(Stream, Preds) :-
         ;   functor(Term, Name, Arity),
             Preds = [Name/Arity|Rest]
         ),
-        repl_collect_source_predicates(Stream, Rest)
+        repl_collect_source_predicates(Stream, SessionId, Rest)
     ).
 
 %% repl_commit(+SessionId, +Source, +EntryGoalText, -Result)
@@ -1880,7 +1887,7 @@ repl_commit(SessionId, Source, EntryGoalText, Result) :-
 
 repl_commit_unsafe(SessionId, Source, EntryGoalText, Result) :-
     guard_not_frozen(SessionId),
-    repl_parse_source(Source, Preds, ParseError),
+    repl_parse_source(SessionId, Source, Preds, ParseError),
     repl_commit_from_parse(SessionId, Source, Preds, EntryGoalText, ParseError, Result).
 
 repl_commit_from_parse(_SessionId, _Source, _Preds, _EntryGoalText, ParseError, Result) :-
