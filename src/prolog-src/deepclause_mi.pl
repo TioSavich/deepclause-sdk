@@ -1306,6 +1306,26 @@ repl_prepare_single(SessionId, ClauseText, PreparedTerms) :-
     ),
     preprocess_loaded_term(Term, Bindings, PreparedTerms).
 
+%% repl_read_clause(+SessionId, +ClauseText, -Clause)
+%% Reads exactly one term without preprocessing. Used by retract, which only
+%% needs the predicate's name/arity. Trailing content is an error.
+repl_read_clause(SessionId, ClauseText, Clause) :-
+    ensure_full_stop(ClauseText, Text1),
+    open_string(Text1, Stream),
+    read_term(Stream, Clause, [module(SessionId)]),
+    (   read_term(Stream, Extra, [module(SessionId)]),
+        Extra \== end_of_file
+    ->  close(Stream),
+        throw(error(syntax_error('retract expects a single clause pattern'), _))
+    ;   close(Stream)
+    ).
+
+%% repl_head_of(+Term, -Head)
+%% Strips a rule body, so retracting with a full clause pattern targets the
+%% predicate instead of accidentally matching every rule ((:-)/2).
+repl_head_of((Head :- _Body), Head) :- !.
+repl_head_of(Head, Head).
+
 %% repl_assert_clause(+PreparedTerm, +SessionId)
 %% Asserts one already-preprocessed term, rejecting reserved names.
 repl_assert_clause(PreparedTerm, SessionId) :-
@@ -1381,7 +1401,8 @@ repl_assert_stream(Stream, SessionId) :-
 repl_retract(SessionId, ClauseText, Result) :-
     catch(
         (   guard_not_frozen(SessionId),
-            repl_read_clause(SessionId, ClauseText, Clause),
+            repl_read_clause(SessionId, ClauseText, Pattern),
+            repl_head_of(Pattern, Clause),
             (   repl_protected_clause(Clause)
             ->  throw(error(permission_error(modify, reserved_name, Clause),
                         context(repl_retract/3, 'cannot retract a reserved predicate')))

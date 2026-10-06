@@ -510,4 +510,38 @@ describe('prompt mode', () => {
     expect(scratch.some((event) => event.type === 'solution')).toBe(false);
     expect(values(await collect(repl.query('kept(X)')), 'X')).toEqual(['1']);
   });
+
+  it('retracts clauses through the meta retract tool', async () => {
+    backend = new CannedBackend([
+      {
+        text: '',
+        toolCalls: [
+          { name: 'assert_many', arguments: { clauses: 'foo(1).\nfoo(2).\nbar(1).\n' } },
+          // A full-clause pattern must target foo/1, not every rule.
+          { name: 'retract', arguments: { clause: 'foo(_) :- true' } },
+          { name: 'execute', arguments: { goal: 'foo(X)' } },
+          { name: 'execute', arguments: { goal: 'bar(1)' } },
+          { name: 'set_result', arguments: { variable: 'DMLCode', value: 'kept(1).' } },
+          { name: 'set_result', arguments: { variable: 'EntryGoal', value: '' } },
+          { name: 'set_result', arguments: { variable: 'Answer', value: '' } },
+          { name: 'finish', arguments: { success: true } },
+        ],
+      },
+    ]);
+    repl = await openRepl();
+
+    const events = await collect(repl.prompt('retract foo'));
+    expect(events.some((event) => event.type === 'error')).toBe(false);
+
+    expect(events.some((event) => event.type === 'tool_call' && event.toolName === 'retract' && event.toolState === 'completed')).toBe(true);
+
+    const executeCall = (goal: string) => events.find(
+      (event) => event.type === 'tool_call'
+        && event.toolName === 'execute'
+        && event.toolState === 'completed'
+        && (event.toolArgs as Record<string, unknown> | undefined)?.goal === goal,
+    );
+    expect(executeCall('foo(X)')?.toolSummary).toBe('0 solution(s)');
+    expect(executeCall('bar(1)')?.toolSummary).toBe('1 solution(s)');
+  });
 });

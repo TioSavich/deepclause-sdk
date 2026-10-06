@@ -549,6 +549,10 @@ Numbered as in proposal §20.
   rewrite, `{Var}` interpolation, `expand_term/2`). An untransformed
   `task/N`/`prompt/N` reaching the runtime now raises a loud
   `domain_error(unrewritten_task_form, Goal)` instead of failing silently.
+  The same refactor had renamed `repl_read_clause/3`, which the meta `retract`
+  tool calls; it is restored, and `repl_retract/3` now strips a rule body
+  (`repl_head_of/2`) so a full-clause pattern retracts the predicate rather than
+  every rule (`(:-)/2`). Covered by a retract test in `tests/repl-prompt.test.ts`.
 
 * **#31 — judgment predicates documented but not wired in the REPL.**
   *Fixed.* The REPL now resolves a `JudgeSelection` in `createHarnessRepl`
