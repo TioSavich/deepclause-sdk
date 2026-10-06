@@ -20,11 +20,25 @@ export interface ReplRendererOptions {
   color?: boolean;
   /** Show DML `log` events. */
   verbose?: boolean;
+  /** Render streamed model text/reasoning (default true). `--no-stream` disables. */
+  stream?: boolean;
+  /** Render activity events (task activity, tool calls, usage, logs); default true. `--no-events` disables. */
+  events?: boolean;
   /** Sink for normal lines. */
   sink?: (text: string) => void;
   /** Sink for error lines. */
   errorSink?: (text: string) => void;
 }
+
+/** Activity events hidden by `--no-events` (output/answer/input/error stay). */
+const ACTIVITY_EVENTS = new Set<DMLEvent['type']>([
+  'task_activity',
+  'tool_call',
+  'usage',
+  'log',
+  'memory_compaction',
+  'meta_result',
+]);
 
 function formatArgs(args: Record<string, unknown> | undefined): string {
   if (!args || Object.keys(args).length === 0) {
@@ -64,6 +78,8 @@ export class ReplRenderer {
   readonly mode: RenderMode;
   private readonly color: boolean;
   private readonly verbose: boolean;
+  private readonly showStream: boolean;
+  private readonly showEvents: boolean;
   private readonly sink: (text: string) => void;
   private readonly errorSink: (text: string) => void;
   /** Frame key of the currently open streamed-text region, or null. */
@@ -74,6 +90,8 @@ export class ReplRenderer {
     this.mode = options.mode ?? 'plain';
     this.color = (options.color ?? true) && this.mode === 'rich';
     this.verbose = options.verbose ?? false;
+    this.showStream = options.stream ?? true;
+    this.showEvents = options.events ?? true;
     this.sink = options.sink ?? ((text) => process.stdout.write(text));
     this.errorSink = options.errorSink ?? ((text) => process.stderr.write(text));
   }
@@ -96,6 +114,12 @@ export class ReplRenderer {
 
   /** Render one runtime event. */
   render(event: DMLEvent): void {
+    if (!this.showStream && (event.type === 'stream' || event.type === 'reasoning')) {
+      return;
+    }
+    if (!this.showEvents && ACTIVITY_EVENTS.has(event.type)) {
+      return;
+    }
     if (this.mode === 'json') {
       this.sink(`${JSON.stringify(event)}\n`);
       return;
@@ -219,7 +243,8 @@ export class ReplRenderer {
 
   /** `meta │ `, `run │ `, or indented `nested │ ` for a frame's events. */
   private frameLabel(event: DMLEvent): string {
-    if (!event.frameKind) return '';
+    // `--no-events` also drops the frame label, so output/answer lines are plain.
+    if (!this.showEvents || !event.frameKind) return '';
     const label = event.frameKind === 'object' ? 'run' : event.frameKind;
     return `${'  '.repeat(event.depth ?? 0)}${label} │ `;
   }

@@ -41,6 +41,10 @@ export interface ReplCliOptions {
   locked?: boolean;
   exportPath?: string;
   backend?: 'env' | 'pi';
+  /** Render streamed model text/reasoning (default true). */
+  stream?: boolean;
+  /** Render activity events (task activity, tool calls, usage, logs; default true). */
+  events?: boolean;
   /** Default judgment backend name (llm|jev). */
   judge?: string;
   tools?: string;
@@ -228,6 +232,8 @@ export async function createReplRuntime(options: ReplCliOptions): Promise<ReplRu
     mode: selectRenderMode(options),
     color: options.color !== false && config.repl.color !== false,
     verbose: options.verbose ?? false,
+    stream: options.stream !== false,
+    events: options.events !== false,
   });
 
   // `null` means no capability tools; `undefined` means use the default
@@ -775,6 +781,8 @@ export function registerReplCommand(program: Command): void {
     .option('--depth <number>', 'maximum nested frame depth (default 3)', parseInt)
     .option('--max-model-calls <number>', 'maximum model calls per turn (default 100)', parseInt)
     .option('--backend <kind>', 'override the configured backend (env|pi)')
+    .option('--no-stream', 'hide streamed model text/reasoning (show only outputs and solutions)')
+    .option('--no-events', 'hide task activity, tool calls, usage, and logs')
     .option('--judge <name>', 'default judgment backend (llm|jev)')
     .option('--tools <list>', 'comma-separated capability host tools (default: bash)')
     .option('--no-tools', 'register no capability host tools')
@@ -804,6 +812,8 @@ export function registerReplCommand(program: Command): void {
         depth: options.depth,
         maxModelCalls: options.maxModelCalls,
         backend: options.backend,
+        stream: options.stream,
+        events: options.events,
         judge: options.judge,
         tools: typeof options.tools === 'string' ? options.tools : undefined,
         noTools: options.tools === false,

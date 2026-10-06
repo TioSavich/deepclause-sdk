@@ -20,6 +20,31 @@ function capture(mode: 'rich' | 'plain' | 'json', color = true): { lines: string
 const ANSI_PATTERN = /\u001b\[[0-9;]*m/;
 
 describe('ReplRenderer', () => {
+  it('stream:false / events:false hide activity but keep outputs and answers', () => {
+    const lines: string[] = [];
+    const renderer = new ReplRenderer({
+      mode: 'plain',
+      color: false,
+      stream: false,
+      events: false,
+      sink: (text) => lines.push(text),
+    });
+
+    renderer.render({ type: 'stream', content: 'streamed text' } as DMLEvent);
+    renderer.render({ type: 'reasoning', content: 'thinking' } as DMLEvent);
+    renderer.render({ type: 'task_activity', taskState: 'started', taskDescription: 'x' } as DMLEvent);
+    renderer.render({ type: 'tool_call', toolName: 'bash', toolState: 'completed' } as DMLEvent);
+    renderer.render({ type: 'output', content: 'plain output' } as DMLEvent);
+    renderer.render({ type: 'answer', content: 'the answer' } as DMLEvent);
+
+    const rendered = lines.join('');
+    expect(rendered).toContain('plain output');
+    expect(rendered).toContain('the answer');
+    expect(rendered).not.toContain('streamed text');
+    expect(rendered).not.toContain('thinking');
+    expect(rendered).not.toContain('bash');
+  });
+
   it('formatBindings renders values, or true when there are none', () => {
     expect(formatBindings([])).toBe('true');
     expect(formatBindings([{ name: 'X', value: 'a' }, { name: 'Y', value: '2' }])).toBe('X = a\nY = 2');
