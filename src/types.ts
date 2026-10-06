@@ -245,7 +245,7 @@ export interface DMLEvent extends FrameEventMeta {
   /** Goal-mode solution (only for 'solution' events). */
   solution?: DMLSolution;
   /** Prompt-mode meta task result (only for 'meta_result' events). */
-  metaResult?: { code: string; entry: string };
+  metaResult?: { code: string; entry: string; answer: string };
   prompt?: string;
   /** Execution trace (only present in 'finished' event when trace mode enabled) */
   trace?: TraceEntry[];

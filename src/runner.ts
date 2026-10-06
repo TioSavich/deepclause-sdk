@@ -511,6 +511,7 @@ export class DMLRunner {
             metaResult: {
               code: String(toJsValue(payload.code) ?? ''),
               entry: String(toJsValue(payload.entry) ?? ''),
+              answer: String(toJsValue(payload.answer) ?? ''),
             },
           };
           break;

@@ -442,6 +442,7 @@ export class DMLSession {
 
         let code = '';
         let entry = '';
+        let answer = '';
         let metaFailed: string | undefined;
         this.frameDepth = 1;
         try {
@@ -449,6 +450,7 @@ export class DMLSession {
             if (event.type === 'meta_result') {
               code = event.metaResult?.code ?? '';
               entry = event.metaResult?.entry ?? '';
+              answer = event.metaResult?.answer ?? '';
             } else if (event.type === 'error') {
               metaFailed = event.content;
               yield event;
@@ -471,8 +473,19 @@ export class DMLSession {
           lastError = `meta task failed: ${metaFailed}`;
           break;
         }
+
+        // Direct answer: a simple question the model answered without changing
+        // the harness. Render the reply and skip the commit entirely.
+        if (!code.trim() && answer.trim()) {
+          yield { type: 'output', content: answer.trim() };
+          this.prologQuery(
+            `deepclause_mi:repl_record_meta('${this.sessionId}', ${quoteString(request)}, ${quoteString('answered directly')})`
+          );
+          succeeded = true;
+          break;
+        }
         if (!code.trim()) {
-          lastError = 'the meta task returned no DML source';
+          lastError = 'the meta task returned no DML source or answer';
           break;
         }
 

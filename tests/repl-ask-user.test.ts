@@ -48,6 +48,7 @@ function finalResponse(code: string, entry = ''): CannedResponse {
     toolCalls: [
       { name: 'set_result', arguments: { variable: 'DMLCode', value: code } },
       { name: 'set_result', arguments: { variable: 'EntryGoal', value: entry } },
+      { name: 'set_result', arguments: { variable: 'Answer', value: '' } },
       { name: 'finish', arguments: { success: true } },
     ],
   };
@@ -161,6 +162,7 @@ describe('harness input/2', () => {
         { name: 'execute', arguments: { goal: 'input("Nested question?", A), output(A)' } },
         { name: 'set_result', arguments: { variable: 'DMLCode', value: 'kept(1).' } },
         { name: 'set_result', arguments: { variable: 'EntryGoal', value: '' } },
+      { name: 'set_result', arguments: { variable: 'Answer', value: '' } },
         { name: 'finish', arguments: { success: true } },
       ],
     }]);

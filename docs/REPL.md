@@ -93,6 +93,22 @@ A prompt is an **edit transaction**:
 If the model returns invalid DML, the REPL makes one repair attempt with the
 parse error, then aborts without touching the harness.
 
+### Direct questions
+
+For a simple question that can be answered directly — "what did we just do?",
+"what can you do?", "how do I …?" — the meta task answers **without touching
+the harness**: instead of returning DML, it sets the `Answer` output to its
+reply. The reply is rendered as an `output` line and the living module is left
+byte-identical. Build/commit only happens when the request asks you to create,
+change, or run logic.
+
+```text
+dml> what can you do?
+I'm the DeepClause REPL harness author. I grow and maintain a living DML module …
+dml> listing.
+% (empty harness)
+```
+
 ### Entry points
 
 There is **no `agent_main` requirement** in the REPL. Name predicates

@@ -47,6 +47,7 @@ function finalResponse(code: string, entry = ''): CannedResponse {
     toolCalls: [
       { name: 'set_result', arguments: { variable: 'DMLCode', value: code } },
       { name: 'set_result', arguments: { variable: 'EntryGoal', value: entry } },
+      { name: 'set_result', arguments: { variable: 'Answer', value: '' } },
       { name: 'finish', arguments: { success: true } },
     ],
   };
@@ -139,6 +140,7 @@ describe('two-level memory', () => {
         { name: 'execute', arguments: { goal: 'system("scratch-note")' } },
         { name: 'set_result', arguments: { variable: 'DMLCode', value: 'repl_entry(demo).\ndemo :- system("entry-note"), output("done").' } },
         { name: 'set_result', arguments: { variable: 'EntryGoal', value: 'demo' } },
+      { name: 'set_result', arguments: { variable: 'Answer', value: '' } },
         { name: 'finish', arguments: { success: true } },
       ],
     }]);
@@ -162,6 +164,7 @@ describe('execute recursion', () => {
             { name: 'execute', arguments: { goal: 'task("nested ask", R), output(R)' } },
             { name: 'set_result', arguments: { variable: 'DMLCode', value: 'kept(1).' } },
             { name: 'set_result', arguments: { variable: 'EntryGoal', value: '' } },
+      { name: 'set_result', arguments: { variable: 'Answer', value: '' } },
             { name: 'finish', arguments: { success: true } },
           ],
         };
@@ -183,6 +186,7 @@ describe('execute recursion', () => {
         { name: 'execute', arguments: { goal: 'call(repl_freeze)' } },
         { name: 'set_result', arguments: { variable: 'DMLCode', value: 'kept(1).' } },
         { name: 'set_result', arguments: { variable: 'EntryGoal', value: '' } },
+      { name: 'set_result', arguments: { variable: 'Answer', value: '' } },
         { name: 'finish', arguments: { success: true } },
       ],
     }]);
@@ -202,6 +206,7 @@ describe('execute recursion', () => {
         { name: 'execute', arguments: { goal: 'output("two")' } },
         { name: 'set_result', arguments: { variable: 'DMLCode', value: 'kept(1).' } },
         { name: 'set_result', arguments: { variable: 'EntryGoal', value: '' } },
+      { name: 'set_result', arguments: { variable: 'Answer', value: '' } },
         { name: 'finish', arguments: { success: true } },
       ],
     }]);

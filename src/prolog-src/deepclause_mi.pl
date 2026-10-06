@@ -1382,7 +1382,8 @@ repl_meta_prompt(SessionId, Request, Prompt) :-
             format("- SELF-CONTAINMENT: any Python/JS/shell/SQL code a tool needs must be embedded in the harness as a string fact (script_body/2, python_source/2, js_source/2, shell_source/2) and materialized at run time with write_file/2. Never leave it only as a side file.~n"),
             format("- Naming: there is no agent_main requirement. Name predicates descriptively and declare entries with repl_entry/1. To delete a predicate, emit repl_delete(Name/Arity) as a directive fact.~n"),
             format("- Call the listing tool before writing so you build on the current harness.~n"),
-            format("- If the request is ambiguous, call the ask_user tool to ask a clarifying question before writing code.~n~n"),
+            format("- If the request is ambiguous, call the ask_user tool to ask a clarifying question before writing code.~n"),
+            format("- DIRECT QUESTIONS: if the request is only a question you can answer directly (for example \"what did we just do?\", \"what can you do?\", \"how do I ...?\"), do NOT write or change harness code. Set DMLCode to the empty string and set the Answer output variable to your reply. Build DML only when the user asks you to create, change, or run logic.~n~n"),
             format("HOST TOOL CATALOG (only these names may be called through exec/2; listing(tools) has full schemas)~n~w~n~n", [Catalog]),
             format("CURRENT HARNESS MANIFEST~n~w~n~n", [Manifest]),
             format("RECENT PROMPTS~n~w~n~n", [MemoryText]),
@@ -1390,7 +1391,8 @@ repl_meta_prompt(SessionId, Request, Prompt) :-
             format("OUTPUT CONTRACT~n"),
             format("Return the complete DML definitions for every predicate this turn touches.~n"),
             format("Set the DMLCode output variable to the DML source (optionally wrapped in a fenced dml block).~n"),
-            format("Set the EntryGoal output variable to the goal to run after committing (for example weekly_report), or leave it empty for a definitions-only commit.~n")
+            format("Set the EntryGoal output variable to the goal to run after committing (for example weekly_report), or leave it empty for a definitions-only commit.~n"),
+            format("Set every requested output variable before calling finish: for a direct question set DMLCode to the empty string and Answer to your reply; otherwise set DMLCode (and optionally EntryGoal) and set Answer to the empty string.~n")
         )).
 
 repl_meta_prompt(Request, Prompt) :-
@@ -1415,12 +1417,13 @@ repl_meta_solve(PromptText, SessionId, State) :-
     nb_setval(current_session_id, SessionId),
     catch(
         (   mi_call(
-                task_named(PromptText, [DMLCode, EntryGoal],
+                task_named(PromptText, [DMLCode, EntryGoal, Answer],
                     [typed_var{name:'DMLCode', type:string},
-                     typed_var{name:'EntryGoal', type:string}]),
+                     typed_var{name:'EntryGoal', type:string},
+                     typed_var{name:'Answer', type:string}]),
                 State, StateOut),
             store_memory_for_state(SessionId, StateOut),
-            engine_yield(meta_result(DMLCode, EntryGoal))
+            engine_yield(meta_result(DMLCode, EntryGoal, Answer))
         ),
         MetaError,
         (   format(atom(Msg), '~w', [MetaError]),
@@ -1725,9 +1728,10 @@ process_engine_result(tool_result(Result), tool_result, '',
 %% Goal-mode solution: bindings is a list of Name-RenderedText pairs.
 process_engine_result(solution(Bindings, Deterministic), solution, '',
     payload{bindings: Bindings, deterministic: Deterministic}) :- !.
-%% Prompt-mode meta task result: the generated DML source and entry goal.
-process_engine_result(meta_result(Code, Entry), meta_result, '',
-    payload{code: Code, entry: Entry}) :- !.
+%% Prompt-mode meta task result: generated DML source, entry goal, and an
+%% optional direct answer for simple questions.
+process_engine_result(meta_result(Code, Entry, Answer), meta_result, '',
+    payload{code: Code, entry: Entry, answer: Answer}) :- !.
 process_engine_result(wait_input(Prompt), wait_input, Prompt, none) :- !.
 process_engine_result(error(Msg), error, Msg, none) :- !.
 process_engine_result(Other, error, Msg, none) :-

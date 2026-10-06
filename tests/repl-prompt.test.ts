@@ -51,6 +51,7 @@ function finalResponse(code: string, entry = ''): CannedResponse {
     toolCalls: [
       { name: 'set_result', arguments: { variable: 'DMLCode', value: code } },
       { name: 'set_result', arguments: { variable: 'EntryGoal', value: entry } },
+      { name: 'set_result', arguments: { variable: 'Answer', value: '' } },
       { name: 'finish', arguments: { success: true } },
     ],
   };
@@ -123,6 +124,26 @@ describe('prompt mode', () => {
     expect(listing).toContain('repl_entry(demo)');
   });
 
+  it('answers a simple question directly without changing the harness', async () => {
+    backend = new CannedBackend([{
+      text: 'Answering directly.',
+      toolCalls: [
+        { name: 'set_result', arguments: { variable: 'DMLCode', value: '' } },
+        { name: 'set_result', arguments: { variable: 'EntryGoal', value: '' } },
+        { name: 'set_result', arguments: { variable: 'Answer', value: 'We added a factorial rule.' } },
+        { name: 'finish', arguments: { success: true } },
+      ],
+    }]);
+    repl = await openRepl();
+    await repl.session.loadCode('existing(1).\n');
+    const before = await repl.list('all');
+
+    const events = await collect(repl.prompt('what did we just do?'));
+    expect(events.some((event) => event.type === 'output' && event.content === 'We added a factorial rule.')).toBe(true);
+    expect(events.some((event) => event.type === 'error')).toBe(false);
+    expect(await repl.list('all')).toBe(before);
+  });
+
   it('replaces by predicate on redefinition', async () => {
     const first = [
       'fact(0, 1).',
@@ -191,6 +212,7 @@ describe('prompt mode', () => {
         { name: 'execute', arguments: { goal: 'scratch(X)' } },
         { name: 'set_result', arguments: { variable: 'DMLCode', value: 'kept(1).' } },
         { name: 'set_result', arguments: { variable: 'EntryGoal', value: '' } },
+      { name: 'set_result', arguments: { variable: 'Answer', value: '' } },
         { name: 'finish', arguments: { success: true } },
       ],
     }]);

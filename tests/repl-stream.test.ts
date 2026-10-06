@@ -37,6 +37,7 @@ class StreamingBackend implements LLMBackend {
       toolCalls: [
         { id: 's1', name: 'set_result', arguments: { variable: 'DMLCode', value: 'streamed(1).' } },
         { id: 's2', name: 'set_result', arguments: { variable: 'EntryGoal', value: '' } },
+        { id: 'a1', name: 'set_result', arguments: { variable: 'Answer', value: '' } },
         { id: 'f1', name: 'finish', arguments: { success: true } },
       ],
     };
