@@ -8,6 +8,7 @@ import * as path from 'path';
 
 import { buildToolCatalog, createReplToolset, type ReplToolset } from '../src/repl/toolset.js';
 import { createHarnessRepl, type HarnessRepl } from '../src/repl/index.js';
+import { createReplRuntime } from '../src/cli/repl.js';
 import type { DMLEvent } from '../src/types.js';
 
 let workspace: string;
@@ -38,6 +39,17 @@ describe('capability toolset', () => {
     toolset = await createReplToolset({ workspacePath: workspace, toolNames: null });
     expect(toolset.tools.size).toBe(0);
     expect(toolset.catalog).toContain('No capability host tools');
+  });
+
+  it('registers bash by default through the CLI runtime (no config)', async () => {
+    const runtime = await createReplRuntime({ workspace });
+    try {
+      expect(runtime.toolset.tools.has('bash')).toBe(true);
+      expect(runtime.toolset.catalog).toContain('bash');
+    } finally {
+      await runtime.repl.dispose();
+      await runtime.toolset.dispose();
+    }
   });
 
   it('executes a command through the shell manager', async () => {

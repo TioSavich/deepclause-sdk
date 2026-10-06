@@ -185,7 +185,16 @@ export interface ReplRuntime {
   workspace: string;
   promptPrefix: string;
   toolset: ReplToolset;
+  /** Set when the env backend has no credentials for the selected provider. */
+  missingCredential?: string;
 }
+
+const PROVIDER_ENV_KEYS: Record<string, string> = {
+  openai: 'OPENAI_API_KEY',
+  anthropic: 'ANTHROPIC_API_KEY',
+  google: 'GOOGLE_GENERATIVE_AI_API_KEY',
+  openrouter: 'OPENROUTER_API_KEY',
+};
 
 /** Build the harness + renderer from CLI options. */
 export async function createReplRuntime(options: ReplCliOptions): Promise<ReplRuntime> {
@@ -201,18 +210,26 @@ export async function createReplRuntime(options: ReplCliOptions): Promise<ReplRu
     verbose: options.verbose ?? false,
   });
 
+  // `null` means no capability tools; `undefined` means use the default
+  // (bash). An explicit `tools: []` in config also disables capability tools.
   const toolNames = options.noTools
     ? null
     : options.tools
       ? options.tools.split(',').map((name) => name.trim()).filter(Boolean)
-      : config.repl.tools ?? null;
+      : (config.repl.tools ?? undefined);
   const toolset = await createReplToolset({
     workspacePath: workspace,
     sandbox: options.sandbox,
     network: config.agentvm?.network ?? false,
     hostConfig: config.shell,
     toolNames,
-    onEvent: (event) => renderer.render(event),
+    // The runner already emits the tool_call start/completion events, so the
+    // shell bridge here only forwards stream/log lines to avoid duplicates.
+    onEvent: (event) => {
+      if (event.type !== 'tool_call') {
+        renderer.render(event);
+      }
+    },
   });
 
   const backendKind = options.backend ?? config.backend?.kind ?? 'env';
@@ -247,12 +264,24 @@ export async function createReplRuntime(options: ReplCliOptions): Promise<ReplRu
     onInput: buildCliOnInput(options),
   });
 
+  let missingCredential: string | undefined;
+  if (backendKind === 'env') {
+    const envKey = PROVIDER_ENV_KEYS[harnessProvider];
+    const configured = config.providers?.[harnessProvider]?.apiKey;
+    if (envKey && !configured && !process.env[envKey]) {
+      missingCredential = `no credentials for provider '${harnessProvider}'. `
+        + `Set ${envKey}, configure providers.${harnessProvider}.apiKey, `
+        + "or run 'deepclause set-backend pi'.";
+    }
+  }
+
   return {
     repl,
     renderer,
     workspace,
     promptPrefix: config.repl.promptPrefix ?? 'dml> ',
     toolset,
+    missingCredential,
   };
 }
 
@@ -321,6 +350,10 @@ export async function dispatchReplInput(
       await runGoalWithRenderer(repl, input.goal, { first: options.first, renderer });
       return true;
     case 'prompt': {
+      if (runtime.missingCredential) {
+        print(`ERROR: ${runtime.missingCredential}`);
+        return true;
+      }
       for await (const event of repl.prompt(input.prompt)) {
         renderer.render(event);
       }
