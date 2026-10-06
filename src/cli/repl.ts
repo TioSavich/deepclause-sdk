@@ -443,7 +443,7 @@ async function runInteractiveGoal(
             await iterator.return?.(undefined);
             return;
           }
-          if (trimmed === 'a') {
+          if (trimmed === 'a' || trimmed === 'w' || trimmed === 'p') {
             pageAll = true;
           }
         }

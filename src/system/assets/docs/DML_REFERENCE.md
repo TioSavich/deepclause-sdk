@@ -735,3 +735,25 @@ backtracking reuses an answer instead of re-querying the model.
   always one of your option atoms.
 - Prefer one `judge/2` batch over several one-off calls when you need more than
   one or two judgments.
+## The DML REPL (`deepclause repl`)
+
+DML skills can also be grown interactively in a persistent **living module**.
+
+- `goal: <dml>.` runs a goal and enumerates its solutions.
+- Plain English builds the harness: a meta task writes DML that is committed
+  replace-by-predicate and then run.
+- Declare entry points with `repl_entry/1`. There is **no implicit `agent_main`
+  requirement** in the REPL; `export --skill` adds a thin `agent_main/0`
+  wrapper when a file must also run with `deepclause run` / `/dc-run`.
+- `freeze.` makes the harness read-only; `export <file>.` serializes it into a
+  self-contained `.dml`.
+- `ask_user` (meta task) and `input/2` / `exec(ask_user(...))` (harness) ask the
+  human. They never block in non-interactive runs (`-g`, piped stdin, CI).
+
+**Self-containment.** Anything a tool needs must live inside the harness. Embed
+Python/JS/shell/SQL as a string fact (`script_body/2`, `python_source/2`,
+`js_source/2`, `shell_source/2`) and materialize it at run time with the MI's
+`write_file/2`. Never leave it only as a side file, because `export` captures
+the module, not stray files.
+
+See [`docs/REPL.md`](../../../../docs/REPL.md) for the full guide.

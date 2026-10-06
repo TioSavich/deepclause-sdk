@@ -34,6 +34,15 @@ export type {
   ToolPolicy 
 } from './types.js';
 
+// DML REPL (goal + prompt mode) for CLI and embedding
+export { createHarnessRepl } from './repl/index.js';
+export { DMLSession } from './repl/session.js';
+export type { HarnessRepl, HarnessReplOptions, RunOpts, DMLQueryEvent, ReplEvent } from './repl/index.js';
+export type { DMLSessionOptions, DMLQueryOptions } from './repl/session.js';
+export type { HarnessExportOptions, HarnessExportResult } from './repl/export.js';
+export { createPiBackend, createPiAdapter, resolvePiPaths, selectPiModel } from './repl/backend.js';
+export { createReplToolset, buildToolCatalog } from './repl/toolset.js';
+
 // Compiler utilities — also available via the 'deepclause-sdk/compiler' subpath
 export {
   compileToDML,

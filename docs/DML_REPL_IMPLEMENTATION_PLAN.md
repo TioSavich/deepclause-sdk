@@ -87,7 +87,7 @@ Update the `Status` column as work lands. One milestone at a time.
 | **M4** | Context, scratch memory, `execute`, recursion budgets | §7.2, §10 | ✅ |
 | **M5** | Backends + host tools (`set-backend pi`, `bash`) | §13.5, §14.4, §14.5 | ✅ |
 | **M6** | `ask_user` at both levels + non-interactive policy | §9.4, §13.6 | ✅ |
-| **M7** | Polish, docs, optional pi embedding | §14.3, §17, §18 | ☐ |
+| **M7** | Polish, docs, optional pi embedding | §14.3, §17, §18 | ✅ |
 
 ---
 
