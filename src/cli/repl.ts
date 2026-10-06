@@ -13,6 +13,8 @@ import * as readline from 'readline';
 
 import { createHarnessRepl, type HarnessRepl } from '../repl/index.js';
 import { ReplRenderer, type RenderMode } from '../repl/render.js';
+import { createPiBackend } from '../repl/backend.js';
+import { createReplToolset, type ReplToolset } from '../repl/toolset.js';
 import { parseModelId, type Provider } from '../system/config/model-slots.js';
 import { loadReplConfig } from './config.js';
 
@@ -35,6 +37,10 @@ export interface ReplCliOptions {
   freeze?: boolean;
   locked?: boolean;
   exportPath?: string;
+  backend?: 'env' | 'pi';
+  tools?: string;
+  noTools?: boolean;
+  sandbox?: boolean;
 }
 
 export type ReplInput =
@@ -145,6 +151,7 @@ export interface ReplRuntime {
   renderer: ReplRenderer;
   workspace: string;
   promptPrefix: string;
+  toolset: ReplToolset;
 }
 
 /** Build the harness + renderer from CLI options. */
@@ -161,17 +168,51 @@ export async function createReplRuntime(options: ReplCliOptions): Promise<ReplRu
     verbose: options.verbose ?? false,
   });
 
+  const toolNames = options.noTools
+    ? null
+    : options.tools
+      ? options.tools.split(',').map((name) => name.trim()).filter(Boolean)
+      : config.repl.tools ?? null;
+  const toolset = await createReplToolset({
+    workspacePath: workspace,
+    sandbox: options.sandbox,
+    network: config.agentvm?.network ?? false,
+    hostConfig: config.shell,
+    toolNames,
+    onEvent: (event) => renderer.render(event),
+  });
+
+  const backendKind = options.backend ?? config.backend?.kind ?? 'env';
+  let llmBackend;
+  let harnessModel = resolved.model;
+  let harnessProvider: Provider = provider;
+  if (backendKind === 'pi') {
+    const pi = await createPiBackend({
+      agentDir: config.backend?.agentDir,
+      modelsPath: config.backend?.modelsPath ?? undefined,
+      authPath: config.backend?.authPath ?? undefined,
+      model: options.model ?? config.backend?.model,
+    });
+    llmBackend = pi.backend;
+    harnessModel = pi.modelId.split('/').slice(1).join('/') || pi.modelId;
+    harnessProvider = (pi.provider as Provider) ?? harnessProvider;
+  }
+
   const repl = await createHarnessRepl({
     workspacePath: workspace,
-    model: resolved.model,
-    provider,
+    model: harnessModel,
+    provider: harnessProvider,
     temperature: options.temperature ?? config.temperatures.run,
     params: options.param ?? {},
     gasLimit: options.gasLimit,
     maxDepth: options.depth ?? config.repl.maxDepth,
     maxModelCalls: options.maxModelCalls ?? config.repl.maxModelCalls,
     repairRounds: config.repl.repairRounds,
+    tools: toolset.tools,
+    hostToolsCatalog: toolset.catalog,
+    llmBackend,
     onInputRequired: async () => '',
+    askUser: async () => ({ cancelled: true }),
   });
 
   return {
@@ -179,6 +220,7 @@ export async function createReplRuntime(options: ReplCliOptions): Promise<ReplRu
     renderer,
     workspace,
     promptPrefix: config.repl.promptPrefix ?? 'dml> ',
+    toolset,
   };
 }
 
@@ -428,6 +470,7 @@ export async function startRepl(options: ReplCliOptions): Promise<number> {
       }
     }
     await runtime.repl.dispose();
+    await runtime.toolset.dispose();
   }
 }
 
@@ -448,6 +491,10 @@ export function registerReplCommand(program: Command): void {
     .option('--gas-limit <number>', 'per-frame step limit', parseInt)
     .option('--depth <number>', 'maximum nested frame depth (default 3)', parseInt)
     .option('--max-model-calls <number>', 'maximum model calls per turn (default 24)', parseInt)
+    .option('--backend <kind>', 'override the configured backend (env|pi)')
+    .option('--tools <list>', 'comma-separated capability host tools (default: bash)')
+    .option('--no-tools', 'register no capability host tools')
+    .option('--sandbox', 'run shell tools in AgentVM')
     .option('-P, --param <key=value>', 'session parameter (repeatable)', collectParams, {})
     .option('-f, --freeze', 'start with the harness frozen (read-only lock)')
     .option('--locked', 'like --freeze, but forbid unfreeze for this process')
@@ -469,6 +516,10 @@ export function registerReplCommand(program: Command): void {
         gasLimit: options.gasLimit,
         depth: options.depth,
         maxModelCalls: options.maxModelCalls,
+        backend: options.backend,
+        tools: options.tools,
+        noTools: options.tools === false,
+        sandbox: options.sandbox,
         param: options.param,
         verbose: Boolean(options.verbose || options.debug),
         color: options.color,

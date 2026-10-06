@@ -38,9 +38,26 @@
     "benchmark:swebench:prefetch": "node benchmarks/prefetch-swebench-lite.mjs",
     "benchmark:swebench:evaluate": "node benchmarks/evaluate-predictions.mjs",
     "benchmark:deepplanning": "node benchmarks/run-deepplanning.mjs",
+    "benchmark:chess:probe": "node benchmarks/chess/probe.mjs",
+    "benchmark:chess:select": "node benchmarks/chess/select.mjs",
+    "benchmark:chess:match": "node benchmarks/chess/match.mjs",
+    "benchmark:chess:framings": "node benchmarks/chess/probe-framings.mjs",
+    "benchmark:chess:positions": "node benchmarks/chess/make-positions.mjs",
     "benchmark:deepplanning:evaluate": "node benchmarks/evaluate-deepplanning.mjs",
     "benchmark:nl2repo": "node benchmarks/run-nl2repo.mjs",
     "benchmark:nl2repo:evaluate": "node benchmarks/evaluate-nl2repo.mjs"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "peerDependenciesMeta": {
+    "@earendil-works/pi-ai": {
+      "optional": true
+    },
+    "@earendil-works/pi-coding-agent": {
+      "optional": true
+    }
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^3.0.35",

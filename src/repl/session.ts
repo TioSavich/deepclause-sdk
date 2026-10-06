@@ -414,6 +414,7 @@ export class DMLSession {
           isFrozen: () => this.isFrozen(),
           executeGoal: (goal, limit) => this.executeGoal(goal, limit),
           askUser: this.askUser,
+          hostToolsCatalog: this.hostToolsCatalog,
         });
 
         let code = '';

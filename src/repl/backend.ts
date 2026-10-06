@@ -1,0 +1,289 @@
+/**
+ * Backend resolution for the REPL (M5).
+ *
+ * `env` uses the SDK's provider/API-key backend (unchanged). `pi` reuses pi's
+ * own model registry and credential store so the REPL runs against the model
+ * configured in pi, without asking for API keys or writing provider env vars.
+ *
+ * The pi packages are optional peers and loaded with a dynamic import only when
+ * the pi backend is selected.
+ */
+
+import * as path from 'path';
+
+import type {
+  LLMBackend,
+  LLMBackendMessage,
+  LLMBackendRequest,
+  LLMBackendResponse,
+} from '../types.js';
+
+export type BackendKind = 'env' | 'pi';
+
+export interface PiBackendConfig {
+  kind?: BackendKind;
+  agentDir?: string;
+  modelsPath?: string | null;
+  authPath?: string | null;
+  model?: string;
+}
+
+export interface ResolvedBackendPaths {
+  agentDir: string;
+  modelsPath: string;
+  authPath: string;
+  model?: string;
+}
+
+/** Minimal structural view of pi's ModelRegistry used by the adapter. */
+export interface PiModelLike {
+  provider: string;
+  id: string;
+  api?: string;
+}
+
+export interface PiCompletionRequest {
+  systemPrompt?: string;
+  messages: unknown[];
+  tools?: unknown[];
+}
+
+export interface PiCompletionResult {
+  content: Array<
+    | { type: 'text'; text: string }
+    | { type: 'toolCall'; id: string; name: string; arguments: Record<string, unknown> }
+  >;
+  usage: {
+    input: number;
+    output: number;
+    totalTokens: number;
+    cacheRead?: number;
+    cacheWrite?: number;
+    reasoning?: number;
+  };
+  stopReason: 'stop' | 'toolUse' | 'length' | 'error' | 'aborted';
+  errorMessage?: string;
+}
+
+export interface PiRegistryLike {
+  getAvailable(): PiModelLike[];
+  find?(provider: string, modelId: string): PiModelLike | undefined;
+  hasConfiguredAuth(model: PiModelLike): boolean;
+  complete(model: PiModelLike, context: PiCompletionRequest, options: unknown): Promise<PiCompletionResult>;
+}
+
+/** Resolve pi's agent dir, models.json, and auth.json paths. */
+export function resolvePiPaths(
+  config: PiBackendConfig,
+  defaults: { agentDir: string },
+): ResolvedBackendPaths {
+  const agentDir = config.agentDir ?? defaults.agentDir;
+  return {
+    agentDir,
+    modelsPath: config.modelsPath ?? path.join(agentDir, 'models.json'),
+    authPath: config.authPath ?? path.join(agentDir, 'auth.json'),
+    model: config.model,
+  };
+}
+
+function modelLabel(model: PiModelLike): string {
+  return `${model.provider}/${model.id}`;
+}
+
+/** Select the pi model to use, honoring an explicit provider/model request. */
+export function selectPiModel(registry: PiRegistryLike, requested?: string): PiModelLike {
+  const available = registry.getAvailable();
+  if (available.length === 0) {
+    throw new Error('pi has no configured models; run pi or `deepclause set-backend env`');
+  }
+
+  if (requested) {
+    const normalized = requested.replace(':', '/');
+    const [provider, ...rest] = normalized.split('/');
+    const modelId = rest.join('/');
+    if (modelId && registry.find) {
+      const found = registry.find(provider, modelId);
+      if (found) return found;
+    }
+    const byId = available.find((model) => model.id === requested || modelLabel(model) === requested);
+    if (byId) return byId;
+    throw new Error(`pi model not found: ${requested}`);
+  }
+
+  return available[0];
+}
+
+function emptyUsage(): PiCompletionResult['usage'] {
+  return { input: 0, output: 0, totalTokens: 0, cacheRead: 0, cacheWrite: 0, reasoning: 0 };
+}
+
+function toPiMessages(messages: LLMBackendMessage[], model: PiModelLike): unknown[] {
+  return messages
+    .filter((message) => message.role !== 'system')
+    .map((message) => {
+      if (message.role === 'assistant' && message.providerData) {
+        return message.providerData;
+      }
+      if (message.role === 'user') {
+        return { role: 'user', content: message.content, timestamp: Date.now() };
+      }
+      if (message.role === 'tool') {
+        return {
+          role: 'toolResult',
+          toolCallId: message.toolCallId ?? 'unknown',
+          toolName: message.toolName ?? 'unknown',
+          content: [{ type: 'text', text: message.content }],
+          isError: false,
+          timestamp: Date.now(),
+        };
+      }
+      return {
+        role: 'assistant',
+        content: [
+          ...(message.content ? [{ type: 'text', text: message.content }] : []),
+          ...(message.toolCalls ?? []).map((call) => ({
+            type: 'toolCall',
+            id: call.id,
+            name: call.name,
+            arguments: call.arguments,
+          })),
+        ],
+        api: model.api,
+        provider: model.provider,
+        model: model.id,
+        usage: emptyUsage(),
+        stopReason: message.toolCalls?.length ? 'toolUse' : 'stop',
+        timestamp: Date.now(),
+      };
+    });
+}
+
+/**
+ * Wrap a pi registry + model as an SDK `LLMBackend`. Reused by the extension
+ * embedding, which passes its live registry.
+ */
+export function createPiAdapter(
+  registry: PiRegistryLike,
+  model: PiModelLike,
+  maxTokens = 65536,
+): { backend: LLMBackend; modelId: string; provider: string } {
+  if (!registry.hasConfiguredAuth(model)) {
+    throw new Error(`pi has no configured authentication for ${modelLabel(model)}`);
+  }
+
+  const backend: LLMBackend = {
+    async complete(request: LLMBackendRequest): Promise<LLMBackendResponse> {
+      const systemPrompt = request.messages
+        .filter((message) => message.role === 'system')
+        .map((message) => message.content)
+        .join('\n\n');
+
+      const response = await registry.complete(
+        model,
+        {
+          systemPrompt: systemPrompt || undefined,
+          messages: toPiMessages(request.messages, model),
+          tools: request.tools?.map((tool) => ({
+            name: tool.name,
+            description: tool.description,
+            parameters: tool.parameters,
+          })),
+        },
+        {
+          signal: request.signal,
+          maxTokens: request.maxTokens ?? maxTokens,
+          cacheRetention: 'none',
+        },
+      );
+
+      if (response.stopReason === 'error' || response.stopReason === 'aborted') {
+        throw new Error(response.errorMessage || `pi model request ${response.stopReason}`);
+      }
+
+      const text = response.content
+        .filter((content): content is { type: 'text'; text: string } => content.type === 'text')
+        .map((content) => content.text)
+        .join('');
+      if (text) request.onText?.(text);
+
+      return {
+        text,
+        toolCalls: response.content
+          .filter((content): content is { type: 'toolCall'; id: string; name: string; arguments: Record<string, unknown> } => content.type === 'toolCall')
+          .map((call) => ({ id: call.id, name: call.name, arguments: call.arguments })),
+        usage: {
+          inputTokens: response.usage.input,
+          outputTokens: response.usage.output,
+          totalTokens: response.usage.totalTokens,
+          cacheReadTokens: response.usage.cacheRead || undefined,
+          cacheWriteTokens: response.usage.cacheWrite || undefined,
+          reasoningTokens: response.usage.reasoning || undefined,
+        },
+        finishReason: response.stopReason === 'toolUse'
+          ? 'tool_use'
+          : response.stopReason === 'length'
+            ? 'length'
+            : 'stop',
+        providerData: response,
+      };
+    },
+  };
+
+  return { backend, modelId: modelLabel(model), provider: model.provider };
+}
+
+interface PiModule {
+  getAgentDir(): string;
+  ModelRuntime: {
+    create(options: { authPath?: string; modelsPath?: string; allowModelNetwork?: boolean }): Promise<unknown>;
+  };
+  ModelRegistry: new (runtime: unknown) => PiRegistryLike;
+}
+
+async function importPiModule(): Promise<PiModule> {
+  // Typed as a plain string so TypeScript does not require the optional peer
+  // dependency to be installed at build time.
+  const packageName: string = '@earendil-works/pi-coding-agent';
+  try {
+    return (await import(packageName)) as unknown as PiModule;
+  } catch {
+    throw new Error(
+      "Backend 'pi' requires the optional peer dependency @earendil-works/pi-coding-agent. "
+      + 'Install it, or run `deepclause set-backend env` to use the SDK provider/API-key backend.',
+    );
+  }
+}
+
+export interface CreatePiBackendOptions extends PiBackendConfig {
+  maxTokens?: number;
+  /** Injected registry (used by tests and by a pi embedding). */
+  modelRegistry?: PiRegistryLike;
+}
+
+/**
+ * Build an `LLMBackend` from pi's credential store. Throws a clear error when
+ * the pi packages are not installed.
+ */
+export async function createPiBackend(options: CreatePiBackendOptions = {}): Promise<{
+  backend: LLMBackend;
+  modelId: string;
+  provider: string;
+}> {
+  let registry = options.modelRegistry;
+  let requested = options.model;
+
+  if (!registry) {
+    const pi = await importPiModule();
+    const paths = resolvePiPaths(options, { agentDir: pi.getAgentDir() });
+    requested = requested ?? paths.model;
+    const runtime = await pi.ModelRuntime.create({
+      authPath: paths.authPath,
+      modelsPath: paths.modelsPath,
+      allowModelNetwork: false,
+    });
+    registry = new pi.ModelRegistry(runtime);
+  }
+
+  const model = selectPiModel(registry, requested);
+  return createPiAdapter(registry, model, options.maxTokens);
+}

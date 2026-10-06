@@ -26,6 +26,8 @@ export interface MetaToolContext {
   executeGoal: (goal: string, limit?: number) => Promise<ExecuteResult>;
   /** Human-in-the-loop channel (M6). */
   askUser?: (prompt: string, options?: string[]) => Promise<{ answer: string } | { cancelled: true }>;
+  /** Catalog of capability host tools, returned by listing(tools). */
+  hostToolsCatalog?: string;
 }
 
 function quoteString(value: string): string {
@@ -71,6 +73,9 @@ export function createMetaTools(ctx: MetaToolContext): Map<string, ToolDefinitio
     },
     execute: (args) => serialized(async () => {
       const filter = String(args.filter ?? 'all').trim() || 'all';
+      if (filter === 'tools' && ctx.hostToolsCatalog) {
+        return textResult(ctx.hostToolsCatalog);
+      }
       const result = ctx.prologQuery(
         `deepclause_mi:repl_listing('${ctx.sessionId}', ${listingFilterTerm(filter)}, Text)`
       );

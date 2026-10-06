@@ -17,6 +17,7 @@ import { formatToolArgs } from './tool-args.js';
 import { buildModelOverride, type ModelSlot } from '../system/config/model-slots.js';
 import { runPromptHeadless, startTui } from './tui.js';
 import { registerReplCommand } from './repl.js';
+import { registerSetBackendCommand } from './set-backend.js';
 import { readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
@@ -29,7 +30,7 @@ const packageJson = JSON.parse(readFileSync(packageJsonPath, 'utf-8'));
 const version = packageJson.version;
 
 const program = new Command();
-const CLI_SUBCOMMANDS = new Set(['init', 'set-model', 'show-model', 'list-models', 'compile', 'compile-all', 'run', 'plan', 'repl', 'list-tools', 'list-commands', 'help']);
+const CLI_SUBCOMMANDS = new Set(['init', 'set-model', 'show-model', 'list-models', 'compile', 'compile-all', 'run', 'plan', 'repl', 'set-backend', 'list-tools', 'list-commands', 'help']);
 
 program
   .name('deepclause')
@@ -681,6 +682,7 @@ program
 // =============================================================================
 
 registerReplCommand(program);
+registerSetBackendCommand(program);
 
 // =============================================================================
 // Helper Functions

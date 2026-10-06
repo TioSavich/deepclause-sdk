@@ -143,8 +143,21 @@ const ReplConfigSchema = z.object({
   tools: z.array(z.string()).nullish(),
 }).optional().default({});
 
+/**
+ * Model backend selection. `env` uses the SDK provider/API-key settings;
+ * `pi` reuses pi's model registry and credentials.
+ */
+const BackendConfigSchema = z.object({
+  kind: z.enum(['env', 'pi']).optional().default('env'),
+  agentDir: z.string().optional(),
+  modelsPath: z.string().nullish(),
+  authPath: z.string().nullish(),
+  model: z.string().optional(),
+}).optional().default({ kind: 'env' });
+
 export const ConfigSchema = z.object({
   models: ModelsSchema.default(DEFAULT_MODEL_IDS),
+  backend: BackendConfigSchema,
   temperatures: TemperaturesSchema.default(DEFAULT_TEMPERATURES),
   modelOptions: ModelOptionsSchema,
   providers: ProvidersSchema,
@@ -170,6 +183,7 @@ const DEFAULT_CONFIG: Config = {
   models: { ...DEFAULT_MODEL_IDS },
   temperatures: { ...DEFAULT_TEMPERATURES },
   modelOptions: {},
+  backend: { kind: 'env' },
   providers: {},
   mcp: { servers: {} },
   agentvm: { network: false },
@@ -620,6 +634,7 @@ export function getDefaultConfig(): Config {
     models: { ...DEFAULT_CONFIG.models },
     temperatures: { ...DEFAULT_CONFIG.temperatures },
     providers: { ...DEFAULT_CONFIG.providers },
+    backend: { ...DEFAULT_CONFIG.backend },
     mcp: { servers: {} },
     agentvm: { network: DEFAULT_CONFIG.agentvm?.network ?? false },
     shell: { ...DEFAULT_CONFIG.shell },
