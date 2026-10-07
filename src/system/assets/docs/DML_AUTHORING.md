@@ -77,9 +77,14 @@ frozen in, is a script in disguise.
 The HOST TOOL CATALOG above is the complete set of `exec(...)` capability tools.
 Do not invent names — there is no `calculator`, `fetch_url`, `web_search`, or
 `vm_exec` unless the catalog lists it. By default the only capability tool is
-**`bash`**. File I/O is language, not a tool (`write_file/2`, `read_file/2`, …),
-and you also have the `read_file`/`write_file`/`list_files`/`delete_file` and
-`bash` tools directly.
+**`bash`**.
+
+**Prefer the shell for file I/O.** Use `bash` (and the `read_file`/`write_file`/
+`list_files`/`delete_file` tools) for reading, writing, copying, and converting
+files. The DML file predicates (`read_file/2`, `open/3`, `read_string/3`,
+`write_file/2`, `directory_files/2`, …) are for when the content must be bound
+and reasoned over **inside Prolog** — not for moving bytes around. Reading a file
+into DML just to shell it out again is a smell.
 
 ## 3. Scripts are files, linked from the harness
 
@@ -95,10 +100,9 @@ Untrusted data (URLs, file contents, user text) goes through a file or `stdin`,
 never interpolated into the shell command string. See `HARNESS_EXAMPLES.md` §1.
 
 A linked script is for a genuinely external capability (a library, `ffmpeg`, an
-API) — not for glue that Prolog already does (`directory_files/2`, `findall/3`,
-`msort/2`, `sort/4`, regex, string predicates) and not one script per request.
-Even a necessary script is a component: parameterize it and document it with
-`doc/2`.
+API) — not a substitute for a shell command you run once, and not one script per
+request. When a script is the capability, it is a component: parameterize it and
+document it with `doc/2`.
 
 ## 4. Annotate the harness (self-describing)
 
@@ -145,6 +149,8 @@ text-only — never attach media to them.
   all take a relative path, and `directory_files/2` returns **bare names**, so
   build one (`atom_concat('images/', Name, Path)`). `bash` sees more of the
   sandbox than DML can — keep that in `bash` and hand DML only relative paths.
+  Prefer `bash`/host file tools for file operations; use the DML file predicates
+  only for content you must reason over in Prolog.
 - **Side-effecting skills must be deterministic.** Any skill that calls
   `task/N`, `prompt/N`, `exec/2`, `read_media/2`, `attach_media/1`, or writes a
   file must yield exactly one solution with no choicepoint left across the side

@@ -7,7 +7,8 @@ Most skills should look like §2–§3: a short sequence of `task/N`/`prompt/N` 
 with thin guards between them. §4–§7 (facts, pure logic, judgments, CLP) are the
 exception — reach for them only when the task is genuinely data- or
 logic-shaped, not as the default style. DML is the orchestration layer over model
-calls, not the logic library (`DML_AUTHORING.md` §0).
+calls, not the logic library (`DML_AUTHORING.md` §0). For file work, shell out
+(`exec(bash(...))`) instead of reading files into DML (§2).
 
 Every skill carries a `doc(Name/Arity, Text)` annotation and the harness a
 `module_doc(Text)` line (`DML_AUTHORING.md` §3) — they appear in the manifest

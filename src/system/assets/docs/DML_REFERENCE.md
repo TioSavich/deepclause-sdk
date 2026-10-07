@@ -389,9 +389,16 @@ Memory stores `media{path, mime}` — never the image bytes. Judgments
 
 ---
 
-### File I/O and paths
+### File I/O and paths — prefer the shell
 
-Every path in DML is **workspace-relative** and confined to the workspace. The
+**Prefer `exec(bash(...))` (and the host file tools) for file operations.**
+Reading, writing, copying, or converting files is usually clearer and more
+robust as a shell command; reach for the DML predicates below only when the
+content must be bound and reasoned over inside Prolog. Pulling a file into DML
+just to hand it back to the shell is a smell (`DML_AUTHORING.md` §2).
+
+If you do use them: every path in DML is **workspace-relative** and confined to
+the workspace. The
 engine mounts the workspace at `/workspace`, but you must not write
 `/workspace/...` in DML — passing an absolute path is rejected, as is `..`. File
 predicates all take a relative path:

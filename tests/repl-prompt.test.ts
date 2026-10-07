@@ -205,6 +205,9 @@ describe('prompt mode', () => {
     // CLP is bounded and discouraged for ordinary arithmetic.
     expect(promptText).toContain('bound every domain');
     expect(promptText).toContain('no per-goal timeout');
+    // Prefer the shell over Prolog file I/O.
+    expect(promptText).toContain('FILE I/O: prefer the shell');
+    expect(promptText).toContain('Prefer the shell for file I/O');
     // Workspace-relative paths, determinism, and whole-predicate redefinition.
     expect(promptText).toContain('PATHS: every path in DML is workspace-relative');
     expect(promptText).toContain('DETERMINISM:');
