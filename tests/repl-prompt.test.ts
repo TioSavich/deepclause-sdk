@@ -189,6 +189,9 @@ describe('prompt mode', () => {
     expect(promptText).toContain('MEDIA (images)');
     expect(promptText).toContain('Media Predicates');
     expect(promptText).toContain('attach_media');
+    // Skills must generalize into reusable components, not one-off scripts.
+    expect(promptText).toContain("GENERALIZE, DON'T SPECIALIZE");
+    expect(promptText).toContain('find_latest(Dir, Pattern, Path)');
   });
 
   it('keeps meta memory clean: raw request/outcome pairs, not the assembled prompt', async () => {

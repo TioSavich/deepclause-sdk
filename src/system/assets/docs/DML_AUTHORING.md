@@ -31,6 +31,13 @@ an existing predicate over a near-duplicate. Change it **only when the user
 asks** — create on a fresh workspace, and afterwards touch only what the request
 requires; never refactor or extend it on your own initiative.
 
+**Generalize, don't specialize.** A skill is a reusable component with explicit
+inputs, not a one-off script for the request in front of you. "Find the latest
+image in `~/Downloads`" is not a skill; `find_latest(Dir, Pattern, Path)` is,
+because it works for any folder and file type. Do not hard-code paths, names,
+or values the caller could pass, and do not add a predicate or script that
+another skill could reuse with different arguments.
+
 ## 1. Only use tools from the catalog
 
 The HOST TOOL CATALOG above is the complete set of `exec(...)` capability tools.
@@ -52,6 +59,11 @@ file stays portable.
 
 Untrusted data (URLs, file contents, user text) goes through a file or `stdin`,
 never interpolated into the shell command string. See `HARNESS_EXAMPLES.md` §1.
+
+A linked script is for a genuinely external capability (a library, `ffmpeg`, an
+API) — not for glue that Prolog already does (`directory_files/2`, `findall/3`,
+`msort/2`, regex, string predicates) and not one script per request. Even a
+necessary script is a component: parameterize it and document it with `doc/2`.
 
 ## 3. Annotate the harness (self-describing)
 
