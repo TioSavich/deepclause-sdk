@@ -67,6 +67,8 @@
     repl_user_predicates_text/2,
     repl_set_meta_catalog/2,
     repl_set_meta_template/2,
+    repl_set_harness_examples/2,
+    repl_set_prolog_snippets/2,
     repl_run_meta/4,
     repl_snapshot_save/1,
     repl_snapshot_restore/1,
@@ -111,6 +113,8 @@
 :- dynamic session_dml_reference/2. % session_dml_reference(SessionId, Text) - bundled DML reference for the meta prompt
 :- dynamic session_authoring_examples/2. % session_authoring_examples(SessionId, Text) - curated authoring patterns
 :- dynamic session_meta_template/2.  % session_meta_template(SessionId, Template) - bundled META_PROMPT.md template
+:- dynamic session_harness_examples/2. % session_harness_examples(SessionId, Text) - bundled HARNESS_EXAMPLES.md
+:- dynamic session_prolog_snippets/2. % session_prolog_snippets(SessionId, Text) - bundled PROLOG_SNIPPETS.md
 :- dynamic session_last_commit/2.    % session_last_commit(SessionId, [Name/Arity]) - predicates the last commit replaced
 :- dynamic repl_snapshot/2.         % repl_snapshot(SessionId, Snapshot) - transactional edit snapshot
 :- dynamic session_params/2.       % session_params(SessionId, ParamsDict)
@@ -773,6 +777,8 @@ destroy_session(SessionId) :-
     retractall(session_dml_reference(SessionId, _)),
     retractall(session_authoring_examples(SessionId, _)),
     retractall(session_meta_template(SessionId, _)),
+    retractall(session_harness_examples(SessionId, _)),
+    retractall(session_prolog_snippets(SessionId, _)),
     retractall(session_last_commit(SessionId, _)),
     retractall(repl_snapshot(SessionId, _)),
     retractall(session_params(SessionId, _)),
@@ -980,6 +986,11 @@ repl_listing_output(SessionId, Filter) :-
         forall(member(Name/Arity, Preds),
             (   repl_listing_match(Filter, Name, Arity)
             ->  format("~w/~w~n", [Name, Arity]),
+                (   current_predicate(SessionId:doc/2),
+                    SessionId:doc(Name/Arity, DocText)
+                ->  format("  % ~w~n", [DocText])
+                ;   true
+                ),
                 functor(Head, Name, Arity),
                 listing(SessionId:Head)
             ;   true
@@ -1391,6 +1402,18 @@ repl_set_meta_template(SessionId, Template) :-
     retractall(session_meta_template(SessionId, _)),
     assertz(session_meta_template(SessionId, Template)).
 
+%% repl_set_harness_examples(+SessionId, +Text)
+%% Stores the bundled HARNESS_EXAMPLES.md ({{EXAMPLES}}).
+repl_set_harness_examples(SessionId, Text) :-
+    retractall(session_harness_examples(SessionId, _)),
+    assertz(session_harness_examples(SessionId, Text)).
+
+%% repl_set_prolog_snippets(+SessionId, +Text)
+%% Stores the bundled PROLOG_SNIPPETS.md ({{SNIPPETS}}).
+repl_set_prolog_snippets(SessionId, Text) :-
+    retractall(session_prolog_snippets(SessionId, _)),
+    assertz(session_prolog_snippets(SessionId, Text)).
+
 %% repl_assert_many(+SessionId, +ClausesText, -Result)
 %% Parses a block of clauses and asserts them in the order written. Prefer this
 %% for defining a predicate: clause order matters for backtracking, so asserting
@@ -1482,11 +1505,28 @@ repl_manifest(SessionId, Manifest) :-
     sort(Tools0, Tools),
     findall(Directive, session_directive(SessionId, Directive), Directives0),
     sort(Directives0, Directives),
+    (   current_predicate(SessionId:module_doc/1),
+        SessionId:module_doc(Summary0)
+    ->  Summary = Summary0
+    ;   Summary = ""
+    ),
+    (   current_predicate(SessionId:doc/2)
+    ->  findall(PI-DocText, SessionId:doc(PI, DocText), Docs0)
+    ;   Docs0 = []
+    ),
     repl_history_summary(SessionId, HistorySummary),
     with_output_to(string(Manifest),
         (   format("- predicates: ~w~n", [Preds]),
             format("- tools: ~w~n", [Tools]),
             format("- directives: ~w~n", [Directives]),
+            (   Summary == ""
+            ->  true
+            ;   format("- harness: ~w~n", [Summary])
+            ),
+            (   Docs0 == []
+            ->  format("- docs: (none; add doc(Name/Arity, Text) facts)~n")
+            ;   forall(member(PI-DocText, Docs0), format("- doc(~w): ~w~n", [PI, DocText]))
+            ),
             format("- history: ~w~n", [HistorySummary])
         )).
 
@@ -1658,7 +1698,9 @@ repl_history_summary(SessionId, Text) :-
 repl_meta_prompt(SessionId, Request, Prompt) :-
     (   session_meta_catalog(SessionId, Catalog) -> true ; Catalog = "" ),
     (   session_dml_reference(SessionId, Reference) -> true ; Reference = "" ),
-    (   session_authoring_examples(SessionId, Examples) -> true ; Examples = "" ),
+    (   session_authoring_examples(SessionId, Authoring) -> true ; Authoring = "" ),
+    (   session_harness_examples(SessionId, Examples) -> true ; Examples = "" ),
+    (   session_prolog_snippets(SessionId, Snippets) -> true ; Snippets = "" ),
     repl_manifest(SessionId, Manifest),
     repl_meta_memory_text(SessionId, MemoryText),
     % The template is the bundled META_PROMPT.md, injected by the host via
@@ -1670,10 +1712,12 @@ repl_meta_prompt(SessionId, Request, Prompt) :-
     ),
     replace_all(Template, "{{CATALOG}}", Catalog, P1),
     replace_all(P1, "{{REFERENCE}}", Reference, P2),
-    replace_all(P2, "{{EXAMPLES}}", Examples, P3),
-    replace_all(P3, "{{MANIFEST}}", Manifest, P4),
-    replace_all(P4, "{{MEMORY}}", MemoryText, P5),
-    replace_all(P5, "{{REQUEST}}", Request, Prompt).
+    replace_all(P2, "{{AUTHORING}}", Authoring, P3),
+    replace_all(P3, "{{EXAMPLES}}", Examples, P4),
+    replace_all(P4, "{{SNIPPETS}}", Snippets, P5),
+    replace_all(P5, "{{MANIFEST}}", Manifest, P6),
+    replace_all(P6, "{{MEMORY}}", MemoryText, P7),
+    replace_all(P7, "{{REQUEST}}", Request, Prompt).
 
 %% replace_all(+Text, +From, +To, -Out)
 %% Literal, all-occurrences substring replacement. Fills the meta-prompt

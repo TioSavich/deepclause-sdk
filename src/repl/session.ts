@@ -114,6 +114,8 @@ export class DMLSession {
   private dmlReference?: string;
   private dmlAuthoring?: string;
   private metaPromptTemplate?: string;
+  private harnessExamples?: string;
+  private prologSnippets?: string;
   private disposed = false;
   /** History recorder; present only when the caller enables it. */
   private history?: HistoryStore;
@@ -528,6 +530,21 @@ export class DMLSession {
     return this.metaPromptTemplate;
   }
 
+  /** Load a bundled doc asset once (cached by field). */
+  private async loadDocAsset(name: 'harness-examples' | 'prolog-snippets'): Promise<string> {
+    const cached = name === 'harness-examples' ? this.harnessExamples : this.prologSnippets;
+    if (cached !== undefined) return cached;
+    let text = '';
+    try {
+      text = await fs.readFile(getWorkspaceDocAssetPath(name), 'utf8');
+    } catch {
+      text = '';
+    }
+    if (name === 'harness-examples') this.harnessExamples = text;
+    else this.prologSnippets = text;
+    return text;
+  }
+
   /** Predicates replaced by the most recent successful commit ("name/arity, …"). */
   private lastCommitPredicates(): string {
     const result = this.prologQuery(
@@ -835,6 +852,18 @@ export class DMLSession {
         if (metaTemplate) {
           this.prologQuery(
             `deepclause_mi:repl_set_meta_template('${this.sessionId}', ${quoteString(metaTemplate)})`
+          );
+        }
+        const harnessExamples = await this.loadDocAsset('harness-examples');
+        if (harnessExamples) {
+          this.prologQuery(
+            `deepclause_mi:repl_set_harness_examples('${this.sessionId}', ${quoteString(harnessExamples)})`
+          );
+        }
+        const prologSnippets = await this.loadDocAsset('prolog-snippets');
+        if (prologSnippets) {
+          this.prologQuery(
+            `deepclause_mi:repl_set_prolog_snippets('${this.sessionId}', ${quoteString(prologSnippets)})`
           );
         }
 

@@ -1,6 +1,7 @@
-# DML authoring patterns (REPL)
+# DML authoring guide (REPL)
 
-Idiomatic shapes for a REPL harness. Keep harnesses small and concrete.
+How to think about a REPL harness. For code, see `HARNESS_EXAMPLES.md` (idiomatic
+harness shapes) and `PROLOG_SNIPPETS.md` (tested building blocks).
 
 ## 0. What a harness is
 
@@ -43,63 +44,41 @@ and you also have the `read_file`/`write_file`/`list_files`/`delete_file` and
 
 Write each program to a file with `write_file`, link it with `script_file/2`,
 and run it with `bash`. The write lands on disk immediately, so you can run the
-script in the same turn; no DML string escaping is involved.
-
-```prolog
-script_file(count_words, ".dc-repl/scripts/count_words.py").
-
-tool(count_words(File, Count), "Count words in a workspace file.") :-
-    script_file(count_words, Script),
-    format(atom(Cmd), "python3 '~w' '~w'", [Script, File]),
-    exec(bash(command: Cmd), Result),
-    get_dict(stdout, Result, Count).
-
-report :-
-    task("Suggest a short sentence to count. Store it in Sentence.", Sentence),
-    write_file(".dc-tmp/sentence.txt", Sentence),
-    count_words(".dc-tmp/sentence.txt", Count),
-    format(string(Msg), "That sentence has ~w words.", [Count]),
-    answer(Msg).
-```
-
-`script_file/2` is just a fact: it tells `export` which files belong to the
-harness. Use a literal workspace-relative path and one fact per name.
-`export harness.zip` bundles the `.dml` plus every linked file;
-`export harness.dml` inlines them so the single file stays portable.
-
-Other files are ordinary workspace paths. There is no fixed extension.
-
-```prolog
-tool(list_files(Dir, Listing), "List files in a directory.") :-
-    format(atom(Cmd), "ls -la '~w' 2>/dev/null || echo empty", [Dir]),
-    exec(bash(command: Cmd), Result),
-    get_dict(stdout, Result, Listing).
-```
+script in the same turn; no DML string escaping is involved. `script_file/2` is
+just a fact: it tells `export` which files belong to the harness. Use a literal
+workspace-relative path and one fact per name. `export harness.zip` bundles the
+`.dml` plus every linked file; `export harness.dml` inlines them so the single
+file stays portable.
 
 Untrusted data (URLs, file contents, user text) goes through a file or `stdin`,
-never interpolated into the shell command string.
+never interpolated into the shell command string. See `HARNESS_EXAMPLES.md` §1.
 
-## 3. A multi-step pipeline: task -> task -> output/answer
+## 3. Annotate the harness (self-describing)
 
-Sequence model calls and symbolic steps; use `task/2` for each reasoning step.
+Keep the harness self-describing with a small set of facts:
 
 ```prolog
-report :-
-    task("List three risks of using an LLM for arithmetic. Store them in Risks.", Risks),
-    format(string(Desc), "Rank these risks by severity and explain the top one: ~w", [Risks]),
-    task(Desc, Top),
-    format(string(Msg), "Top risk: ~w", [Top]),
-    answer(Msg).
+module_doc("Support triage: classify a message and route it to a team.").
+
+doc(classify/2, "Route a support message to a team. classify(+Message, -Team). Example: goal: classify(\"I was charged twice\", T).").
+doc(tally/2, "Count occurrences of each item. tally(+List, -Counts) yields Key-N pairs. Example: tally([a,b,a], C).").
 ```
+
+- `doc(Name/Arity, Text)` — one fact per skill, helper, or tool; terse, with
+  arguments (`+in` / `-out`) and an example goal.
+- `module_doc(Text)` — one fact summarising the whole harness.
+
+They are shown in the manifest (so the next turn sees them), in `listing`, and
+survive `export`. When you change a predicate, update its `doc/2` too.
 
 ## 4. Guard rails
 
 - Read first: call `listing`.
-- Clause order matters: base case before a recursive rule; assert a whole
-  predicate with `assert_many`.
+- Clause order matters: base case before a recursive rule; define a whole
+  predicate with `assert_many` (clauses in the order written).
 - Verify after changing a predicate: `listing(Name/Arity)`.
 - Bounded iteration only: finite recursion, CLP(FD)/CLP(Q), or an explicit
-  bound. `execute` is gas-limited.
+  bound. `execute` is gas-limited and the turn has a model-call budget.
 - `bash` runs in a sandbox. Explore it (`python3 --version`, `pip list`,
   `which jq`) and install a dependency when a skill genuinely needs one;
   installs are sandbox/session-local and do not travel with an exported harness,

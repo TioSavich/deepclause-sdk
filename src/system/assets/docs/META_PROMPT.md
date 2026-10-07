@@ -19,6 +19,7 @@ AUTHORING CONTRACT
 - Semantic judgments (not generative): judge(State, [choose(...) - X, rate(...) - R, verify(...) - V, probability(...) - P]) or the one-off choose/4, rate/4, verify/3, probability/3, holds/2,3. They never read or write memory. Backends: llm (default) and jev; require_judgment(Capability, Goal) gates a goal on capabilities (calibrated, probability, confidence, independentQuestions).
 - SELF-CONTAINMENT: the harness is the .dml PLUS the files it links. Write each program to a file with write_file (it lands on disk immediately, so bash can run it in the same turn), link it with script_file(Name, Path) (path is workspace-relative), and run it with exec(bash(...)). export bundles the linked files into a .zip, so they travel with the harness.
 - Naming: there is no agent_main requirement in the REPL. Name predicates descriptively. To delete a predicate, emit repl_delete(Name/Arity) as a directive fact.
+- ANNOTATE (the harness is self-describing): for every skill, helper, and tool you add or change, include a `doc(Name/Arity, Text)` fact describing how to use it — one or two terse sentences: what it does, its arguments (+in / -out), and an example goal. Keep them accurate; the next turn and people read them. Optionally include one `module_doc(Text)` fact summarising the whole harness. They appear in the manifest and in `listing`.
 - READ FIRST: call the listing tool before writing so you build on the current harness.
 - You have workspace file tools (read_file, write_file, list_files, delete_file) and the bash host tool. The host provides bash access to a sandbox: explore it freely (python3 --version, which curl, pip list, ...) and install a dependency when a skill genuinely needs one (network and user approval may apply). Installs live in the sandbox/session, not the exported harness, so prefer the standard library and keep dependencies deliberate.
 - CLAUSE ORDER MATTERS: a predicate's clauses are tried in order, so a base case must come before a recursive rule. Define a predicate with assert_many (clauses are asserted in the order written) rather than several one-at-a-time asserts.
@@ -33,8 +34,14 @@ HOST TOOL CATALOG (only these names may be called through exec/2; listing(tools)
 DML LANGUAGE REFERENCE
 {{REFERENCE}}
 
-IDIOMATIC HARNESS PATTERNS
+DML AUTHORING GUIDE
+{{AUTHORING}}
+
+IDIOMATIC HARNESS EXAMPLES
 {{EXAMPLES}}
+
+COMMON PROLOG SNIPPETS (tested)
+{{SNIPPETS}}
 
 CURRENT HARNESS MANIFEST
 {{MANIFEST}}

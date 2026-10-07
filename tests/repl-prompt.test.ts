@@ -168,9 +168,13 @@ describe('prompt mode', () => {
     const promptText = backend.calls[0].messages.map((message) => message.content).join('\n');
     expect(promptText).toContain('DML LANGUAGE REFERENCE');
     expect(promptText).toContain('# DML Language Reference');
-    expect(promptText).toContain('IDIOMATIC HARNESS PATTERNS');
+    expect(promptText).toContain('DML AUTHORING GUIDE');
+    expect(promptText).toContain('IDIOMATIC HARNESS EXAMPLES');
+    expect(promptText).toContain('COMMON PROLOG SNIPPETS');
     expect(promptText).toContain('script_file(');
     expect(promptText).toContain('tool(count_words(File, Count)');
+    expect(promptText).toContain('wildcard_match(');
+    expect(promptText).toContain('doc(Name/Arity, Text)');
     expect(promptText).toContain('BOUNDED ITERATION');
     expect(promptText).toContain('CLAUSE ORDER MATTERS');
     expect(promptText).toContain('WHAT A HARNESS IS');
