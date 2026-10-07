@@ -225,6 +225,7 @@ export async function run(
     }
     return result;
   } finally {
+    renderer.dispose();
     await session.dispose();
     await toolset.dispose();
   }

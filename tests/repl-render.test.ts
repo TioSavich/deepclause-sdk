@@ -1,7 +1,7 @@
 /**
  * M1 — REPL renderer: rich/plain/json modes.
  */
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { ReplRenderer, formatBindings } from '../src/repl/render.js';
 import type { DMLEvent } from '../src/types.js';
@@ -73,7 +73,7 @@ describe('ReplRenderer', () => {
     } as DMLEvent);
 
     // Panel background + foreground codes are applied.
-    expect(lines[0]).toContain('\u001b[48;5;236m');
+    expect(lines[0]).toContain('\u001b[48;5;22m');
     // Visible text (ignoring SGR) is padded out to the panel width.
     const visible = lines[0].replace(/\u001b\[[0-9;]*m/g, '').replace(/\n$/, '');
     expect(visible).toHaveLength(60);
@@ -83,7 +83,33 @@ describe('ReplRenderer', () => {
     plain.renderer.render({
       type: 'tool_call', toolName: 'bash', toolState: 'starting', toolArgs: { command: 'echo hi' },
     } as DMLEvent);
-    expect(plain.lines.join('')).not.toContain('\u001b[48;5;236m');
+    expect(plain.lines.join('')).not.toContain('\u001b[48;5;22m');
+  });
+
+  it('colours output and answer differently (rich mode)', () => {
+    const { lines, renderer } = capture('rich', true, 100);
+    renderer.render({ type: 'output', content: 'intermediate' } as DMLEvent);
+    renderer.render({ type: 'answer', content: 'final' } as DMLEvent);
+    expect(lines[0]).toContain('\u001b[38;5;150m');
+    expect(lines[1]).toContain('\u001b[1;38;5;118m');
+  });
+
+  it('shows a live spinner while a model call is in progress (rich mode)', () => {
+    vi.useFakeTimers();
+    try {
+      const { lines, renderer } = capture('rich', true, 80);
+      renderer.render({ type: 'model_call', modelCallState: 'started', modelId: 'gpt-x', frameKind: 'meta' } as DMLEvent);
+      expect(lines.join('')).toContain('model call (gpt-x)…');
+      // The frame is rewritten in place (carriage return + clear line).
+      vi.advanceTimersByTime(200);
+      expect(lines.join('')).toContain('\r\u001b[K');
+
+      renderer.render({ type: 'model_call', modelCallState: 'completed' } as DMLEvent);
+      renderer.dispose();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('formatBindings renders values, or true when there are none', () => {

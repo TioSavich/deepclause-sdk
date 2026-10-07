@@ -13,6 +13,7 @@ import type {
   LLMBackend,
   LLMBackendMedia,
   LLMBackendMessage,
+  LLMBackendResponse,
   LLMBackendTool,
   MediaRef,
   ToolDefinition,
@@ -82,6 +83,8 @@ export interface AgentLoopOptions {
   onBeforeModelCall?: (messages: MemoryMessage[], lastInputTokens?: number) => Promise<MemoryMessage[]>;
   /** Returns false to abort the turn when the model-call budget is exhausted. */
   onModelCall?: () => boolean | Promise<boolean>;
+  /** Model-call lifecycle, for a live "in progress" indicator. */
+  onModelCallPhase?: (phase: 'started' | 'completed' | 'failed') => void;
   onAskUser: (prompt: string) => Promise<string | undefined>;
   signal?: AbortSignal;
   streaming?: boolean;
@@ -657,25 +660,33 @@ async function runInjectedAgentLoop(
 
     let emittedText = false;
     let emittedReasoning = false;
-    const response = await backend.complete({
-      messages,
-      tools: backendTools,
-      temperature: options.modelOptions.temperature,
-      maxTokens: options.modelOptions.maxOutputTokens,
-      signal: options.signal,
-      onText: options.streaming && options.onStream
-        ? (chunk) => {
-            emittedText = emittedText || chunk.length > 0;
-            options.onStream?.(chunk, false);
-          }
-        : undefined,
-      onReasoning: options.streaming && options.onReasoning
-        ? (chunk) => {
-            emittedReasoning = emittedReasoning || chunk.length > 0;
-            options.onReasoning?.(chunk, false);
-          }
-        : undefined,
-    });
+    let response: LLMBackendResponse;
+    options.onModelCallPhase?.('started');
+    try {
+      response = await backend.complete({
+        messages,
+        tools: backendTools,
+        temperature: options.modelOptions.temperature,
+        maxTokens: options.modelOptions.maxOutputTokens,
+        signal: options.signal,
+        onText: options.streaming && options.onStream
+          ? (chunk) => {
+              emittedText = emittedText || chunk.length > 0;
+              options.onStream?.(chunk, false);
+            }
+          : undefined,
+        onReasoning: options.streaming && options.onReasoning
+          ? (chunk) => {
+              emittedReasoning = emittedReasoning || chunk.length > 0;
+              options.onReasoning?.(chunk, false);
+            }
+          : undefined,
+      });
+    } catch (error) {
+      options.onModelCallPhase?.('failed');
+      throw error;
+    }
+    options.onModelCallPhase?.('completed');
 
     if (response.usage) options.onUsage?.(response.usage);
     if (options.streaming && options.onStream && response.text && !emittedText) {

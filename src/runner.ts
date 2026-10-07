@@ -1064,6 +1064,13 @@ export class DMLRunner {
           streamResolve = null;
         }
       },
+      onModelCallPhase: (phase) => {
+        streamQueue.push({ type: 'model_call', modelCallState: phase, modelId: this.options.model });
+        if (streamResolve) {
+          streamResolve();
+          streamResolve = null;
+        }
+      },
       onBeforeModelCall: async (messages, lastInputTokens) => this.applyCompactionBindings({
         messages,
         lastInputTokens,
@@ -2106,6 +2113,9 @@ export class DMLRunner {
                 },
                 onUsage: (usage) => {
                   onToolEvent?.({ type: 'usage', usage });
+                },
+                onModelCallPhase: (phase) => {
+                  onToolEvent?.({ type: 'model_call', modelCallState: phase, modelId: this.options.model });
                 },
                 onToolCall: onToolCall ?? (() => {}), // Forward tool call events to parent
                 onBeforeModelCall: async (messages, lastInputTokens) => this.applyCompactionBindings({

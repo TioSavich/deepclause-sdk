@@ -256,10 +256,14 @@ export interface FrameEventMeta {
 }
 
 export interface DMLEvent extends FrameEventMeta {
-  type: 'output' | 'log' | 'answer' | 'input_required' | 'error' | 'finished' | 'stream' | 'reasoning' | 'tool_call' | 'usage' | 'memory_compaction' | 'task_activity' | 'solution' | 'meta_result' | 'media';
+  type: 'output' | 'log' | 'answer' | 'input_required' | 'error' | 'finished' | 'stream' | 'reasoning' | 'tool_call' | 'model_call' | 'usage' | 'memory_compaction' | 'task_activity' | 'solution' | 'meta_result' | 'media';
   content?: string;
   /** Media produced by a step (path in the workspace, optional inline base64). */
   media?: { path?: string; mimeType: string; data?: string };
+  /** Model-call lifecycle (only for 'model_call' events). */
+  modelCallState?: 'started' | 'completed' | 'failed';
+  /** Model id for a 'model_call' event, when known. */
+  modelId?: string;
   /** Goal-mode solution (only for 'solution' events). */
   solution?: DMLSolution;
   /** Prompt-mode meta task result (only for 'meta_result' events). */

@@ -278,6 +278,19 @@ describe('prompt mode', () => {
     expect(await fs.access(escaped).then(() => true).catch(() => false)).toBe(false);
   });
 
+  it('emits model_call started/completed around the meta model call', async () => {
+    backend = new CannedBackend([finalResponse('demo :- output(ok).', '')]);
+    repl = await openRepl();
+
+    const events = await collect(repl.prompt('make a demo'));
+    const phases = events
+      .filter((event) => event.type === 'model_call')
+      .map((event) => event.modelCallState);
+    expect(phases).toContain('started');
+    expect(phases).toContain('completed');
+    expect(phases).not.toContain('failed');
+  });
+
   it('define replaces a predicate instead of duplicating its clauses', async () => {
     backend = new CannedBackend([{
       text: '',

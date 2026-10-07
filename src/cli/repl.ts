@@ -917,6 +917,7 @@ export async function startRepl(options: ReplCliOptions): Promise<number> {
         runtime.renderer.writeErrorLine(`ERROR: ${(error as Error).message}`);
       }
     }
+    runtime.renderer.dispose();
     await runtime.repl.dispose();
     await runtime.toolset.dispose();
   }

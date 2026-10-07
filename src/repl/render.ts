@@ -36,6 +36,7 @@ export interface ReplRendererOptions {
 const ACTIVITY_EVENTS = new Set<DMLEvent['type']>([
   'task_activity',
   'tool_call',
+  'model_call',
   'usage',
   'log',
   'memory_compaction',
@@ -66,13 +67,20 @@ const ANSI = {
   cyan: '\u001b[36m',
   green: '\u001b[32m',
   red: '\u001b[31m',
+  /** DML `output/1` intermediate results. */
+  output: '\u001b[38;5;150m',
+  /** The final `answer/1`. */
+  answer: '\u001b[1;38;5;118m',
 } as const;
 
-/** Tool-call panel colours (256-colour): a subtle tint behind tool activity. */
-const TOOL_PANEL_BG = '\u001b[48;5;236m';
+/** Tool-call panel colours (256-colour): a green tint behind tool activity. */
+const TOOL_PANEL_BG = '\u001b[48;5;22m';
 const TOOL_PANEL_FG = '\u001b[38;5;252m';
 const TOOL_PANEL_ERROR_BG = '\u001b[48;5;52m';
 const TOOL_PANEL_ERROR_FG = '\u001b[38;5;224m';
+
+/** Spinner frames for the live model-call indicator. */
+const SPINNER_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'] as const;
 
 /** Strip ANSI SGR sequences (for measuring visible width). */
 function stripAnsi(text: string): string {
@@ -101,6 +109,12 @@ export class ReplRenderer {
   private atLineStart = true;
   /** Last bash command printed for a running call (dedupes start/running). */
   private lastBashCommand?: string;
+  /** Live model-call indicator state. */
+  private spinnerTimer?: ReturnType<typeof setInterval>;
+  private spinnerFrame = 0;
+  private spinnerPrefix = '';
+  private spinnerLabel = '';
+  private spinnerVisible = false;
 
   constructor(options: ReplRendererOptions = {}) {
     this.mode = options.mode ?? 'plain';
@@ -113,19 +127,27 @@ export class ReplRenderer {
     this.errorSink = options.errorSink ?? ((text) => process.stderr.write(text));
   }
 
+  /** Stop the live indicator (call before the renderer goes out of scope). */
+  dispose(): void {
+    this.stopSpinner();
+  }
+
   /** Write a raw chunk to the normal sink. */
   write(text: string): void {
+    this.stopSpinner();
     this.sink(text);
   }
 
   /** Write a line to the normal sink. */
   writeLine(text = ''): void {
+    this.stopSpinner();
     this.sink(`${text}\n`);
     this.lastStreamFrame = null;
     this.atLineStart = true;
   }
 
   writeErrorLine(text: string): void {
+    this.stopSpinner();
     this.errorSink(`${text}\n`);
   }
 
@@ -142,6 +164,7 @@ export class ReplRenderer {
       return;
     }
 
+    this.stopSpinner();
     if (event.type !== 'stream' && event.type !== 'reasoning') {
       this.flushStream();
     }
@@ -152,10 +175,13 @@ export class ReplRenderer {
         this.solution(event.solution?.bindings ?? [], undefined, prefix);
         break;
       case 'output':
-        this.writeLine(`${prefix}${event.content ?? ''}`);
+        this.writeLine(`${prefix}${this.paint(event.content ?? '', ANSI.output)}`);
         break;
       case 'answer':
-        this.writeLine(`${prefix}${this.paint(event.content ?? '', ANSI.bold)}`);
+        this.writeLine(`${prefix}${this.paint(event.content ?? '', ANSI.answer)}`);
+        break;
+      case 'model_call':
+        this.renderModelCall(event, prefix);
         break;
       case 'stream':
         this.writeStream(event, event.content ?? '', 'text');
@@ -252,6 +278,49 @@ export class ReplRenderer {
     }
 
     this.writeLine(this.toolPanel(`${prefix}  ⚙ ${name}${args}`, 'normal'));
+  }
+
+  /** Show/hide the live model-call indicator. */
+  private renderModelCall(event: DMLEvent, prefix: string): void {
+    if (event.modelCallState === 'started') {
+      this.startSpinner(prefix, event.modelId ? `model call (${event.modelId})…` : 'model call…');
+      return;
+    }
+    this.stopSpinner();
+  }
+
+  /** Start a `\r`-based spinner on the current line (rich TTY only). */
+  private startSpinner(prefix: string, label: string): void {
+    if (!this.color || this.mode !== 'rich') {
+      return;
+    }
+    this.stopSpinner();
+    this.spinnerPrefix = prefix;
+    this.spinnerLabel = label;
+    this.spinnerFrame = 0;
+    this.paintSpinner();
+    this.spinnerTimer = setInterval(() => {
+      this.spinnerFrame += 1;
+      this.paintSpinner();
+    }, 90);
+  }
+
+  private paintSpinner(): void {
+    const frame = SPINNER_FRAMES[this.spinnerFrame % SPINNER_FRAMES.length];
+    this.sink(`\r\u001b[K${this.spinnerPrefix}${this.paint(`${frame} ${this.spinnerLabel}`, ANSI.dim)}`);
+    this.spinnerVisible = true;
+  }
+
+  /** Clear the spinner line and stop its timer (no-op when inactive). */
+  private stopSpinner(): void {
+    if (this.spinnerTimer) {
+      clearInterval(this.spinnerTimer);
+      this.spinnerTimer = undefined;
+    }
+    if (this.spinnerVisible) {
+      this.sink('\r\u001b[K');
+      this.spinnerVisible = false;
+    }
   }
 
   /**
