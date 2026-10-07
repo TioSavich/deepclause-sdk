@@ -232,6 +232,24 @@ deepclause repl --no-tools     # no capability host tools
 }
 ```
 
+## visualize
+
+Turn a harness into a diagram: `visualize` reads the harness `listing`
+(source + `doc/2` annotations) and asks the active model for a Mermaid chart of
+one entry, then renders it.
+
+```bash
+deepclause visualize skill.dml -g router/2 --presentation -o router.png
+deepclause visualize skill.dml -g router/2 --spec -o router.spec.png
+```
+
+`-g/--goal` names the entry predicate to document. `--presentation` (default) is
+an audience-facing overview (inputs, steps, answer); `--spec` shows engineering
+detail (decisions, `task`/`exec` calls, branches, fallbacks). A `.mmd` output
+writes the Mermaid source; a `.png`/`.svg` output renders it via
+`@mermaid-js/mermaid-cli` (fetched with `npx` on first use) and always writes the
+`.mmd` beside the image.
+
 ## TypeScript SDK
 
 ```ts

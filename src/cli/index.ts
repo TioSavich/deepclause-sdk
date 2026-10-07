@@ -13,6 +13,7 @@ import { deepClauseDirExists, initConfig, setModel, showModel } from './config.j
 import { run } from './run.js';
 import type { ModelSlot } from '../system/config/model-slots.js';
 import { registerReplCommand } from './repl.js';
+import { registerVisualizeCommand } from './visualize.js';
 import { registerSetBackendCommand } from './set-backend.js';
 import { registerLoginCommands } from './login.js';
 import { readFileSync } from 'fs';
@@ -284,6 +285,7 @@ program
 // =============================================================================
 
 registerReplCommand(program);
+registerVisualizeCommand(program);
 registerSetBackendCommand(program);
 registerLoginCommands(program);
 
