@@ -338,6 +338,148 @@ wrapper_type(list, array).
 wrapper_type(object, object).
 wrapper_type(dict, object).
 
+%% ============================================================
+%% Source-facing view of user clauses
+%%
+%% At load time task/N and prompt/N are rewritten to task_named/3 and
+%% prompt_named/3, and interpolated descriptions are hoisted into a preceding
+%% format/3. Those internal forms must not leak into listing/export — the meta
+%% task only knows task/N — so reverse them for display only.
+%% ============================================================
+
+%% clean_clause_body(+Body, -CleanBody)
+clean_clause_body(Body, Clean) :-
+    conj_list(Body, Goals),
+    clean_goal_list(Goals, CleanGoals),
+    (   CleanGoals = [Single]
+    ->  Clean = Single
+    ;   list_to_conjunction(CleanGoals, Clean)
+    ).
+
+conj_list((A, B), List) :-
+    !,
+    conj_list(A, LA),
+    conj_list(B, LB),
+    append(LA, LB, List).
+conj_list(Goal, [Goal]).
+
+clean_goal_list([], []) :- !.
+clean_goal_list([Goal], [Clean]) :-
+    !,
+    clean_atomic(Goal, Clean).
+clean_goal_list([First, Second | Rest], [CleanFirst | CleanRest]) :-
+    (   merge_interpolation(First, Second, CleanFirst)
+    ->  clean_goal_list(Rest, CleanRest)
+    ;   clean_atomic(First, CleanFirst),
+        clean_goal_list([Second | Rest], CleanRest)
+    ).
+
+%% merge_interpolation(+FormatGoal, +TaskGoal, -Merged)
+%% Fold `format(string(D), T, Args), task_named(D, ...)` back into
+%% `task("…{Var}…", ...)`.
+merge_interpolation(FormatGoal, TaskGoal, Merged) :-
+    FormatGoal = format(string(D), Template, Args),
+    (   TaskGoal = task_named(D, Vars, Infos)
+    ;   TaskGoal = prompt_named(D, Vars, Infos)
+    ),
+    task_functor(TaskGoal, Functor),
+    interpolate_template(Template, Args, Description),
+    clean_task(Functor, Description, Vars, Infos, Merged).
+
+task_functor(task_named(_, _, _), task).
+task_functor(prompt_named(_, _, _), prompt).
+
+clean_atomic(task_named(D, Vars, Infos), Clean) :-
+    !,
+    clean_task(task, D, Vars, Infos, Clean).
+clean_atomic(prompt_named(D, Vars, Infos), Clean) :-
+    !,
+    clean_task(prompt, D, Vars, Infos, Clean).
+clean_atomic((A ; B), (CA ; CB)) :-
+    !,
+    clean_clause_body(A, CA),
+    clean_clause_body(B, CB).
+clean_atomic((A -> B), (CA -> CB)) :-
+    !,
+    clean_clause_body(A, CA),
+    clean_clause_body(B, CB).
+clean_atomic((A -> B ; C), (CA -> CB ; CC)) :-
+    !,
+    clean_clause_body(A, CA),
+    clean_clause_body(B, CB),
+    clean_clause_body(C, CC).
+clean_atomic(\+(A), \+ CA) :-
+    !,
+    clean_clause_body(A, CA).
+clean_atomic(not(A), not(CA)) :-
+    !,
+    clean_clause_body(A, CA).
+clean_atomic(Goal, Goal).
+
+%% clean_task(+Functor, +Description, +Vars, +Infos, -Clean)
+clean_task(Functor, Description, Vars, Infos, Clean) :-
+    clean_typed_args(Vars, Infos, CleanVars),
+    Clean =.. [Functor, Description | CleanVars].
+
+clean_typed_args([], [], []) :- !.
+clean_typed_args([Var | Vars], [Info | Infos], [Wrapped | Wrappeds]) :-
+    !,
+    typed_arg(Var, Info, Wrapped),
+    clean_typed_args(Vars, Infos, Wrappeds).
+clean_typed_args(Vars, _, Vars).
+
+%% typed_arg(+Var, +Info, -Wrapped) — reverse typed_var{...} to its wrapper.
+typed_arg(Var, Info, Wrapped) :-
+    is_dict(Info),
+    get_dict(type, Info, Type),
+    !,
+    typed_arg_type(Type, Var, Info, Wrapped).
+typed_arg(Var, _, Var).
+
+typed_arg_type(string, Var, _, Var) :- !.
+typed_arg_type(integer, Var, _, integer(Var)) :- !.
+typed_arg_type(number, Var, _, number(Var)) :- !.
+typed_arg_type(boolean, Var, _, boolean(Var)) :- !.
+typed_arg_type(object, Var, _, object(Var)) :- !.
+typed_arg_type(array, Var, Info, list(Wrapped)) :-
+    !,
+    (   get_dict(itemType, Info, ItemType)
+    ->  true
+    ;   ItemType = string
+    ),
+    Wrapped =.. [ItemType, Var].
+typed_arg_type(_, Var, _, Var).
+
+%% interpolate_template(+Template, +Args, -Description)
+%% Reverse of the {Var} -> ~w hoist. Succeeds only when every placeholder is a
+%% plain variable, so the caller can fall back to keeping the format/3 goal.
+interpolate_template(Template, Args, Description) :-
+    string(Template),
+    string_codes(Template, Codes),
+    interpolate_codes(Codes, Args, OutCodes),
+    string_codes(Description, OutCodes).
+
+interpolate_codes([], [], []) :- !.
+%% A {Var} placeholder consumes one argument; require Args to be exhausted
+%% exactly (the []/[] base case above fails if either side has leftovers).
+interpolate_codes([0'~, 0'w | Rest], [Arg | Args], Out) :-
+    !,
+    named_var(Arg),
+    term_string(Arg, Name, [numbervars(true)]),
+    string_codes(Name, NameCodes),
+    interpolate_codes(Rest, Args, Tail),
+    append([0'{|NameCodes], [0'}|Tail], Out).
+interpolate_codes([0'~, 0'~ | Rest], Args, [0'~ | Out]) :-
+    !,
+    interpolate_codes(Rest, Args, Out).
+interpolate_codes([Code | Rest], Args, [Code | Out]) :-
+    interpolate_codes(Rest, Args, Out).
+
+%% An interpolation argument is a variable or a `$VAR(N)` term (after
+%% numbervars), both of which print as a stable name (A, B, ...).
+named_var(Arg) :- var(Arg), !.
+named_var('$VAR'(_)).
+
 %% var_to_name(+Bindings, +Var, -Name)
 %% Look up a variable's name from the bindings list
 var_to_name(Bindings, Var, Name) :-
@@ -995,7 +1137,7 @@ repl_listing_output(SessionId, Filter) :-
                 ;   true
                 ),
                 functor(Head, Name, Arity),
-                listing(SessionId:Head)
+                forall(clause(SessionId:Head, ClauseBody), print_user_clause(Head, ClauseBody))
             ;   true
             )
         )
@@ -1244,13 +1386,20 @@ export_stats(SessionId, Clauses, Tools, Scripts) :-
     ).
 
 export_clause(Head, Body) :-
+    print_user_clause(Head, Body),
+    nl.
+
+%% print_user_clause(+Head, +Body)
+%% Copy + numbervars for deterministic variable names, reverse the load-time
+%% task/prompt rewrites (see clean_clause_body/2), then print in source form.
+print_user_clause(Head, Body) :-
     copy_term(Head-Body, NumberedHead-NumberedBody),
     numbervars(NumberedHead-NumberedBody, 0, _),
-    (   NumberedBody == true
+    clean_clause_body(NumberedBody, CleanBody),
+    (   CleanBody == true
     ->  format("~q.~n", [NumberedHead])
-    ;   format("~q :-~n    ~q.~n", [NumberedHead, NumberedBody])
-    ),
-    nl.
+    ;   format("~q :-~n    ~q.~n", [NumberedHead, CleanBody])
+    ).
 
 tool_predicate_name(tool).
 tool_predicate_name(tool_source).

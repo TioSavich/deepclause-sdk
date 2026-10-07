@@ -150,6 +150,36 @@ describe('prompt mode', () => {
     expect(await fs.readFile(exportedPath, 'utf8')).toContain('use_module(library(clpfd))');
   });
 
+  it('shows task/N and prompt/N in listing/export (no task_named/typed_var leak)', async () => {
+    backend = new CannedBackend([{ text: '' }]);
+    repl = await openRepl();
+    const loaded = await repl.session.loadCode([
+      'research(Question, Answer) :- task("Answer: {Question}", Answer).',
+      'analyse(Topic, Report, Count) :-',
+      '    prompt("Summarise: {Topic}", Summary),',
+      '    integer(Count),',
+      '    task("Expand {Summary}", Report).',
+    ].join('\n'));
+    expect(loaded.error).toBeUndefined();
+
+    // The load-time rewrite is reversed for anything the meta task reads.
+    const listing = await repl.list('all');
+    expect(listing).not.toContain('task_named');
+    expect(listing).not.toContain('prompt_named');
+    expect(listing).not.toContain('typed_var');
+    expect(listing).toContain('task("Answer: {A}"');
+    expect(listing).toContain('prompt("Summarise: {A}"');
+    expect(listing).toMatch(/integer\([A-Z]/);
+
+    const exported = await repl.export('clauses.dml');
+    const exportedPath = path.isAbsolute(exported.path) ? exported.path : path.join(workspace, exported.path);
+    const text = await fs.readFile(exportedPath, 'utf8');
+    expect(text).not.toContain('task_named');
+    expect(text).not.toContain('prompt_named');
+    expect(text).not.toContain('typed_var');
+    expect(text).toContain('task("Answer: {A}"');
+  });
+
   it('does not synthesize agent_main', async () => {
     backend = new CannedBackend([finalResponse(FACTORIAL, 'demo')]);
     repl = await openRepl();

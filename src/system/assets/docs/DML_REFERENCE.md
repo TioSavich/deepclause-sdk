@@ -151,6 +151,14 @@ Bind up to three variables.
 > `domain_error(unrewritten_task_form, Goal)` instead of failing silently.
 > `task/1`/`prompt/1` are handled directly and are unaffected.
 
+> **Internal note.** At load time `task/N`/`prompt/N` are rewritten to
+> `task_named/3`/`prompt_named/3` (which carry the output-variable names) and
+> `{Var}` descriptions are hoisted into a `format/3`. That is why a description
+> like `task("Answer: {Question}", Answer)` sometimes *appears* as
+> `format(string(C), "Answer: ~w", [Question]), task_named(C, [Answer], ...)`.
+> `listing` and `export` reverse this, so you always read/write `task/N` and
+> `prompt/N` — never author `task_named/3` yourself.
+
 ### Type-Safe Output Variables
 
 You can wrap output variables with type specifiers to enforce strict validation on the LLM's output. The runtime will ensure the value matches the specified type.
