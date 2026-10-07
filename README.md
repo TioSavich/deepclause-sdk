@@ -10,34 +10,31 @@ is in-process and portable, with no native Prolog to install.
 
 ## Why would I use this?
 
-Most agent code is a prompt plus a loop: it works until it doesn't, and the
-failure lives in prose you can't test. DeepClause moves the parts you care about
-into a program you can read, run, and version — and leaves the model only the
-parts that genuinely need judgment.
+DeepClause is an attempt at one specific idea: an agent's workflow may be easier
+to trust when it is written down as a program rather than described in a prompt.
+It is early, it is not the right tool for every problem, and it is probably only
+worth trying if one of the following matters to you.
 
-Reach for it when you want:
+- **Reproducibility.** Control flow, retries, and validation are Prolog clauses
+  you can read and re-run, so a harness tends to produce the same result shape
+  across sessions and machines. The model is consulted only at the points you
+  choose, and its outputs are typed where that helps.
+- **Auditability.** Each turn is a transaction: the module is snapshotted, the
+  change is committed replace-by-predicate, and the session, event trace, and
+  harness versions are recorded and remain queryable. It is possible to see what
+  changed, when, and in response to what.
+- **Regulated and high-stakes settings.** Where a workflow has to be reviewed,
+  versioned, and reproduced — and where it helps to keep deterministic logic
+  separate from model judgment — a small, inspectable harness is easier to
+  scrutinise than a prompt. The transaction record and `rollback.` are meant to
+  support that kind of review, not replace it.
+- **Research in neurosymbolic AI.** DML offers a concrete substrate for
+  combining symbolic reasoning (Prolog, CLP, backtracking) with LLM calls and
+  semantic judgments in one program, and for studying how such a system behaves
+  as an agent edits it over time (transactions, history, rollback).
 
-- **Repeatability.** Control flow, retries, and validation live in Prolog, not
-  in a sentence the model may reinterpret next run. The same harness produces
-  the same answer shape every time.
-- **A durable capability, not a chat.** The agent doesn't re-derive your
-  workflow each session — it grows a library of named skills you keep in the
-  repo and extend over time.
-- **Hard logic done properly.** Scheduling, counting, planning, and constraint
-  problems go to CLP and backtracking instead of asking the model to “be careful
-  with math”.
-- **Inspectable, auditable runs.** Every turn is a transaction with a recorded
-  trace and a version you can diff or roll back; `export` a harness to a file
-  and run it the same way in CI.
-- **Tamed context.** Isolate sub-tasks so a long session doesn't bias a focused
-  step, instead of stuffing everything into one growing prompt.
-- **No lock-in.** It's SWI-Prolog in WebAssembly and plain files; bring your own
-  model (pi's credentials or provider keys) and run `bash` in a sandbox.
-
-Skip it when a single prompt or a short script already does the job, or when
-there's no structure worth encoding and nothing you'd want to reuse. DeepClause
-earns its keep on multi-step workflows with branching, constraints, retries, and
-sub-agents — not on one-shot text generation.
+It is likely not worth it when a single prompt or a short script is enough, or
+when there is no structure you would want to reuse, review, or reproduce.
 
 ## The REPL: a living, self-modifying harness
 
