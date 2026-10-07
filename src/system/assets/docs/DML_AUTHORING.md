@@ -71,7 +71,25 @@ doc(tally/2, "Count occurrences of each item. tally(+List, -Counts) yields Key-N
 They are shown in the manifest (so the next turn sees them), in `listing`, and
 survive `export`. When you change a predicate, update its `doc/2` too.
 
-## 4. Guard rails
+## 4. Media (images)
+
+Images are **workspace files**, referenced by `media(Path, Mime)`; the bytes
+never enter Prolog or conversation memory. Read a reference with `read_media/2`
+and put it in context with `attach_media/1`; the next `task/N` sends it to the
+model as an image block:
+
+```prolog
+describe_image(Path, Text) :-
+    read_media(Path, Image),
+    attach_media(Image),
+    task("Describe the attached image in one sentence.", Text).
+```
+
+Only PNG/JPEG/GIF/WebP are accepted. This needs a vision-capable model; keep a
+textual description in memory when it does not. Semantic judgments stay
+text-only — never attach media to them.
+
+## 5. Guard rails
 
 - Read first: call `listing`.
 - Clause order matters: base case before a recursive rule; define a whole
@@ -85,3 +103,5 @@ survive `export`. When you change a predicate, update its `doc/2` too.
   so prefer the standard library.
 - Do **not** use `agent_main` unless the user asks for a `deepclause run` /
   `/dc-run` skill.
+- Media: reference images with `media(Path, Mime)` (`read_media/2` +
+  `attach_media/1`); never inline bytes.

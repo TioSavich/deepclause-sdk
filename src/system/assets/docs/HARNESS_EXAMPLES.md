@@ -124,3 +124,18 @@ solve(Total, X, Y) :-
 
 The `:- use_module(...)` directive must be **top-level** (an inline
 `use_module` inside a body is not run at read time, so `#=`/`ins` are unknown).
+
+## 8. Vision: describe a workspace image
+
+```prolog
+doc(describe_image/2, "Describe an image file. describe_image(+Path, -Text). Example: goal: describe_image(\"photos/fox.png\", T).").
+
+describe_image(Path, Text) :-
+    read_media(Path, Image),         % media(Path, Mime) — no bytes
+    attach_media(Image),             % reference-only; sent by the next task/N
+    task("Describe the attached image in one sentence.", Text).
+```
+
+Images are files; `media(Path, Mime)` is the reference. The bytes are read from
+the workspace at call time, only PNG/JPEG/GIF/WebP are accepted, and they never
+enter clauses or memory. Judgments stay text-only.

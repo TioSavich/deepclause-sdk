@@ -185,6 +185,10 @@ describe('prompt mode', () => {
     expect(promptText).toContain('HISTORY: the harness remembers');
     expect(promptText).toContain('harness_change/5');
     expect(promptText).toContain('EVOLVE ONLY WHEN ASKED');
+    // Media handling is taught by the contract, reference, and authoring guide.
+    expect(promptText).toContain('MEDIA (images)');
+    expect(promptText).toContain('Media Predicates');
+    expect(promptText).toContain('attach_media');
   });
 
   it('keeps meta memory clean: raw request/outcome pairs, not the assembled prompt', async () => {
