@@ -389,6 +389,29 @@ Memory stores `media{path, mime}` — never the image bytes. Judgments
 
 ---
 
+### File I/O and paths
+
+Every path in DML is **workspace-relative** and confined to the workspace. The
+engine mounts the workspace at `/workspace`, but you must not write
+`/workspace/...` in DML — passing an absolute path is rejected, as is `..`. File
+predicates all take a relative path:
+
+```prolog
+read_file("images/a.png", Bytes),
+write_file("out/report.txt", Text),
+directory_files("images", Names),        % bare entry names: ["a.png", ...]
+size_file("images/a.png", Size),
+time_file("images/a.png", Modified),
+exists_file("images/a.png").
+```
+
+`directory_files/2` returns bare entry names (no directory), so build a path with
+`atom_concat('images/', Name, Path)` when you need one. `bash` runs with a wider
+view of the sandbox than DML has; convert anything from the shell to a
+workspace-relative path before handing it to DML.
+
+---
+
 ### Output Predicates
 
 #### `output(+Text)`

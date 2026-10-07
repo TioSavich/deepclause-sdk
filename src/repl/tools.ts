@@ -185,6 +185,35 @@ export function createMetaTools(ctx: MetaToolContext): Map<string, ToolDefinitio
     }),
   });
 
+  tools.set('define', {
+    description: 'Replace a predicate: remove every clause of Name/Arity, then assert the given clauses in order. Prefer this over assert when changing a predicate — assert appends, so asserting twice duplicates it.',
+    parameters: {
+      type: 'object',
+      properties: {
+        head: { type: 'string', description: 'A head pattern for the predicate, e.g. "describe_image(Path, Text)" or "doc(describe_image/2, _)".' },
+        clauses: { type: 'string', description: 'The complete clause block for the predicate, in order, each ending with a period.' },
+      },
+      required: ['head', 'clauses'],
+    },
+    execute: (args) => serialized(async () => {
+      if (ctx.isFrozen()) {
+        return { ok: false, error: 'harness is frozen; define is disabled' };
+      }
+      const head = String(args.head ?? '');
+      const clauses = String(args.clauses ?? '');
+      const result = ctx.prologQuery(
+        `deepclause_mi:repl_define('${ctx.sessionId}', ${quoteString(head)}, ${quoteString(clauses)}, Result)`
+      );
+      const outcome = plainValue(result?.Result);
+      if (outcome === 'ok') {
+        notify('define', { head }, 'completed', 'ok');
+        return { ok: true };
+      }
+      notify('define', { head }, 'failed', String(outcome));
+      return { ok: false, error: String(outcome) };
+    }),
+  });
+
   tools.set('execute', {
     description: 'Run a DML goal against the scratch harness and return its bindings/output.',
     parameters: {
@@ -337,7 +366,8 @@ export function describeMetaTools(): string {
   return [
     '- listing(filter) — read-only list of predicates (all), Name/Arity, tools, or scripts.',
     '- assert(clause) / assert_many(clauses) — write DML clauses into the scratch harness.',
-    '- retract(clause) — remove matching clauses from the scratch harness.',
+    '- define(head, clauses) — replace a predicate (clear Name/Arity, then assert the clauses).',
+    '- retract(clause) — remove a predicate from the scratch harness.',
     '- execute(goal, limit?) — run a DML goal against the scratch harness; returns bindings/output.',
     '- read_file / write_file / list_files / delete_file — workspace-scoped file I/O (writes land immediately).',
     '- ask_user(prompt, options?) — ask the human a clarifying question.',

@@ -194,6 +194,11 @@ describe('prompt mode', () => {
     expect(promptText).toContain("GENERALIZE, DON'T SPECIALIZE");
     expect(promptText).toContain('composable primitives');
     expect(promptText).toContain('another caller would plausibly reuse');
+    // Workspace-relative paths, determinism, and whole-predicate redefinition.
+    expect(promptText).toContain('PATHS: every path in DML is workspace-relative');
+    expect(promptText).toContain('DETERMINISM:');
+    expect(promptText).toContain('REDEFINE A PREDICATE WHOLE');
+    expect(promptText).toContain('File I/O and paths');
   });
 
   it('keeps meta memory clean: raw request/outcome pairs, not the assembled prompt', async () => {
@@ -271,6 +276,28 @@ describe('prompt mode', () => {
     ))).toBe(true);
     const escaped = path.join(path.dirname(workspace), 'escape.txt');
     expect(await fs.access(escaped).then(() => true).catch(() => false)).toBe(false);
+  });
+
+  it('define replaces a predicate instead of duplicating its clauses', async () => {
+    backend = new CannedBackend([{
+      text: '',
+      toolCalls: [
+        { name: 'define', arguments: { head: 'greet(Name, Msg)', clauses: 'greet(Name, Msg) :- format(atom(Msg), "hi ~w", [Name]).' } },
+        { name: 'define', arguments: { head: 'greet(Name, Msg)', clauses: 'greet(Name, Msg) :- format(atom(Msg), "yo ~w", [Name]).' } },
+        { name: 'execute', arguments: { goal: 'greet(bob, M), output(M)' } },
+        { name: 'set_result', arguments: { variable: 'DMLCode', value: 'greet(Name, Msg) :- format(atom(Msg), "yo ~w", [Name]).' } },
+        { name: 'set_result', arguments: { variable: 'Answer', value: '' } },
+        { name: 'finish', arguments: { success: true } },
+      ],
+    }]);
+    repl = await openRepl();
+
+    const events = await collect(repl.prompt('define greet'));
+    expect(events.some((event) => event.type === 'error')).toBe(false);
+    const outputs = events.filter((event) => event.type === 'output').map((event) => event.content);
+    // The second define replaced the first, so only the new clause runs once.
+    expect(outputs.filter((text) => text === 'yo bob')).toHaveLength(1);
+    expect(outputs).not.toContain('hi bob');
   });
 
   it('extracts and commits a fenced dml block', async () => {

@@ -56,6 +56,7 @@
     repl_assert/3,
     repl_assert_many/3,
     repl_retract/3,
+    repl_define/4,
     repl_set_dml_reference/2,
     repl_set_authoring_examples/2,
     repl_manifest/2,
@@ -1474,6 +1475,23 @@ repl_retract(SessionId, ClauseText, Result) :-
         ),
         RetractError,
         format(atom(Result), 'error(~w)', [RetractError])
+    ).
+
+%% repl_define(+SessionId, +HeadPatternText, +ClausesText, -Result)
+%% Replaces a predicate atomically: clear every clause of Name/Arity, then
+%% assert the given clauses in order. `assert` appends, so asserting a clause
+%% twice duplicates the predicate; use this (or retract then assert_many)
+%% instead of patching a predicate one clause at a time.
+repl_define(SessionId, HeadPatternText, ClausesText, Result) :-
+    catch(
+        (   repl_retract(SessionId, HeadPatternText, ClearResult),
+            (   ClearResult == ok
+            ->  repl_assert_many(SessionId, ClausesText, Result)
+            ;   Result = ClearResult
+            )
+        ),
+        DefineError,
+        format(atom(Result), 'error(~w)', [DefineError])
     ).
 
 %% repl_extract_code(+Text, -Source)
@@ -3918,6 +3936,22 @@ mi_call(delete_directory(Dir), StateIn, StateIn) :-
     resolve_workspace_path(Dir, FullPath),
     delete_directory(FullPath).
 
+%% mi_call(size_file(File, Size), +StateIn, -StateOut)
+%% size_file/2 is a plain SWI builtin, so it would otherwise resolve `File`
+%% against the WASM process cwd (not the workspace) and demand `/workspace/...`.
+mi_call(size_file(File, Size), StateIn, StateIn) :-
+    !,
+    resolve_workspace_path(File, FullPath),
+    size_file(FullPath, Size).
+
+%% mi_call(time_file(File, Time), +StateIn, -StateOut)
+%% Modifications time (seconds since epoch); same workspace-relative rule as
+%% size_file/2.
+mi_call(time_file(File, Time), StateIn, StateIn) :-
+    !,
+    resolve_workspace_path(File, FullPath),
+    time_file(FullPath, Time).
+
 %% ============================================================
 %% Catch/Throw - STATE THREADED
 %% ============================================================
@@ -4099,6 +4133,8 @@ is_mi_special_predicate(close(_)).
 is_mi_special_predicate(read_string(_,_,_)).
 is_mi_special_predicate(write(_,_)).
 is_mi_special_predicate(exists_file(_)).
+is_mi_special_predicate(size_file(_,_)).
+is_mi_special_predicate(time_file(_,_)).
 is_mi_special_predicate(exists_directory(_)).
 is_mi_special_predicate(directory_files(_,_)).
 is_mi_special_predicate(make_directory(_)).

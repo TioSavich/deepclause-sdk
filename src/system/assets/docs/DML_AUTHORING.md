@@ -108,6 +108,20 @@ text-only — never attach media to them.
 ## 5. Guard rails
 
 - Read first: call `listing`.
+- **Paths are workspace-relative and workspace-confined.** Never write
+  `/workspace/...` or any absolute path in DML — they are rejected. `size_file/2`,
+  `time_file/2`, `read_file/2`, `open/3`, `directory_files/2`, and `read_media/2`
+  all take a relative path, and `directory_files/2` returns **bare names**, so
+  build one (`atom_concat('images/', Name, Path)`). `bash` sees more of the
+  sandbox than DML can — keep that in `bash` and hand DML only relative paths.
+- **Side-effecting skills must be deterministic.** Any skill that calls
+  `task/N`, `prompt/N`, `exec/2`, `read_media/2`, `attach_media/1`, or writes a
+  file must yield exactly one solution with no choicepoint left across the side
+  effect (`once/1`, `->`, or a cut). Otherwise backtracking re-runs the model
+  call: slow, costly, and a different answer each time.
+- Replace a predicate with `define(head, clauses)` (or `retract` then
+  `assert_many`). `assert` appends, so asserting a clause twice duplicates the
+  predicate; never patch it clause by clause.
 - Clause order matters: base case before a recursive rule; define a whole
   predicate with `assert_many` (clauses in the order written).
 - Verify after changing a predicate: `listing(Name/Arity)`.
