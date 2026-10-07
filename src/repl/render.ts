@@ -73,10 +73,17 @@ const ANSI = {
   answer: '\u001b[1;38;5;118m',
 } as const;
 
-/** Tool-call panel colours (256-colour): a green tint behind tool activity. */
-const TOOL_PANEL_BG = '\u001b[48;5;22m';
+/** True when the terminal advertises 24-bit colour (COLORTERM). */
+const TRUECOLOR = /^(truecolor|24bit)$/i.test(process.env.COLORTERM ?? '');
+
+/**
+ * Tool-call panel: a subtle, near-transparent green tint behind activity
+ * (truecolor when available, else a 256-colour fallback). Kept light so it
+ * reads as a faint wash over the terminal background rather than a solid fill.
+ */
+const TOOL_PANEL_BG = TRUECOLOR ? '\u001b[48;2;40;54;44m' : '\u001b[48;5;22m';
 const TOOL_PANEL_FG = '\u001b[38;5;252m';
-const TOOL_PANEL_ERROR_BG = '\u001b[48;5;52m';
+const TOOL_PANEL_ERROR_BG = TRUECOLOR ? '\u001b[48;2;58;36;36m' : '\u001b[48;5;52m';
 const TOOL_PANEL_ERROR_FG = '\u001b[38;5;224m';
 
 /** Spinner frames for the live model-call indicator. */

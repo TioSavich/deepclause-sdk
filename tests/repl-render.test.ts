@@ -72,8 +72,8 @@ describe('ReplRenderer', () => {
       type: 'tool_call', toolName: 'bash', toolState: 'starting', toolArgs: { command: 'echo hi' },
     } as DMLEvent);
 
-    // Panel background + foreground codes are applied.
-    expect(lines[0]).toContain('\u001b[48;5;22m');
+    // A background panel code is applied (truecolor or 256-colour fallback).
+    expect(lines[0]).toMatch(/\u001b\[48;[25];/);
     // Visible text (ignoring SGR) is padded out to the panel width.
     const visible = lines[0].replace(/\u001b\[[0-9;]*m/g, '').replace(/\n$/, '');
     expect(visible).toHaveLength(60);
@@ -83,7 +83,7 @@ describe('ReplRenderer', () => {
     plain.renderer.render({
       type: 'tool_call', toolName: 'bash', toolState: 'starting', toolArgs: { command: 'echo hi' },
     } as DMLEvent);
-    expect(plain.lines.join('')).not.toContain('\u001b[48;5;22m');
+    expect(plain.lines.join('')).not.toMatch(/\u001b\[48;/);
   });
 
   it('colours output and answer differently (rich mode)', () => {
