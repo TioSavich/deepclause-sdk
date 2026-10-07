@@ -136,7 +136,18 @@ function toPiMessages(messages: LLMBackendMessage[], model: PiModelLike): unknow
         return message.providerData;
       }
       if (message.role === 'user') {
-        return { role: 'user', content: message.content, timestamp: Date.now() };
+        // Attach resolved media as pi image content blocks alongside the text.
+        const content = message.media && message.media.length > 0
+          ? [
+              ...(message.content ? [{ type: 'text', text: message.content }] : []),
+              ...message.media.map((media) => ({
+                type: 'image',
+                data: media.data,
+                mimeType: media.mimeType,
+              })),
+            ]
+          : message.content;
+        return { role: 'user', content, timestamp: Date.now() };
       }
       if (message.role === 'tool') {
         return {

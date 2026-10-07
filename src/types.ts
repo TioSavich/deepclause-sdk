@@ -64,9 +64,25 @@ export interface CreateOptions {
   defaultJudge?: string;
 }
 
+/** A workspace-relative media reference (never the bytes). */
+export interface MediaRef {
+  path: string;
+  mimeType: string;
+}
+
+/** Resolved media bytes attached to a backend message (base64). */
+export interface LLMBackendMedia {
+  mimeType: string;
+  data: string;
+}
+
 export interface LLMBackendMessage {
   role: 'system' | 'user' | 'assistant' | 'tool';
   content: string;
+  /** Resolved media bytes to send with this message. */
+  media?: LLMBackendMedia[];
+  /** Reference-only media carried through to conversation memory. */
+  mediaRefs?: MediaRef[];
   toolCalls?: LLMBackendToolCall[];
   toolCallId?: string;
   toolName?: string;
@@ -240,8 +256,10 @@ export interface FrameEventMeta {
 }
 
 export interface DMLEvent extends FrameEventMeta {
-  type: 'output' | 'log' | 'answer' | 'input_required' | 'error' | 'finished' | 'stream' | 'reasoning' | 'tool_call' | 'usage' | 'memory_compaction' | 'task_activity' | 'solution' | 'meta_result';
+  type: 'output' | 'log' | 'answer' | 'input_required' | 'error' | 'finished' | 'stream' | 'reasoning' | 'tool_call' | 'usage' | 'memory_compaction' | 'task_activity' | 'solution' | 'meta_result' | 'media';
   content?: string;
+  /** Media produced by a step (path in the workspace, optional inline base64). */
+  media?: { path?: string; mimeType: string; data?: string };
   /** Goal-mode solution (only for 'solution' events). */
   solution?: DMLSolution;
   /** Prompt-mode meta task result (only for 'meta_result' events). */
@@ -447,6 +465,8 @@ export interface PrologResponse {
 export interface MemoryMessage {
   role: 'system' | 'user' | 'assistant';
   content: string;
+  /** Reference-only media attached to this message (resolved at call time). */
+  media?: MediaRef[];
 }
 
 /**

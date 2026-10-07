@@ -1,7 +1,8 @@
 # Images and video in DML
 
 How DeepClause handles media (images now; video later), and the decisions behind
-the implementation. Status: input + generation MVP implemented; video deferred.
+the implementation. Status: **image input implemented**; image generation and
+video are planned.
 
 ## Principles
 
@@ -70,7 +71,10 @@ output with `ffmpeg`. No core video type.
 * Media is recorded by `(path, mime)` only; never bytes, in facts/history.
 * Text-only fallback fails clearly rather than silently dropping the image.
 
-## Config
+## Config (planned)
+
+The MVP uses constants (PNG/JPEG/GIF/WebP allowlist, 10 MiB cap in
+`src/system/runtime/media.ts`). A `media` config section is planned:
 
 ```json
 "media": { "dir": ".deepclause/media", "maxBytes": 10485760, "blockImages": false }

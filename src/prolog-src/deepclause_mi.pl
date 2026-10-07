@@ -3220,6 +3220,49 @@ mi_call(get_memory(Messages), StateIn, StateIn) :-
     get_memory(StateIn, Messages).
 
 %% ============================================================
+%% Media (see docs/DML_MEDIA.md)
+%% ============================================================
+
+%% mi_call(read_media(+Path, -Media), +StateIn, -StateOut)
+%% Binds Media = media(Path, Mime) for a workspace-relative image. The bytes
+%% stay on disk; only the reference enters memory.
+mi_call(read_media(Path, Media), StateIn, StateIn) :-
+    !,
+    get_params(StateIn, Params),
+    interpolate_desc(Path, Params, P),
+    media_mime(P, Mime),
+    Media = media(P, Mime).
+
+%% mi_call(attach_media(+Media), +StateIn, -StateOut)
+%% Appends a user memory message carrying a reference-only media entry, so the
+%% next task/N can see the image.
+mi_call(attach_media(Media), StateIn, StateOut) :-
+    !,
+    media_dict(Media, media{path: Path, mime: Mime}),
+    format(atom(Note), '[attached ~w: ~w]', [Mime, Path]),
+    Message = message{role: user, content: Note, media: [media{path: Path, mime: Mime}]},
+    get_memory(StateIn, Memory),
+    append(Memory, [Message], NewMemory),
+    set_memory(StateIn, NewMemory, StateOut).
+
+%% media_dict(+Media, -Dict)
+%% Accepts media(Path, Mime) or a bare path; normalizes to the storage dict.
+media_dict(media(Path, Mime), media{path: Path, mime: Mime}) :- !.
+media_dict(Path, media{path: Path, mime: Mime}) :- media_mime(Path, Mime).
+
+%% media_mime(+Path, -Mime)
+%% Allowed media types, matching pi image content blocks.
+media_mime(Path, Mime) :-
+    (   string(Path) -> atom_string(Atom, Path) ; Atom = Path ),
+    (   sub_atom(Atom, _, _, 0, '.png')  -> Mime = "image/png"
+    ;   sub_atom(Atom, _, _, 0, '.jpg')  -> Mime = "image/jpeg"
+    ;   sub_atom(Atom, _, _, 0, '.jpeg') -> Mime = "image/jpeg"
+    ;   sub_atom(Atom, _, _, 0, '.gif')  -> Mime = "image/gif"
+    ;   sub_atom(Atom, _, _, 0, '.webp') -> Mime = "image/webp"
+    ;   fail
+    ).
+
+%% ============================================================
 %% Output Predicates
 %% ============================================================
 
@@ -3956,6 +3999,8 @@ is_mi_special_predicate(yield(_)).
 is_mi_special_predicate(log(_)).
 is_mi_special_predicate(system(_)).
 is_mi_special_predicate(user(_)).  %% Add user message to context
+is_mi_special_predicate(read_media(_,_)).
+is_mi_special_predicate(attach_media(_)).
 is_mi_special_predicate(task(_)).
 is_mi_special_predicate(task(_,_)).
 is_mi_special_predicate(task(_,_,_)).

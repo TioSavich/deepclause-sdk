@@ -10,7 +10,7 @@ import { anthropic, createAnthropic } from '@ai-sdk/anthropic';
 import { createOpenAI } from '@ai-sdk/openai';
 import { generateText } from 'ai';
 import type { LanguageModel } from 'ai';
-import type { MemoryMessage, LLMBackend, LLMUsage } from '../types.js';
+import type { MemoryMessage, LLMBackend, LLMBackendMedia, LLMBackendMessage, MediaRef, LLMUsage } from '../types.js';
 
 export interface RawProviderResponseSnapshot {
   requestId: string;
@@ -54,6 +54,8 @@ export interface GenerateLlmReplyOptions {
   debugLog?: (...args: unknown[]) => void;
   onRawResponse?: (snapshot: Promise<RawProviderResponseSnapshot>) => void;
   llmBackend?: LLMBackend;
+  /** Resolve reference-only media to bytes for the injected backend. */
+  resolveMedia?: (refs: MediaRef[]) => Promise<LLMBackendMedia[]>;
 }
 
 function describeFetchError(error: unknown): string {
@@ -667,8 +669,15 @@ export async function sampleSingleToken(options: SampleSingleTokenOptions): Prom
 
 export async function generateLlmReply(options: GenerateLlmReplyOptions): Promise<{ text: string; usage?: LLMUsage }> {
   if (options.llmBackend) {
+    const messages: LLMBackendMessage[] = [];
+    for (const message of options.messages) {
+      const media = message.media && message.media.length > 0 && options.resolveMedia
+        ? await options.resolveMedia(message.media)
+        : undefined;
+      messages.push({ role: message.role, content: message.content, media });
+    }
     const result = await options.llmBackend.complete({
-      messages: options.messages,
+      messages,
       temperature: options.modelOptions.temperature,
       maxTokens: options.modelOptions.maxOutputTokens,
       signal: options.signal,

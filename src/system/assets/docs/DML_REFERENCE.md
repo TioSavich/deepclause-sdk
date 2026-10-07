@@ -361,6 +361,34 @@ agent_main :-
 
 ---
 
+### Media Predicates
+
+Images are **workspace files**; DML carries only a reference. See
+`docs/DML_MEDIA.md`.
+
+#### `read_media(+Path, -Media)`
+
+Bind `Media = media(Path, Mime)` for a workspace-relative image (PNG, JPEG, GIF,
+WebP). The bytes are not read into Prolog.
+
+#### `attach_media(+Media)`
+
+Append the image to conversation memory (reference only), so the next `task/N`
+call sends it to the model as an image block:
+
+```prolog
+agent_main :-
+    read_media("photos/fox.png", Img),
+    attach_media(Img),
+    task("Describe the image in one sentence.", Description),
+    answer(Description).
+```
+
+Memory stores `media{path, mime}` — never the image bytes. Judgments
+(`choose`/`rate`/`verify`/`probability`) stay text-only.
+
+---
+
 ### Output Predicates
 
 #### `output(+Text)`

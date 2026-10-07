@@ -11,8 +11,10 @@ import { generateText, streamText, hasToolCall, tool as aiTool } from 'ai';
 import { z } from 'zod';
 import type {
   LLMBackend,
+  LLMBackendMedia,
   LLMBackendMessage,
   LLMBackendTool,
+  MediaRef,
   ToolDefinition,
   MemoryMessage,
   TypedVar,
@@ -85,6 +87,8 @@ export interface AgentLoopOptions {
   streaming?: boolean;
   debug?: boolean;
   llmBackend?: LLMBackend;
+  /** Resolve reference-only media to bytes for the provider request. */
+  resolveMedia?: (refs: MediaRef[]) => Promise<LLMBackendMedia[]>;
 }
 
 export interface AgentLoopResult {
@@ -92,7 +96,7 @@ export interface AgentLoopResult {
   outputs: string[];
   variables: Record<string, unknown>;
   /** Conversation messages from the agent loop (excludes system messages which are task-specific) */
-  messages: Array<{ role: 'user' | 'assistant'; content: string }>;
+  messages: Array<{ role: 'user' | 'assistant'; content: string; media?: MediaRef[] }>;
 }
 
 type ResponseMessage = { role: 'user' | 'assistant' | 'system'; content: unknown };
@@ -622,9 +626,24 @@ async function runInjectedAgentLoop(
     });
   }
 
+  // Reference-only media in memory is resolved to bytes here so the provider
+  // sees image blocks; `mediaRefs` keeps the reference for the next round-trip.
+  const historyMessages: LLMBackendMessage[] = [];
+  for (const message of conversationHistory) {
+    const refs = message.media;
+    const media = refs && refs.length > 0 && options.resolveMedia
+      ? await options.resolveMedia(refs)
+      : undefined;
+    historyMessages.push({
+      role: message.role,
+      content: message.content,
+      media,
+      mediaRefs: refs,
+    });
+  }
   const messages: LLMBackendMessage[] = [
     { role: 'system', content: combinedSystemPrompt },
-    ...conversationHistory.map((message) => ({ role: message.role, content: message.content })),
+    ...historyMessages,
     { role: 'user', content: `Subtask: ${options.taskDescription}` },
   ];
   const maxIterations = Math.max(1, Number(process.env.DC_MAX_ITERATIONS) || 1000);
@@ -745,7 +764,7 @@ async function runInjectedAgentLoop(
     messages: messages
       .filter((message): message is LLMBackendMessage & { role: 'user' | 'assistant' } =>
         message.role === 'user' || message.role === 'assistant')
-      .map((message) => ({ role: message.role, content: message.content })),
+      .map((message) => ({ role: message.role, content: message.content, media: message.mediaRefs })),
   };
 }
 

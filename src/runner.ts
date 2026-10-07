@@ -10,6 +10,8 @@ import type {
   DMLBinding,
   DMLEvent,
   FrameKind,
+  LLMBackendMedia,
+  MediaRef,
   MemoryMessage,
   LLMBackend,
   ToolDefinition,
@@ -36,6 +38,7 @@ import { checkToolPolicy } from './tools.js';
 import { generateLlmReply, sampleSingleToken } from './prolog/bridge.js';
 import { recordTokenUsage } from './system/runtime/token-usage.js';
 import { buildReasoningProviderOptions, type ReasoningType } from './system/config/model-database.js';
+import { resolveMediaRefs } from './system/runtime/media.js';
 
 /**
  * Convert swipl-wasm value to plain JavaScript value
@@ -1021,6 +1024,7 @@ export class DMLRunner {
       memory: effectiveMemory,
       tools: availableTools,
       workspacePath: options.workspacePath,
+      resolveMedia: (refs) => this.readMediaRefs(options.workspacePath, refs),
       modelOptions: {
         model: this.options.model,
         provider: this.options.provider,
@@ -1249,6 +1253,7 @@ export class DMLRunner {
         },
         signal: options.signal,
         llmBackend: this.options.llmBackend,
+        resolveMedia: (refs) => this.readMediaRefs(options.workspacePath, refs),
       });
       succeeded = true;
       this.postLlmResult({ success: true, text });
@@ -1864,6 +1869,7 @@ export class DMLRunner {
                 },
                 signal: runContext.signal,
                 llmBackend: this.options.llmBackend,
+                resolveMedia: (refs) => this.readMediaRefs(runContext.workspacePath, refs),
               });
               this.postLlmResult({ success: true, text });
               if (usage) {
@@ -2087,6 +2093,7 @@ export class DMLRunner {
                 streaming: this.options.streaming,
                 debug: this.options.debug,
                 llmBackend: this.options.llmBackend,
+                resolveMedia: (refs) => this.readMediaRefs(runContext.workspacePath, refs),
                 onOutput: (text) => {
                   outputs.push(text);
                   onOutput(text);
@@ -2331,16 +2338,36 @@ export class DMLRunner {
     }
 
     return normalized.map((messageValue: unknown) => {
-      const msg = toJsValue(messageValue) as { role: string; content: string };
+      const msg = toJsValue(messageValue) as { role: string; content: string; media?: unknown };
       const role = String(toJsValue(msg.role) ?? 'user');
       const content = String(toJsValue(msg.content) ?? '');
+      const media = this.extractMediaRefs(msg.media);
 
       if (role !== 'system' && role !== 'user' && role !== 'assistant') {
-        return { role: 'user' as const, content };
+        return { role: 'user' as const, content, media: media.length ? media : undefined };
       }
 
-      return { role: role as 'system' | 'user' | 'assistant', content };
+      return { role: role as 'system' | 'user' | 'assistant', content, media: media.length ? media : undefined };
     });
+  }
+
+  /** Decode `media{path:..., mime:...}` dicts into reference-only refs. */
+  private extractMediaRefs(raw: unknown): MediaRef[] {
+    const value = toJsValue(raw);
+    if (!Array.isArray(value)) return [];
+    const refs: MediaRef[] = [];
+    for (const entry of value) {
+      const obj = toJsValue(entry) as { path?: unknown; mime?: unknown; mimeType?: unknown };
+      const mediaPath = String(obj?.path ?? '');
+      const mimeType = String(obj?.mime ?? obj?.mimeType ?? '');
+      if (mediaPath && mimeType) refs.push({ path: mediaPath, mimeType });
+    }
+    return refs;
+  }
+
+  /** Resolve a message's reference-only media to base64 bytes (workspace files). */
+  private async readMediaRefs(workspacePath: string | undefined, refs: MediaRef[]): Promise<LLMBackendMedia[]> {
+    return resolveMediaRefs(workspacePath ?? process.cwd(), refs);
   }
 
   private extractMemoryFromPayload(rawPayload: Record<string, unknown>): MemoryMessage[] {
@@ -2348,9 +2375,16 @@ export class DMLRunner {
     return this.extractMessagesFromValue(rawMemory);
   }
 
-  private serializeMemoryMessages(messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>): string {
+  private serializeMemoryMessages(messages: MemoryMessage[]): string {
     return messages
-      .map((message) => `message{role: ${message.role}, content: ${this.toPrologTerm(message.content)}}`)
+      .map((message) => {
+        const media = message.media && message.media.length > 0
+          ? `, media: [${message.media
+              .map((ref) => `media{path: ${this.toPrologTerm(ref.path)}, mime: ${this.toPrologTerm(ref.mimeType)}}`)
+              .join(', ')}]`
+          : '';
+        return `message{role: ${message.role}, content: ${this.toPrologTerm(message.content)}${media}}`;
+      })
       .join(', ');
   }
 
@@ -2361,8 +2395,8 @@ export class DMLRunner {
     success: boolean;
     outputs: string[];
     variables: Record<string, unknown>;
-    messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>;
-  }, fullMemory?: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>): void {
+    messages: MemoryMessage[];
+  }, fullMemory?: MemoryMessage[]): void {
     // Keys need to be quoted because they start with uppercase (Var1, Var2, etc.)
     const varsStr = Object.entries(result.variables)
       .map(([k, v]) => `'${k}': ${this.toPrologTerm(v)}`)
@@ -2449,9 +2483,9 @@ export class DMLRunner {
       success: boolean;
       outputs: string[];
       variables: Record<string, unknown>;
-      messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>;
+      messages: MemoryMessage[];
     },
-    fullMemory?: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>,
+    fullMemory?: MemoryMessage[],
   ): void {
     // Keys need to be quoted because they start with uppercase (Var1, Var2, etc.)
     const varsStr = Object.entries(result.variables)
