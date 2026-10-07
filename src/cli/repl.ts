@@ -20,8 +20,9 @@ import { ReplRenderer, type RenderMode } from '../repl/render.js';
 import { ReplStatusTracker, type ReplStatusSnapshot } from '../repl/status.js';
 import { LineSink, TranscriptComponent } from '../repl/tui/transcript.js';
 import { StatusBarComponent } from '../repl/tui/status-bar.js';
-import { Container, Editor, ProcessTerminal, Spacer, TuiMainScreen, matchesKey } from '@earendil-works/pi-tui';
+import { Container, ProcessTerminal, Spacer, TuiMainScreen, matchesKey } from '@earendil-works/pi-tui';
 import { editorTheme, formatInputAnswer } from '../repl/tui/theme.js';
+import { PromptEditor } from '../repl/tui/editor.js';
 import { createPiBackend } from '../repl/backend.js';
 import { createReplToolset, type ReplToolset } from '../repl/toolset.js';
 import { parseModelId, type Provider } from '../system/config/model-slots.js';
@@ -896,9 +897,6 @@ export async function runInteractiveGoal(
   renderer.writeLine(answered ? '.' : 'false.');
 }
 
-/** Prompt used while a turn is gathering `ask_user` / `input/2` input. */
-const ASK_PROMPT = '> ';
-
 /**
  * Interactive TUI for the REPL: a scrolling transcript, a fixed editor, and a
  * fixed status bar below the input. It reuses `ReplRenderer` (rich mode) for all
@@ -937,28 +935,34 @@ export async function runTui(
   process.stdout.on('resize', onResize);
 
   const editorContainer = new Container();
-  let editor: Editor | undefined;
+  let editor: PromptEditor | undefined;
   let activePrompt = runtime.promptPrefix;
+  let pendingIsInput = false;
   let pendingResolve: ((value: string | null) => void) | null = null;
   const holder: { turn: AbortController | null } = { turn: null };
+  // The editor shows ask_user/input/2 questions in its border, so suppress the
+  // duplicate `input_required` transcript line.
+  runtime.renderer.setSuppressInputPrompt(true);
 
-  const installEditor = (value = ''): void => {
-    const next = new Editor(tui, editorTheme());
+  const installEditor = (value = '', prompt: string | null = null): void => {
+    const next = new PromptEditor(tui, editorTheme());
     if (value) next.addToHistory(value);
+    if (prompt) next.setPrompt(prompt);
     next.onSubmit = (text) => {
       const resolve = pendingResolve;
+      const wasInput = pendingIsInput;
       pendingResolve = null;
+      pendingIsInput = false;
       if (text) {
-        if (activePrompt === runtime.promptPrefix) {
+        if (wasInput) {
+          // A `ask_user` / `input/2` answer: keep a short record.
+          transcript.append(formatInputAnswer(text));
+        } else if (activePrompt === runtime.promptPrefix) {
           // A user turn: separate it from the previous output and from the
           // response that follows; render it as a pi-style blue block.
           if (transcript.getLines().length > 0) transcript.append('');
           transcript.append(text, 'user');
           transcript.append('');
-        } else if (activePrompt === ASK_PROMPT) {
-          transcript.append(formatInputAnswer(text));
-        } else if (activePrompt.trim() !== ';') {
-          transcript.append(`${activePrompt}${text}`);
         }
       }
       installEditor(text);
@@ -971,18 +975,25 @@ export async function runTui(
     tui.setFocus(next);
   };
 
-  const ask = (label: string): Promise<string | null> => new Promise((resolve) => {
+  /**
+   * Wait for one submitted line. When `isInput` is set the question is shown in
+   * the editor's top border (orange) to signal that the runtime needs input.
+   */
+  const ask = (label: string, isInput = false): Promise<string | null> => new Promise((resolve) => {
     activePrompt = label;
-    pendingResolve = resolve;
-    if (editor) tui.setFocus(editor);
+    pendingIsInput = isInput;
+    if (editor) {
+      editor.setPrompt(isInput ? label : null);
+      tui.setFocus(editor);
+    }
     tui.requestRender();
+    pendingResolve = resolve;
   });
 
-  // Route ask_user / input/2 through the transcript + editor.
+  // Route ask_user / input/2 through the editor prompt instead of the transcript.
   runtime.setOnInput(async (prompt, choices) => {
     const suffix = choices && choices.length > 0 ? ` (${choices.join('/')})` : '';
-    transcript.append(`? ${prompt}${suffix}`);
-    const answer = await ask(ASK_PROMPT);
+    const answer = await ask(`${prompt}${suffix}`, true);
     return answer === null ? undefined : answer;
   });
 

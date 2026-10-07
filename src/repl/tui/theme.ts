@@ -16,6 +16,8 @@ const ANSI = {
   yellow: '\u001b[33m',
   /** Blueish chrome for the input/status area border. */
   border: '\u001b[38;5;75m',
+  /** Orange "input needed" border/label for ask_user / input/2. */
+  prompt: '\u001b[38;5;214m',
   /** pi-style user message: blue background, bright foreground. */
   userBg: '\u001b[48;5;24m',
   userFg: '\u001b[38;5;255m',
@@ -38,6 +40,16 @@ export function renderUserLine(text: string, width: number): string {
 /** An `ask_user` / `input/2` answer echo (distinct from a normal prompt). */
 export function formatInputAnswer(text: string): string {
   return paint(`> ${text}`, ANSI.yellow);
+}
+
+/** The border of the editing box while the runtime needs human input. */
+export function promptBorder(text: string): string {
+  return paint(text, ANSI.prompt);
+}
+
+/** The question shown inside the editing box while input is needed. */
+export function promptLabel(text: string): string {
+  return paint(text, `${ANSI.bold}${ANSI.prompt}`);
 }
 
 /** Dim the status bar so it recedes behind the transcript. */

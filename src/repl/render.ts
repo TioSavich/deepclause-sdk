@@ -215,6 +215,14 @@ export class ReplRenderer {
     return formatListing(text, { color: this.color && this.mode === 'rich' });
   }
 
+  /**
+   * Suppress `input_required` prompt lines. The TUI editor shows the question in
+   * its border, so a transcript line would be a duplicate.
+   */
+  setSuppressInputPrompt(suppress: boolean): void {
+    this.suppressInputPrompt = suppress;
+  }
+
   /** Stop the live indicator (call before the renderer goes out of scope). */
   dispose(): void {
     this.stopSpinner();
@@ -226,6 +234,8 @@ export class ReplRenderer {
   private currentToolBlock: string | null = null;
   private taskBlockCounter = 0;
   private currentTaskBlock: string | null = null;
+  /** When true, `input_required` events are rendered by the input UI instead. */
+  private suppressInputPrompt = false;
 
   /** Write a raw chunk to the normal sink. */
   write(text: string): void {
@@ -359,7 +369,9 @@ export class ReplRenderer {
         this.renderToolCall(event, prefix);
         break;
       case 'input_required':
-        this.writeLine(this.paint(`${prefix}? ${event.prompt ?? ''}`, ANSI.bold));
+        if (!this.suppressInputPrompt) {
+          this.writeLine(this.paint(`${prefix}? ${event.prompt ?? ''}`, ANSI.bold));
+        }
         break;
       case 'error':
         this.writeErrorLine(this.paint(`${prefix}ERROR: ${event.content ?? ''}`, ANSI.red));

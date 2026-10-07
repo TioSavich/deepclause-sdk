@@ -318,4 +318,13 @@ describe('block spacing', () => {
     renderer.render({ type: 'memory_compaction', compactionAction: 'skipped', content: 'compact skipped 62 -> 62' } as DMLEvent);
     expect(lines.join('')).toContain('skipped');
   });
+
+  it('renders input prompts unless the input UI owns them', () => {
+    const { lines, renderer } = capture('plain');
+    renderer.render({ type: 'input_required', prompt: 'What is your name?' } as DMLEvent);
+    expect(lines.join('')).toContain('? What is your name?');
+    renderer.setSuppressInputPrompt(true);
+    renderer.render({ type: 'input_required', prompt: 'What do you do?' } as DMLEvent);
+    expect(lines.join('')).not.toContain('What do you do?');
+  });
 });

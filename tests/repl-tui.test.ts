@@ -5,7 +5,9 @@ import { describe, expect, it } from 'vitest';
 
 import { LineSink, TranscriptComponent } from '../src/repl/tui/transcript.js';
 import { StatusBarComponent } from '../src/repl/tui/status-bar.js';
-import { dim, editorTheme, formatInputAnswer, renderUserLine } from '../src/repl/tui/theme.js';
+import { dim, editorTheme, formatInputAnswer, promptBorder, promptLabel, renderUserLine } from '../src/repl/tui/theme.js';
+import { PromptEditor } from '../src/repl/tui/editor.js';
+import { visibleWidth, type TUI } from '@earendil-works/pi-tui';
 import { ReplStatusTracker } from '../src/repl/status.js';
 
 describe('TranscriptComponent + LineSink', () => {
@@ -105,6 +107,34 @@ describe('TUI theme', () => {
     const theme = editorTheme();
     expect(theme.borderColor('─')).toContain('\u001b[38;5;75m');
     expect(theme.selectList.selectedText('x')).toContain('\u001b[36m');
+  });
+
+  it('styles the input-needed prompt distinctly', () => {
+    expect(promptBorder('──')).toContain('\u001b[38;5;214m');
+    expect(promptLabel('? x')).toContain('\u001b[38;5;214m');
+    expect(promptLabel('? x').replace(/\u001b\[[0-9;]*m/g, '')).toBe('? x');
+  });
+});
+
+describe('PromptEditor', () => {
+  it('shows the question in the border at the exact width', () => {
+    const tui = { requestRender() {}, setFocus() {}, terminal: { columns: 60, rows: 20 } } as unknown as TUI;
+    const editor = new PromptEditor(tui, editorTheme());
+    editor.setPrompt('What is your name?');
+    const lines = editor.render(60);
+    expect(lines[0]).toContain('? What is your name?');
+    expect(lines[0]).toContain('\u001b[38;5;214m');
+    for (const line of lines) {
+      expect(visibleWidth(line)).toBe(60);
+    }
+  });
+
+  it('uses the normal border when no prompt is set', () => {
+    const tui = { requestRender() {}, setFocus() {}, terminal: { columns: 40, rows: 20 } } as unknown as TUI;
+    const editor = new PromptEditor(tui, editorTheme());
+    const lines = editor.render(40);
+    expect(lines[0]).not.toContain('?');
+    expect(lines[0]).toContain('\u001b[38;5;75m');
   });
 });
 
