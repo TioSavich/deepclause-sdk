@@ -75,14 +75,18 @@ what happened before:
 
 ## run
 
-```bash
-deepclause run <file.dml> [args...] [--param key=value] [--backend pi|env]
-deepclause run <file.dml> --dry-run
-deepclause run <file.dml> --trace trace.json --usage usage.json [--json]
-```
+`run` uses the **same engine as the REPL**: it opens a living module, loads the
+DML file (`.dml` or a `.zip` bundle), runs one entry, and renders events through
+the REPL renderer. The entry is `agent_main/N` (chosen by the number of
+positional arguments) or an explicit `--goal`.
 
-`run` executes a DML file once using the same backend resolver and the same
-event renderer as the REPL.
+```bash
+deepclause run <file.dml> [args...]           # call agent_main/N
+deepclause run <file.dml> --goal '<dml>'      # explicit entry goal
+deepclause run <file.dml> --dry-run           # print the resolved entry
+deepclause run <file.dml> --trace trace.json --usage usage.json
+deepclause run <file.dml> --no-stream --no-events   # only outputs/answers
+```
 
 ## TypeScript SDK
 

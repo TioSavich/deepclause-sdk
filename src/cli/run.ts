@@ -1,30 +1,39 @@
 /**
  * `deepclause run` — execute a DML file once.
  *
- * Uses the shared pi/env backend (same as the REPL) and renders events through
- * the REPL renderer. Natural-language authoring is the REPL's job, so there is
- * no compiler path here.
+ * This is the same engine as the REPL: it opens a `DMLSession` (the living
+ * module), loads the file, runs one entry goal, and renders events through the
+ * REPL renderer. The entry is `agent_main/N` (built from the positional args) or
+ * an explicit `--goal <dml>`. Natural-language authoring is the REPL's job.
  */
 
 import * as fs from 'fs/promises';
 import * as path from 'path';
 
-import { loadConfig, type Provider } from './config.js';
+import { loadConfig, resolveCompactionConfig, type Provider } from './config.js';
 import { promptUser } from './readline.js';
 import type { DMLEvent } from '../types.js';
-import { executeDml } from '../system/runtime/dml-executor.js';
-import { buildDmlParams } from '../system/runtime/dml-params.js';
+import { DMLSession } from '../repl/session.js';
+import { ReplRenderer, type RenderMode } from '../repl/render.js';
+import { createReplToolset } from '../repl/toolset.js';
 import { resolveLlmBackend, type BackendKind } from '../repl/backend.js';
-import type { RenderMode } from '../repl/render.js';
+import { resolveReplJudgeSelection } from '../repl/judge.js';
+import { getBuiltInRuntimeToolNames } from '../system/runtime/runtime-tools.js';
+import { recordTokenUsage, type TokenUsageByModel } from '../system/runtime/token-usage.js';
+import { buildDmlParams } from '../system/runtime/dml-params.js';
 
 export interface RunOptions {
   configRoot?: string;
   workspace?: string;
   backend?: BackendKind;
+  /** Explicit entry goal (e.g. `my_skill("x")`); overrides `agent_main`. */
+  goal?: string;
   verbose?: boolean;
   stream?: boolean;
+  events?: boolean;
   plain?: boolean;
   json?: boolean;
+  color?: boolean;
   sandbox?: boolean;
   trace?: string;
   dryRun?: boolean;
@@ -47,8 +56,15 @@ export interface RunResult {
   wouldExecute?: string;
   trace?: object;
   events?: DMLEvent[];
-  usageByModel?: Record<string, { calls: number; inputTokens: number; outputTokens: number; totalTokens: number; cacheReadTokens: number; cacheWriteTokens: number; reasoningTokens: number }>;
+  usageByModel?: TokenUsageByModel;
 }
+
+const PROVIDER_ENV_KEYS: Record<string, string> = {
+  openai: 'OPENAI_API_KEY',
+  anthropic: 'ANTHROPIC_API_KEY',
+  google: 'GOOGLE_GENERATIVE_AI_API_KEY',
+  openrouter: 'OPENROUTER_API_KEY',
+};
 
 export async function run(
   file: string | undefined,
@@ -63,9 +79,8 @@ export async function run(
   const config = await loadConfig(configRoot);
 
   const absolutePath = await resolveDmlPath(file, configRoot);
-  let dmlCode: string;
   try {
-    dmlCode = await fs.readFile(absolutePath, 'utf-8');
+    await fs.access(absolutePath);
   } catch {
     throw new Error(`Failed to read DML file: ${absolutePath}`);
   }
@@ -84,59 +99,169 @@ export async function run(
     authPath: config.backend?.authPath ?? undefined,
   });
 
-  const params = buildDmlParams(args, options.params, null);
-
-  if (options.dryRun) {
-    return {
-      output: [],
-      dryRun: true,
-      wouldExecute: [
-        'DRY RUN — would execute:',
-        `  file:      ${absolutePath}`,
-        `  backend:   ${backend.kind}`,
-        `  model:     ${backend.modelId}`,
-        `  workspace: ${workspacePath}`,
-        `  params:    ${JSON.stringify(params)}`,
-      ].join('\n'),
-    };
+  const { selection: judgeSelection, warnings: judgeWarnings } = resolveReplJudgeSelection({
+    llmBackend: backend.llmBackend,
+    model: backend.model,
+    provider: backend.provider,
+    temperature: options.temperature ?? config.temperatures.run,
+    defaultJudge: config.judgment.default,
+    jev: {
+      enabled: config.judgment.jev.enabled,
+      model: config.judgment.jev.model,
+      apiKeyEnv: config.judgment.jev.apiKeyEnv,
+    },
+  });
+  for (const warning of judgeWarnings) {
+    process.stderr.write(`[deepclause] ${warning}\n`);
   }
 
   const providerConfig = config.providers?.[backend.provider as keyof typeof config.providers];
-  const render: RenderMode = options.json ? 'json' : (options.plain || !process.stdout.isTTY) ? 'plain' : 'rich';
+  const envKey = PROVIDER_ENV_KEYS[backend.provider];
+  if (envKey && providerConfig?.apiKey) {
+    process.env[envKey] = providerConfig.apiKey;
+  }
 
-  const result = await executeDml({
-    dmlCode,
-    config,
-    workspaceRoot: configRoot,
-    workspacePath,
-    model: backend.model,
-    provider: backend.provider,
-    llmBackend: backend.llmBackend,
-    temperature: options.temperature ?? config.temperatures.run,
-    apiKey: providerConfig?.apiKey,
-    baseUrl: providerConfig?.baseUrl,
-    args,
-    params,
-    gasLimit: options.gasLimit,
-    stream: options.stream,
-    trace: !!options.trace,
-    verbose: options.verbose,
-    render,
-    sandbox: options.sandbox,
-    signal: options.signal,
-    toolAbortSignalRef: options.toolAbortSignalRef,
-    onEvent: options.onEvent,
-    onUserInput: options.onUserInput ?? promptUser,
+  const render: RenderMode = options.json ? 'json' : (options.plain || !process.stdout.isTTY) ? 'plain' : 'rich';
+  const renderer = new ReplRenderer({
+    mode: render,
+    color: options.color !== false && render === 'rich',
+    verbose: options.verbose ?? false,
+    stream: options.stream !== false,
+    events: options.events !== false,
   });
 
-  return {
-    output: result.output,
-    answer: result.answer,
-    error: result.error,
-    trace: result.trace,
-    events: result.events,
-    usageByModel: result.usageByModel,
-  };
+  const toolset = await createReplToolset({
+    workspacePath,
+    sandbox: options.sandbox,
+    network: config.agentvm?.network ?? false,
+    hostConfig: config.shell,
+    toolNames: getBuiltInRuntimeToolNames(),
+    signal: options.signal,
+    onEvent: (event) => {
+      // The runner already emits tool_call events; only render the extras
+      // (shell stdout/stderr/log lines) so nothing is duplicated.
+      if (event.type !== 'tool_call') renderer.render(event);
+    },
+  });
+
+  const session = await DMLSession.open({
+    workspacePath,
+    gasLimit: options.gasLimit,
+    params: buildDmlParams(args, options.params, null),
+    tools: toolset.tools,
+    runnerOptions: {
+      model: backend.model,
+      provider: backend.provider as Provider,
+      temperature: options.temperature ?? config.temperatures.run,
+      maxTokens: 65536,
+      // Always stream internally; `--no-stream` only hides the streamed text at
+      // the renderer. (With runner streaming off, model narration is re-emitted
+      // as `output` events, which `--no-stream` could not suppress.)
+      streaming: true,
+      trace: !!options.trace,
+      debug: options.verbose ?? false,
+      baseUrl: providerConfig?.baseUrl,
+      llmBackend: backend.llmBackend,
+      judgeSelection,
+      compaction: resolveCompactionConfig(config, configRoot),
+    },
+    onInput: options.onUserInput ?? promptUser,
+  });
+
+  const usageByModel: TokenUsageByModel = {};
+  const result: RunResult = { output: [], events: [] };
+
+  try {
+    const loaded = await session.load(absolutePath);
+    if (loaded.error) {
+      throw new Error(loaded.error);
+    }
+
+    const goal = options.goal ?? resolveEntryGoal(session, args);
+
+    if (options.dryRun) {
+      return {
+        output: [],
+        dryRun: true,
+        wouldExecute: [
+          'DRY RUN — would execute:',
+          `  file:      ${absolutePath}`,
+          `  backend:   ${backend.kind}`,
+          `  model:     ${backend.modelId}`,
+          `  workspace: ${workspacePath}`,
+          `  goal:      ${goal}`,
+        ].join('\n'),
+      };
+    }
+
+    for await (const event of session.query(goal, { signal: options.signal })) {
+      (result.events ??= []).push(event);
+      options.onEvent?.(event);
+
+      switch (event.type) {
+        case 'output':
+          if (event.content) result.output.push(event.content);
+          break;
+        case 'answer':
+          result.answer = event.content;
+          break;
+        case 'error':
+          result.error = event.content;
+          if (event.trace) result.trace = event.trace;
+          break;
+        case 'finished':
+          if (event.trace) result.trace = event.trace;
+          break;
+        case 'usage':
+          if (event.usage) recordTokenUsage(usageByModel, backend.model, event.usage);
+          break;
+        default:
+          break;
+      }
+
+      renderer.render(event);
+    }
+
+    if (Object.keys(usageByModel).length > 0) {
+      result.usageByModel = usageByModel;
+    }
+    return result;
+  } finally {
+    await session.dispose();
+    await toolset.dispose();
+  }
+}
+
+/** The entry goal: `--goal`, or `agent_main/N` built from the positional args. */
+function resolveEntryGoal(session: DMLSession, args: string[]): string {
+  const arities = session.predicateArities('agent_main');
+  if (arities.length === 0) {
+    throw new Error(
+      'the DML file defines no agent_main/0..2; pass --goal "<dml>" to run a specific goal',
+    );
+  }
+  if (!arities.includes(args.length)) {
+    throw new Error(
+      `agent_main expects ${arities.join('/')} argument(s) but received ${args.length}; `
+      + 'pass --goal "<dml>" for a custom entry',
+    );
+  }
+  if (args.length === 0) {
+    return 'agent_main';
+  }
+  return `agent_main(${args.map(toPrologArg).join(', ')})`;
+}
+
+/** Render a CLI positional arg as a Prolog term (number / boolean / string). */
+function toPrologArg(value: string): string {
+  const trimmed = value.trim();
+  if (trimmed !== '' && !Number.isNaN(Number(trimmed))) {
+    return trimmed;
+  }
+  if (trimmed === 'true' || trimmed === 'false') {
+    return trimmed;
+  }
+  return `"${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
 }
 
 async function resolveDmlPath(file: string, configRoot: string): Promise<string> {

@@ -3,7 +3,7 @@ import * as path from 'path';
 import { newsSearch, webSearch } from '../../cli/search.js';
 import { validateWithProlog } from '../../validate.js';
 import type { Config } from '../../cli/config.js';
-import type { DMLEvent, DeepClauseSDK } from '../../types.js';
+import type { DMLEvent, ToolDefinition } from '../../types.js';
 import type { ShellManager } from './shell-manager.js';
 import { createShellToolEventBridge } from './shell-tool-events.js';
 
@@ -46,17 +46,30 @@ export function verifyRuntimeToolsAvailable(
   return { available: false, missing };
 }
 
-export function registerLocalRuntimeTools(
-  sdk: DeepClauseSDK,
-  options: {
-    workspaceRoot?: string;
-    workspacePath: string;
-    shell: ShellManager;
-    signal?: AbortSignal;
-    toolAbortSignalRef?: { signal?: AbortSignal };
-    onEvent?: (event: DMLEvent) => void;
-  },
-): void {
+export interface LocalRuntimeToolsOptions {
+  /** Shell used by `bash`/`vm_exec` (owned by the caller). */
+  shell: ShellManager;
+  workspaceRoot?: string;
+  workspacePath: string;
+  /** Which built-in runtime tools to register; defaults to all. */
+  toolNames?: string[] | null;
+  signal?: AbortSignal;
+  toolAbortSignalRef?: { signal?: AbortSignal };
+  onEvent?: (event: DMLEvent) => void;
+}
+
+/**
+ * The shared runtime-tool registry. `bash`/`vm_exec` run through the injected
+ * shell; the rest are plain host tools. `deepclause run` and the REPL toolset
+ * both build their tool map here, so they expose the same catalog.
+ */
+export function createLocalRuntimeTools(
+  options: LocalRuntimeToolsOptions,
+): Map<string, ToolDefinition> {
+  const requested = options.toolNames ?? [...BUILT_IN_RUNTIME_TOOLS];
+  const enabled = new Set(requested);
+  const tools = new Map<string, ToolDefinition>();
+
   const getExecSignal = (): AbortSignal | undefined => {
     const toolSignal = options.toolAbortSignalRef?.signal;
     if (toolSignal && options.signal) {
@@ -64,129 +77,137 @@ export function registerLocalRuntimeTools(
     }
     return toolSignal ?? options.signal;
   };
-  sdk.registerTool('web_search', {
-    description: 'Search the web for information.',
-    parameters: {
-      type: 'object',
-      properties: {
-        query: { type: 'string', description: 'Search query.' },
-        count: { type: 'number', description: 'Maximum result count.' },
-        freshness: { type: 'string', description: 'Optional freshness filter.' },
-      },
-      required: ['query'],
-    },
-    execute: async (args) => webSearch({
-      query: String(args.query ?? args.arg1 ?? ''),
-      count: typeof args.count === 'number' ? args.count : 10,
-      freshness: typeof args.freshness === 'string' ? args.freshness : undefined,
-      signal: getExecSignal(),
-    }),
-  });
 
-  sdk.registerTool('news_search', {
-    description: 'Search recent news.',
-    parameters: {
-      type: 'object',
-      properties: {
-        query: { type: 'string', description: 'Search query.' },
-        count: { type: 'number', description: 'Maximum result count.' },
-        freshness: { type: 'string', description: 'Optional freshness filter.' },
+  if (enabled.has('web_search')) {
+    tools.set('web_search', {
+      description: 'Search the web for information.',
+      parameters: {
+        type: 'object',
+        properties: {
+          query: { type: 'string', description: 'Search query.' },
+          count: { type: 'number', description: 'Maximum result count.' },
+          freshness: { type: 'string', description: 'Optional freshness filter.' },
+        },
+        required: ['query'],
       },
-      required: ['query'],
-    },
-    execute: async (args) => newsSearch({
-      query: String(args.query ?? args.arg1 ?? ''),
-      count: typeof args.count === 'number' ? args.count : 10,
-      freshness: typeof args.freshness === 'string' ? args.freshness : undefined,
-      signal: getExecSignal(),
-    }),
-  });
+      execute: async (args) => webSearch({
+        query: String(args.query ?? args.arg1 ?? ''),
+        count: typeof args.count === 'number' ? args.count : 10,
+        freshness: typeof args.freshness === 'string' ? args.freshness : undefined,
+        signal: getExecSignal(),
+      }),
+    });
+  }
 
-  sdk.registerTool('url_fetch', {
-    description: 'Fetch a URL or save it into the workspace.',
-    parameters: {
-      type: 'object',
-      properties: {
-        url: { type: 'string', description: 'Absolute URL to fetch.' },
-        headers: { type: 'object', description: 'Optional request headers.' },
-        save_to: { type: 'string', description: 'Optional workspace-relative output file.' },
+  if (enabled.has('news_search')) {
+    tools.set('news_search', {
+      description: 'Search recent news.',
+      parameters: {
+        type: 'object',
+        properties: {
+          query: { type: 'string', description: 'Search query.' },
+          count: { type: 'number', description: 'Maximum result count.' },
+          freshness: { type: 'string', description: 'Optional freshness filter.' },
+        },
+        required: ['query'],
       },
-      required: ['url'],
-    },
-    execute: async (args) => urlFetch(options.workspacePath, args, getExecSignal()),
-  });
+      execute: async (args) => newsSearch({
+        query: String(args.query ?? args.arg1 ?? ''),
+        count: typeof args.count === 'number' ? args.count : 10,
+        freshness: typeof args.freshness === 'string' ? args.freshness : undefined,
+        signal: getExecSignal(),
+      }),
+    });
+  }
 
-  sdk.registerTool('bash', {
-    description: 'Run a shell command in the active workspace shell.',
-    parameters: {
-      type: 'object',
-      properties: {
-        command: { type: 'string', description: 'Shell command to execute.' },
+  if (enabled.has('url_fetch')) {
+    tools.set('url_fetch', {
+      description: 'Fetch a URL or save it into the workspace.',
+      parameters: {
+        type: 'object',
+        properties: {
+          url: { type: 'string', description: 'Absolute URL to fetch.' },
+          headers: { type: 'object', description: 'Optional request headers.' },
+          save_to: { type: 'string', description: 'Optional workspace-relative output file.' },
+        },
+        required: ['url'],
       },
-      required: ['command'],
-    },
-    execute: async (args) => {
-      const command = String(args.command ?? args.arg1 ?? '');
-      return options.shell.exec(
-        command,
-        getExecSignal(),
-        createShellToolEventBridge({
-          toolName: 'bash',
-          toolArgs: { command },
-          emit: options.onEvent,
-        }),
-      );
-    },
-  });
+      execute: async (args) => urlFetch(options.workspacePath, args, getExecSignal()),
+    });
+  }
 
-  sdk.registerTool('write_file', {
-    description: 'Write or overwrite a file inside the workspace.',
-    parameters: {
-      type: 'object',
-      properties: {
-        path: { type: 'string', description: 'Workspace-relative file path.' },
-        content: { type: 'string', description: 'Full file content.' },
+  if (enabled.has('bash')) {
+    tools.set('bash', {
+      description: 'Run a shell command in the active workspace shell.',
+      parameters: {
+        type: 'object',
+        properties: {
+          command: { type: 'string', description: 'Shell command to execute.' },
+        },
+        required: ['command'],
       },
-      required: ['path', 'content'],
-    },
-    execute: async (args) => writeWorkspaceFile(options.workspacePath, args),
-  });
-
-  sdk.registerTool('validate_dml', {
-    description: 'Validate DML code from a file path inside the workspace.',
-    parameters: {
-      type: 'object',
-      properties: {
-        dml_file: { type: 'string', description: 'Workspace-relative path to the DML file.' },
+      execute: async (args) => {
+        const command = String(args.command ?? args.arg1 ?? '');
+        return options.shell.exec(
+          command,
+          getExecSignal(),
+          createShellToolEventBridge({ toolName: 'bash', toolArgs: { command }, emit: options.onEvent }),
+        );
       },
-      required: ['dml_file'],
-    },
-    execute: async (args) => validateWorkspaceDml(options.workspacePath, args),
-  });
+    });
+  }
 
-  sdk.registerTool('vm_exec', {
-    description: 'Execute a shell command using the active workspace shell backend.',
-    parameters: {
-      type: 'object',
-      properties: {
-        command: { type: 'string', description: 'Shell command to execute.' },
+  if (enabled.has('write_file')) {
+    tools.set('write_file', {
+      description: 'Write or overwrite a file inside the workspace.',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'Workspace-relative file path.' },
+          content: { type: 'string', description: 'Full file content.' },
+        },
+        required: ['path', 'content'],
       },
-      required: ['command'],
-    },
-    execute: async (args) => {
-      const command = String(args.command ?? args.arg1 ?? '');
-      return options.shell.exec(
-        command,
-        getExecSignal(),
-        createShellToolEventBridge({
-          toolName: 'vm_exec',
-          toolArgs: { command },
-          emit: options.onEvent,
-        }),
-      );
-    },
-  });
+      execute: async (args) => writeWorkspaceFile(options.workspacePath, args),
+    });
+  }
 
+  if (enabled.has('validate_dml')) {
+    tools.set('validate_dml', {
+      description: 'Validate DML code from a file path inside the workspace.',
+      parameters: {
+        type: 'object',
+        properties: {
+          dml_file: { type: 'string', description: 'Workspace-relative path to the DML file.' },
+        },
+        required: ['dml_file'],
+      },
+      execute: async (args) => validateWorkspaceDml(options.workspacePath, args),
+    });
+  }
+
+  if (enabled.has('vm_exec')) {
+    tools.set('vm_exec', {
+      description: 'Execute a shell command using the active workspace shell backend.',
+      parameters: {
+        type: 'object',
+        properties: {
+          command: { type: 'string', description: 'Shell command to execute.' },
+        },
+        required: ['command'],
+      },
+      execute: async (args) => {
+        const command = String(args.command ?? args.arg1 ?? '');
+        return options.shell.exec(
+          command,
+          getExecSignal(),
+          createShellToolEventBridge({ toolName: 'vm_exec', toolArgs: { command }, emit: options.onEvent }),
+        );
+      },
+    });
+  }
+
+  return tools;
 }
 
 export async function urlFetch(

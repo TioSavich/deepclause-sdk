@@ -205,8 +205,10 @@ program
   .description('Execute a DML file (one-shot)')
   .option('--workspace <path>', 'Working directory for file operations', './')
   .option('--backend <kind>', 'Model backend: pi (default) or env')
+  .option('--goal <dml>', 'Run this goal instead of agent_main/N')
   .option('--verbose', 'Show debug output including tool calls')
-  .option('--stream', 'Stream LLM responses in real-time')
+  .option('--no-stream', 'Hide streamed model text/reasoning (show only outputs and answers)')
+  .option('--no-events', 'Hide task activity, tool calls, usage, and logs')
   .option('--plain', 'No color/formatting')
   .option('--json', 'Emit events as JSON lines')
   .option('--sandbox', 'Run shell tools inside AgentVM instead of the local workspace shell')
@@ -232,8 +234,10 @@ program
       const result = await run(file, args, {
         workspace: options.workspace,
         backend: options.backend,
+        goal: options.goal,
         verbose: options.verbose,
         stream: options.stream,
+        events: options.events,
         plain: options.plain,
         json: options.json,
         sandbox: options.sandbox,

@@ -8,12 +8,8 @@
  * channel and is not governed by this toolset.
  */
 
-import {
-  createShellManager,
-  type HostShellConfig,
-  type ShellManager,
-} from '../system/runtime/shell-manager.js';
-import { createShellToolEventBridge } from '../system/runtime/shell-tool-events.js';
+import { createShellManager, type HostShellConfig } from '../system/runtime/shell-manager.js';
+import { createLocalRuntimeTools } from '../system/runtime/runtime-tools.js';
 import type { DMLEvent, ToolDefinition } from '../types.js';
 
 export const DEFAULT_REPL_TOOLS = ['bash'] as const;
@@ -56,49 +52,25 @@ export async function createReplToolset(options: ReplToolsetOptions): Promise<Re
   const requested = options.toolNames === null
     ? []
     : options.toolNames ?? [...DEFAULT_REPL_TOOLS];
-  const tools = new Map<string, ToolDefinition>();
-  let shell: ShellManager | null = null;
-
-  if (requested.includes('bash')) {
-    shell = createShellManager({
-      workspacePath: options.workspacePath,
-      sandbox: options.sandbox,
-      network: options.network,
-      hostConfig: options.hostConfig,
-    });
-    const shellManager = shell;
-    tools.set('bash', {
-      description: 'Run a shell command in the active workspace shell.',
-      parameters: {
-        type: 'object',
-        properties: {
-          command: { type: 'string', description: 'Shell command to execute.' },
-        },
-        required: ['command'],
-      },
-      execute: async (args) => {
-        const command = String(args.command ?? args.arg1 ?? '');
-        return shellManager.exec(
-          command,
-          options.signal,
-          createShellToolEventBridge({
-            toolName: 'bash',
-            toolArgs: { command },
-            emit: options.onEvent,
-          }),
-        );
-      },
-    });
-  }
-
+  // The shell is cheap to construct (AgentVM starts lazily on first exec).
+  const shell = createShellManager({
+    workspacePath: options.workspacePath,
+    sandbox: options.sandbox,
+    network: options.network,
+    hostConfig: options.hostConfig,
+  });
+  const tools = createLocalRuntimeTools({
+    shell,
+    workspacePath: options.workspacePath,
+    toolNames: requested,
+    signal: options.signal,
+    onEvent: options.onEvent,
+  });
   return {
     tools,
     catalog: buildToolCatalog(tools),
     dispose: async () => {
-      if (shell) {
-        await shell.dispose();
-        shell = null;
-      }
+      await shell.dispose();
     },
   };
 }

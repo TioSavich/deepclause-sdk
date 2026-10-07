@@ -65,6 +65,7 @@
     repl_rollback/3,
     repl_user_predicates/2,
     repl_user_predicates_text/2,
+    repl_predicate_arities/3,
     repl_set_meta_catalog/2,
     repl_set_meta_template/2,
     repl_set_harness_examples/2,
@@ -1650,6 +1651,18 @@ repl_user_predicates(SessionId, Preds) :-
 repl_user_predicates_text(SessionId, Text) :-
     repl_user_predicates(SessionId, Preds),
     with_output_to(string(Text), print_pred_list(Preds)).
+
+%% repl_predicate_arities(+SessionId, +Name, -Arities)
+%% Sorted arities of a user predicate, e.g. agent_main -> [0,1,2]. Used by
+%% `deepclause run` to pick the agent_main/N to call for the given arguments.
+repl_predicate_arities(SessionId, Name, Arities) :-
+    atom(Name),
+    findall(Arity,
+        (   current_predicate(SessionId:Name/Arity),
+            repl_user_predicate(SessionId, Name, Arity)
+        ),
+        Arities0),
+    sort(Arities0, Arities).
 
 %% repl_history_listing(+SessionId)
 %% Human-readable tail for `listing(history)`.

@@ -558,6 +558,19 @@ export class DMLSession {
    * temp .dml file. Used as an abort safety net so a cancelled turn's work is
    * not lost.
    */
+  /** Sorted arities of a user predicate in the living module (e.g. `agent_main`). */
+  predicateArities(name: string): number[] {
+    const safe = /^[a-z_][A-Za-z0-9_]*$/.test(name) ? name : `'${name.replace(/'/g, "''")}'`;
+    const result = this.prologQuery(
+      `deepclause_mi:repl_predicate_arities('${this.sessionId}', ${safe}, Arities)`
+    );
+    const arities = plainValue(result?.Arities);
+    if (!Array.isArray(arities)) return [];
+    return arities
+      .map((arity) => Number(plainValue(arity)))
+      .filter((arity) => Number.isFinite(arity));
+  }
+
   /** True when the living module has no user predicates (nothing worth saving). */
   isEmpty(): boolean {
     const result = this.prologQuery(
