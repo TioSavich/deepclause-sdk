@@ -55,6 +55,11 @@ export function getWorkspaceDocAssetPath(name: WorkspaceDocAssetName): string {
   return join(DOCS_DIR, getWorkspaceDocFileName(name));
 }
 
+/** Bundled meta-prompt template (`META_PROMPT.md`), used by the REPL meta task. */
+export function getMetaPromptAssetPath(): string {
+  return join(DOCS_DIR, 'META_PROMPT.md');
+}
+
 function getWorkspaceOverridePath(workspaceRoot: string, fileName: string): string {
   return join(workspaceRoot, SYSTEM_OVERRIDE_DIR, fileName);
 }

@@ -12,7 +12,7 @@ import * as path from 'path';
 import { strFromU8, strToU8, unzipSync, zipSync } from 'fflate';
 
 import { loadProlog, mountWorkspace, type SWIPLModule } from '../prolog/loader.js';
-import { getWorkspaceDocAssetPath } from '../system/assets/index.js';
+import { getMetaPromptAssetPath, getWorkspaceDocAssetPath } from '../system/assets/index.js';
 import { DMLRunner, type Frame, type InternalRunOptions, type RunnerOptions } from '../runner.js';
 import type {
   DMLEvent,
@@ -113,6 +113,7 @@ export class DMLSession {
   private modelCallBudget: number;
   private dmlReference?: string;
   private dmlAuthoring?: string;
+  private metaPromptTemplate?: string;
   private disposed = false;
   /** History recorder; present only when the caller enables it. */
   private history?: HistoryStore;
@@ -514,6 +515,19 @@ export class DMLSession {
     return this.dmlAuthoring;
   }
 
+  /** Load the meta-prompt template once, for inclusion in the meta prompt. */
+  private async loadMetaPromptTemplate(): Promise<string> {
+    if (this.metaPromptTemplate !== undefined) {
+      return this.metaPromptTemplate;
+    }
+    try {
+      this.metaPromptTemplate = await fs.readFile(getMetaPromptAssetPath(), 'utf8');
+    } catch {
+      this.metaPromptTemplate = '';
+    }
+    return this.metaPromptTemplate;
+  }
+
   /** Predicates replaced by the most recent successful commit ("name/arity, …"). */
   private lastCommitPredicates(): string {
     const result = this.prologQuery(
@@ -815,6 +829,12 @@ export class DMLSession {
         if (authoring) {
           this.prologQuery(
             `deepclause_mi:repl_set_authoring_examples('${this.sessionId}', ${quoteString(authoring)})`
+          );
+        }
+        const metaTemplate = await this.loadMetaPromptTemplate();
+        if (metaTemplate) {
+          this.prologQuery(
+            `deepclause_mi:repl_set_meta_template('${this.sessionId}', ${quoteString(metaTemplate)})`
           );
         }
 
