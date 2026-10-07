@@ -15,6 +15,11 @@ and the **TypeScript SDK**.
 - **Auditability**: sessions, turns, traces, and versions are recorded under
   `.deepclause/repl/` and exposed to DML as `harness_*` facts; `rollback.`
   restores a previous version.
+- **Session resume** (`deepclause repl --session <id|last>`): reopen an earlier
+  session with its harness, conversation memory, and turn numbering restored. A
+  durable `sessions/<id>/harness.json` snapshot is written on every change and
+  again at session end, so the harness survives process exit; a module+scripts
+  hash flags any drift since the session was saved.
 - **pi backend by default** (`backend.kind: "pi"`): reuses pi's model catalog,
   credentials, streaming, cancellation, and usage accounting. `deepclause
   login`/`logout` port pi's OAuth/API-key flow. `env` remains an opt-in backend.

@@ -77,6 +77,7 @@
     repl_last_commit_summary/2,
     repl_execute_frame/4,
     repl_record_meta/3,
+    repl_memory_term/3,
     post_agent_result/4,
     post_exec_result/3,
     post_sample_token_result/3,
@@ -1541,6 +1542,23 @@ repl_meta_memory_text(SessionId, Text) :-
     with_output_to(string(Text),
         forall(member(message{role: Role, content: Content}, Recent),
             format("~w: ~w~n", [Role, Content]))).
+
+%% repl_memory_term(+SessionId, +Slot, -TermText)
+%% Serializes a live memory slot (harness|meta) as a Prolog term so a session
+%% can persist it and restore it on `--session` resume.
+repl_memory_term(SessionId, Slot, Text) :-
+    (   Slot == meta
+    ->  (   session_meta_memory(SessionId, Memory)
+        ->  true
+        ;   Memory = []
+        )
+    ;   (   session_repl_memory(SessionId, Memory)
+        ->  true
+        ;   Memory = []
+        )
+    ),
+    with_output_to(string(Text),
+        write_term(Memory, [quoted(true), max_depth(0)])).
 
 last_n(List, N, Tail) :-
     length(List, Len),

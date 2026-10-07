@@ -68,7 +68,54 @@ export interface HistoryChangeRecord {
   manifest: string;
 }
 
+/** A linked script file and its content hash. */
+export interface HistoryScriptRef {
+  path: string;
+  sha256: string;
+}
+
+/**
+ * Durable snapshot of a session's harness, written beside the session so the
+ * harness can be restored by `--session` even after the process exits or the
+ * scratch bundle is gone. See `docs/DML_REPL_SESSION_HISTORY.md`.
+ */
+export interface SessionHarnessSnapshot {
+  sessionId: string;
+  /** Last recorded harness version for the session (0 = none). */
+  version: number;
+  /** sha256 of `module` + `scripts` (see `harnessHash`). */
+  hash: string;
+  /** True when `module` still matches the recorded version's snapshot. */
+  clean: boolean;
+  savedAt: string;
+  scripts: HistoryScriptRef[];
+  /** Serialized conversation memory, when captured. */
+  memory?: { harness: string; meta: string };
+  module: string;
+}
+
+/** Metadata about a past REPL session, for `--session` resolution. */
+export interface SessionSummary {
+  id: string;
+  startedAt?: string;
+  endedAt?: string | null;
+  resumedAt?: string[];
+  lastTurn?: number;
+}
+
 const DEFAULT_DIR = '.deepclause/repl';
+
+/** Stable hash of a harness module plus its linked scripts. */
+export function harnessHash(
+  module: string,
+  scripts: Array<{ path: string; sha256: string }>,
+): string {
+  return createHash('sha256')
+    .update(module)
+    .update('\n')
+    .update(JSON.stringify(scripts))
+    .digest('hex');
+}
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -93,6 +140,8 @@ export class HistoryStore {
   /** Current HEAD version (0 = empty harness) and the highest ever issued. */
   private headVersion = 0;
   private maxVersion = 0;
+  /** Hash recorded for the current HEAD (for session-snapshot consistency). */
+  private headHash?: string;
 
   constructor(
     workspacePath: string,
@@ -112,6 +161,10 @@ export class HistoryStore {
 
   get currentVersion(): number {
     return this.headVersion;
+  }
+
+  get currentHash(): string | undefined {
+    return this.headHash;
   }
 
   get tracePath(): string {
@@ -142,8 +195,10 @@ export class HistoryStore {
       const head = JSON.parse(await fs.readFile(this.headFile, 'utf8')) as {
         version?: number;
         maxVersion?: number;
+        hash?: string;
       };
       if (typeof head.version === 'number') this.headVersion = head.version;
+      if (typeof head.hash === 'string') this.headHash = head.hash;
       this.maxVersion = typeof head.maxVersion === 'number' ? head.maxVersion : this.headVersion;
     } catch {
       // no HEAD yet
@@ -160,14 +215,44 @@ export class HistoryStore {
     }
   }
 
-  async startSession(info: { model: string; backend: string }): Promise<string[]> {
+  async startSession(
+    info: { model: string; backend: string },
+    options: { resume?: boolean } = {},
+  ): Promise<string[]> {
+    const sessionFile = path.join(this.sessionDirAbs, 'session.json');
+    if (options.resume) {
+      const resumedAt = nowIso();
+      const facts = [
+        `harness_session_resume(${prologAtom(this.sessionId)}, ${prologAtom(resumedAt)}).`,
+      ];
+      await this.appendFacts(facts);
+      let existing: Record<string, unknown> = {};
+      try {
+        existing = JSON.parse(await fs.readFile(sessionFile, 'utf8')) as Record<string, unknown>;
+      } catch {
+        // first resume of a session that never wrote session.json
+      }
+      const previous = Array.isArray(existing.resumedAt) ? (existing.resumedAt as string[]) : [];
+      await this.writeJson(sessionFile, {
+        ...existing,
+        sessionId: this.sessionId,
+        model: info.model,
+        backend: info.backend,
+        traceDir: this.sessionDirRel,
+        endedAt: null,
+        exit: null,
+        resumedAt: [...previous, resumedAt],
+      });
+      return facts;
+    }
+
     const startedAt = nowIso();
     const facts = [
       `harness_session(${prologAtom(this.sessionId)}, ${prologAtom(startedAt)}, `
         + `${prologAtom(info.model)}, ${prologAtom(info.backend)}, ${prologAtom(this.sessionDirRel)}).`,
     ];
     await this.appendFacts(facts);
-    await this.writeJson(path.join(this.sessionDirAbs, 'session.json'), {
+    await this.writeJson(sessionFile, {
       sessionId: this.sessionId,
       startedAt,
       endedAt: null,
@@ -214,11 +299,7 @@ export class HistoryStore {
     this.maxVersion = version;
     const parentVersion = this.headVersion;
     const ts = nowIso();
-    const hash = createHash('sha256')
-      .update(record.module)
-      .update('\n')
-      .update(JSON.stringify(record.scripts))
-      .digest('hex');
+    const hash = harnessHash(record.module, record.scripts);
     const facts = [
       `harness_change(${version}, ${prologAtom(ts)}, ${prologAtom(record.kind)}, `
         + `${prologAtom(record.sessionId)}, ${record.turn}).`,
@@ -264,6 +345,7 @@ export class HistoryStore {
       hash,
     });
     this.headVersion = version;
+    this.headHash = hash;
     return { facts, version };
   }
 
@@ -313,6 +395,104 @@ export class HistoryStore {
         parentVersion?: number | null;
       };
       return { module: data.module ?? '', parentVersion: data.parentVersion ?? null };
+    } catch {
+      return null;
+    }
+  }
+
+  // ---- Session lookup & durable harness snapshots (resume) ----
+
+  private sessionsDir(): string {
+    return path.join(this.rootAbs, 'sessions');
+  }
+
+  private sessionHarnessFile(sessionId: string): string {
+    return path.join(this.sessionsDir(), sessionId, 'harness.json');
+  }
+
+  /** True when a session directory exists for `sessionId`. */
+  async sessionExists(sessionId: string): Promise<boolean> {
+    try {
+      return (await fs.stat(path.join(this.sessionsDir(), sessionId))).isDirectory();
+    } catch {
+      return false;
+    }
+  }
+
+  /** All recorded sessions, oldest first. */
+  async sessionSummaries(): Promise<SessionSummary[]> {
+    let ids: string[];
+    try {
+      ids = await fs.readdir(this.sessionsDir());
+    } catch {
+      return [];
+    }
+    const summaries: SessionSummary[] = [];
+    for (const id of ids) {
+      let meta: Record<string, unknown> = {};
+      try {
+        meta = JSON.parse(
+          await fs.readFile(path.join(this.sessionsDir(), id, 'session.json'), 'utf8'),
+        ) as Record<string, unknown>;
+      } catch {
+        // session without metadata (e.g. history disabled mid-way)
+      }
+      summaries.push({
+        id,
+        startedAt: typeof meta.startedAt === 'string' ? meta.startedAt : undefined,
+        endedAt: typeof meta.endedAt === 'string' ? meta.endedAt : null,
+        resumedAt: Array.isArray(meta.resumedAt) ? (meta.resumedAt as string[]) : undefined,
+        lastTurn: await this.lastTurn(id),
+      });
+    }
+    summaries.sort((a, b) => (a.startedAt ?? '').localeCompare(b.startedAt ?? ''));
+    return summaries;
+  }
+
+  /** The most recently started session, or null when there is none. */
+  async latestSessionId(): Promise<string | null> {
+    const summaries = await this.sessionSummaries();
+    return summaries.length > 0 ? summaries[summaries.length - 1].id : null;
+  }
+
+  /** The highest turn number recorded for a session (0 when none). */
+  async lastTurn(sessionId: string = this.sessionId): Promise<number> {
+    const file = path.join(this.sessionsDir(), sessionId, 'turns.jsonl');
+    let text: string;
+    try {
+      text = await fs.readFile(file, 'utf8');
+    } catch {
+      return 0;
+    }
+    const lines = text.split('\n').filter((line) => line.trim());
+    for (let index = lines.length - 1; index >= 0; index -= 1) {
+      try {
+        const record = JSON.parse(lines[index]) as { turn?: number };
+        if (typeof record.turn === 'number') return record.turn;
+      } catch {
+        // skip a malformed line
+      }
+    }
+    return 0;
+  }
+
+  /** Persist the durable harness snapshot beside a session (best effort). */
+  async writeSessionHarness(
+    snapshot: SessionHarnessSnapshot,
+    sessionId: string = this.sessionId,
+  ): Promise<void> {
+    await this.writeJson(this.sessionHarnessFile(sessionId), snapshot);
+  }
+
+  /** Read a session's durable harness snapshot, or null when absent. */
+  async readSessionHarness(
+    sessionId: string = this.sessionId,
+  ): Promise<SessionHarnessSnapshot | null> {
+    try {
+      const data = JSON.parse(
+        await fs.readFile(this.sessionHarnessFile(sessionId), 'utf8'),
+      ) as SessionHarnessSnapshot;
+      return typeof data?.module === 'string' ? data : null;
     } catch {
       return null;
     }

@@ -14,6 +14,7 @@ import * as readline from 'readline';
 import { fileURLToPath } from 'url';
 
 import { createHarnessRepl, type HarnessRepl } from '../repl/index.js';
+import { HistoryStore } from '../repl/history.js';
 import { resolveReplJudgeSelection } from '../repl/judge.js';
 import { ReplRenderer, type RenderMode } from '../repl/render.js';
 import { createPiBackend } from '../repl/backend.js';
@@ -24,6 +25,8 @@ import { loadReplConfig, updateConfig } from './config.js';
 export interface ReplCliOptions {
   goal?: string[];
   load?: string[];
+  /** Resume a previous session by id (or `last`). */
+  session?: string;
   first?: boolean;
   plain?: boolean;
   json?: boolean;
@@ -209,6 +212,12 @@ export interface ReplRuntime {
   /** Resolved model and backend, shown in the startup banner. */
   model: string;
   backend: 'env' | 'pi';
+  /** Session id of this run. */
+  sessionId: string;
+  /** Session id when the run resumed an earlier session. */
+  resumedSession?: string;
+  /** True when persistent history is enabled (sessions can be resumed). */
+  historyEnabled: boolean;
   /** Replace the input channel (the interactive loop uses its own readline). */
   setOnInput(handler: (prompt: string, choices?: string[]) => Promise<string | undefined>): void;
   /** Set when the env backend has no credentials for the selected provider. */
@@ -304,7 +313,42 @@ export async function createReplRuntime(options: ReplCliOptions): Promise<ReplRu
     process.stderr.write(`[deepclause] ${warning}\n`);
   }
 
+  // History is needed before the session opens: `--session` resolves the
+  // target id here and the resumed session reads its harness back on open.
+  const historyOptions = config.repl.history.enabled
+    ? {
+        dir: config.repl.history.dir,
+        trace: config.repl.history.trace,
+        maxEventBytes: config.repl.history.maxEventBytes,
+        maxSessions: config.repl.history.maxSessions,
+        maxVersions: config.repl.history.maxVersions,
+        includeInExport: config.repl.history.includeInExport,
+        redact: config.repl.history.redact,
+      }
+    : undefined;
+
+  let sessionId = options.session;
+  let resume = false;
+  if (sessionId) {
+    if (!historyOptions) {
+      throw new Error('--session requires repl.history to be enabled');
+    }
+    const store = new HistoryStore(workspace, '__session_lookup__', historyOptions);
+    if (sessionId === 'last') {
+      const latest = await store.latestSessionId();
+      if (!latest) {
+        throw new Error('no previous sessions found to resume');
+      }
+      sessionId = latest;
+    } else if (!(await store.sessionExists(sessionId))) {
+      throw new Error(`unknown session: ${sessionId}`);
+    }
+    resume = true;
+  }
+
   const repl = await createHarnessRepl({
+    sessionId,
+    resume,
     workspacePath: workspace,
     model: harnessModel,
     provider: harnessProvider,
@@ -318,17 +362,7 @@ export async function createReplRuntime(options: ReplCliOptions): Promise<ReplRu
     hostToolsCatalog: toolset.catalog,
     llmBackend,
     judgeSelection,
-    history: config.repl.history.enabled
-      ? {
-          dir: config.repl.history.dir,
-          trace: config.repl.history.trace,
-          maxEventBytes: config.repl.history.maxEventBytes,
-          maxSessions: config.repl.history.maxSessions,
-          maxVersions: config.repl.history.maxVersions,
-          includeInExport: config.repl.history.includeInExport,
-          redact: config.repl.history.redact,
-        }
-      : undefined,
+    history: historyOptions,
     onInput: buildCliOnInput(options),
   });
 
@@ -352,6 +386,9 @@ export async function createReplRuntime(options: ReplCliOptions): Promise<ReplRu
     version: PACKAGE_VERSION,
     model: backendKind === 'pi' ? harnessModel : `${harnessProvider}:${harnessModel}`,
     backend: backendKind,
+    sessionId: repl.session.getSessionId(),
+    resumedSession: resume ? sessionId : undefined,
+    historyEnabled: Boolean(historyOptions),
     setOnInput: (handler) => repl.setOnInput(handler),
     missingCredential,
   };
@@ -388,6 +425,12 @@ function printBanner(runtime: ReplRuntime, loaded: string[]): void {
     `  ${dim(runtime.workspace)}`,
   ];
 
+  lines.push(
+    runtime.resumedSession
+      ? `  ${dim('session')} ${runtime.sessionId} ${accent('(resumed)')}`
+      : `  ${dim('session')} ${runtime.sessionId}`,
+  );
+
   // A short getting-started guide, shown on a fresh (blank) harness only.
   if (runtime.repl.session.isEmpty()) {
     lines.push(
@@ -412,6 +455,7 @@ function printBanner(runtime: ReplRuntime, loaded: string[]): void {
       `  When you're ready, export the harness and re-use it whenever you need:`,
       `    ${dim('dml>')} export research.dml.            save a portable harness`,
       `    ${dim('$')} deepclause repl -l research.dml    load it back any time`,
+      `    ${dim('$')} deepclause repl --session last   resume the last session`,
     );
   }
 
@@ -421,8 +465,11 @@ function printBanner(runtime: ReplRuntime, loaded: string[]): void {
     `  ${accent('<plain English>')}        build the harness from a prompt`,
     '',
     `  ${accent('help.')}  ${accent('listing.')}  ${accent('export <file>.')}  ${accent('freeze.')}  ${accent('model.')}  ${accent('halt.')}`,
-    '',
   );
+  if (runtime.historyEnabled) {
+    lines.push(`  ${dim('resume later:')} deepclause repl --session ${runtime.sessionId}`);
+  }
+  lines.push('');
 
   runtime.renderer.writeLine(lines.join('\n'));
 }
@@ -561,6 +608,7 @@ function helpText(runtime: ReplRuntime): string {
     "  When you're ready, export the harness and re-use it whenever you need:",
     '    export research.dml.                 save a portable harness',
     '    deepclause repl -l research.dml      load it back any time',
+    '    deepclause repl --session last       resume the last session',
     '',
     '  Commands',
     '    listing. / listing(Name/Arity).   inspect the harness',
@@ -786,7 +834,14 @@ export async function runInteractiveGoal(
 
 /** Entry point for `deepclause repl`. */
 export async function startRepl(options: ReplCliOptions): Promise<number> {
-  const runtime = await createReplRuntime(options);
+  let runtime: ReplRuntime;
+  try {
+    runtime = await createReplRuntime(options);
+  } catch (error) {
+    process.stderr.write(`ERROR: ${(error as Error).message}\n`);
+    return 1;
+  }
+  let bannerShown = false;
 
   // Save the harness to a temp bundle on exit (halt./Ctrl-D/Ctrl-C). Skipped
   // when an explicit --export path was given, when disabled, when already
@@ -842,9 +897,16 @@ export async function startRepl(options: ReplCliOptions): Promise<number> {
       return await runNonInteractive(runtime, options, saveHarnessOnExit);
     }
     printBanner(runtime, options.load ?? []);
+    bannerShown = true;
     return await runInteractive(runtime, options, saveHarnessOnExit);
   } finally {
     await saveHarnessOnExit();
+    if (bannerShown) {
+      const footer = runtime.historyEnabled
+        ? `session ${runtime.sessionId}  ·  resume: deepclause repl --session ${runtime.sessionId}`
+        : `session ${runtime.sessionId} (history disabled; this session is not resumable)`;
+      runtime.renderer.writeLine(`\n${footer}`);
+    }
     if (options.exportPath) {
       try {
         const result = await runtime.repl.export(options.exportPath);
@@ -867,6 +929,7 @@ export function registerReplCommand(program: Command): void {
     .description('Interactive DML REPL (goal mode; English prompts build the harness)')
     .option('-g, --goal <goal>', 'run one goal and exit (repeatable)', collect)
     .option('-l, --load <file>', 'load a DML file before starting (repeatable)', collect)
+    .option('--session <id>', 'resume a previous session by id (or "last")')
     .option('--first', 'with a goal, print only the first solution')
     .option('--plain', 'no TUI formatting (auto when stdout is not a TTY)')
     .option('--json', 'emit results as JSON lines')
@@ -899,6 +962,7 @@ export function registerReplCommand(program: Command): void {
       const exitCode = await startRepl({
         goal: options.goal,
         load: options.load,
+        session: options.session,
         first: options.first,
         plain: options.plain,
         json: options.json,

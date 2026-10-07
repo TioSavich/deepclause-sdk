@@ -30,9 +30,11 @@ import {
 import { createMetaTools, type ExecuteResult } from './tools.js';
 import {
   HistoryStore,
+  harnessHash,
   type HistoryChangedPredicate,
   type HistoryOptions,
   type HistoryTurnRecord,
+  type SessionHarnessSnapshot,
 } from './history.js';
 
 export interface DMLSessionOptions {
@@ -68,6 +70,12 @@ export interface DMLSessionOptions {
    * `docs/DML_REPL_SESSION_HISTORY.md`.
    */
   history?: HistoryOptions;
+  /**
+   * Resume an existing session (identified by `sessionId`): restore its saved
+   * harness and conversation memory and continue its turn numbering. Requires
+   * `history` and a `sessionId` that already exists.
+   */
+  resume?: boolean;
 }
 
 export interface DMLQueryOptions {
@@ -120,6 +128,7 @@ export class DMLSession {
   /** History recorder; present only when the caller enables it. */
   private history?: HistoryStore;
   private historyOptions?: HistoryOptions;
+  private resume: boolean;
   /** Monotonic per-session turn counter used by history records. */
   private turnCounter = 0;
   private historyWarned = false;
@@ -143,6 +152,7 @@ export class DMLSession {
     this.modelCallBudget = this.maxModelCalls;
     this.hostToolsCatalog = options.hostToolsCatalog;
     this.historyOptions = options.history;
+    this.resume = options.resume ?? false;
     this.runner = new DMLRunner(swipl, options.runnerOptions);
     this.runner.bindSession(this.sessionId);
   }
@@ -157,6 +167,25 @@ export class DMLSession {
       mountWorkspace(swipl, options.workspacePath);
     }
 
+    // Resuming: read the saved session snapshot up-front so the restored
+    // conversation memory can seed create_session; the harness itself is
+    // loaded once the session exists.
+    let snapshot: SessionHarnessSnapshot | null = null;
+    if (options.resume) {
+      if (!options.history) {
+        throw new Error('resume requires history to be enabled');
+      }
+      const store = new HistoryStore(
+        options.workspacePath ?? process.cwd(),
+        session.sessionId,
+        options.history,
+      );
+      snapshot = await store.readSessionHarness();
+      if (!snapshot) {
+        throw new Error(`session not found or has no saved harness: ${session.sessionId}`);
+      }
+    }
+
     const sessionParams: Record<string, unknown> = {
       workspace_path: options.workspacePath ?? './',
       trace: false,
@@ -166,14 +195,20 @@ export class DMLSession {
       sessionParams.gas_limit = options.gasLimit;
     }
 
-    const memory = session.serializeMemory(options.initialHarnessMemory ?? []);
+    const harnessMemory = snapshot?.memory?.harness?.trim()
+      ? snapshot.memory.harness
+      : `[${session.serializeMemory(options.initialHarnessMemory ?? [])}]`;
+    const metaMemory = snapshot?.memory?.meta?.trim() ? snapshot.memory.meta : '[]';
     const result = session.prologQuery(
-      `deepclause_mi:create_session('${session.sessionId}', ${buildParamsTerm(sessionParams)}, [${memory}], [])`
+      `deepclause_mi:create_session('${session.sessionId}', ${buildParamsTerm(sessionParams)}, ${harnessMemory}, ${metaMemory})`
     );
     if (!result) {
       throw new Error('Failed to create REPL session');
     }
     await session.initHistory();
+    if (snapshot) {
+      await session.restoreHarnessFromHistory(snapshot);
+    }
     return session;
   }
 
@@ -253,10 +288,74 @@ export class DMLSession {
         this.prologQuery(`deepclause_mi:repl_history_load('${this.sessionId}', ${quoteString(existing)})`);
       }
       this.history = store;
-      this.assertHistoryFacts(await store.startSession({ model: this.model, backend: this.provider }));
+      this.assertHistoryFacts(
+        await store.startSession({ model: this.model, backend: this.provider }, { resume: this.resume }),
+      );
     } catch (error) {
       this.warnHistory(error);
     }
+  }
+
+  /**
+   * Restore a resumed session's harness from its durable snapshot and continue
+   * its turn numbering. The saved module is a restore, not a user load, so it
+   * is not recorded as a new change.
+   */
+  private async restoreHarnessFromHistory(snapshot: SessionHarnessSnapshot): Promise<void> {
+    this.turnCounter = (await this.history?.lastTurn(this.sessionId)) ?? 0;
+    const module = snapshot.module.trim();
+    if (module) {
+      const result = await this.loadCode(snapshot.module);
+      if (result.error) {
+        this.warnHistory(new Error(`could not restore harness: ${result.error}`));
+      }
+    }
+    // Consistency check: the saved hash covers the module *and* its scripts;
+    // scripts live in the workspace and may have been edited since.
+    const hash = harnessHash(snapshot.module, await this.scriptHashes());
+    if (snapshot.hash && hash !== snapshot.hash) {
+      this.warnHistory(new Error('harness or its scripts differ from the saved session state'));
+    }
+  }
+
+  /**
+   * Write the durable harness snapshot beside the session so `--session` can
+   * restore it even after the process exits. Captures the *current* module
+   * (including goal-mode drift) plus the serialized conversation memory.
+   */
+  private async persistSessionHarness(version: number, clean?: boolean): Promise<void> {
+    if (!this.history) return;
+    try {
+      const module = this.moduleSource();
+      const scripts = await this.scriptHashes();
+      const hash = harnessHash(module, scripts);
+      const isClean = clean
+        ?? (this.history.currentHash ? hash === this.history.currentHash : version === 0);
+      await this.history.writeSessionHarness({
+        sessionId: this.sessionId,
+        version,
+        hash,
+        clean: isClean,
+        savedAt: new Date().toISOString(),
+        scripts,
+        memory: {
+          harness: this.dumpMemoryTerm('harness'),
+          meta: this.dumpMemoryTerm('meta'),
+        },
+        module,
+      });
+    } catch (error) {
+      this.warnHistory(error);
+    }
+  }
+
+  /** Serialize a live memory slot back to a Prolog term (for resume). */
+  private dumpMemoryTerm(slot: 'harness' | 'meta'): string {
+    const result = this.prologQuery(
+      `deepclause_mi:repl_memory_term('${this.sessionId}', ${slot}, Text)`
+    );
+    const text = plainValue(result?.Text);
+    return typeof text === 'string' && text.trim() ? text : '[]';
   }
 
   private assertHistoryFacts(facts: string[]): void {
@@ -356,6 +455,7 @@ export class DMLSession {
         manifest: this.manifestText(),
       });
       this.assertHistoryFacts(facts);
+      await this.persistSessionHarness(version, true);
       return version;
     } catch (error) {
       this.warnHistory(error);
@@ -1062,6 +1162,7 @@ export class DMLSession {
     this.disposed = true;
     if (this.history) {
       try {
+        await this.persistSessionHarness(this.history.currentVersion);
         this.assertHistoryFacts(await this.history.endSession('dispose'));
       } catch (error) {
         this.warnHistory(error);

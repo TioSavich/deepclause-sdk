@@ -8,6 +8,7 @@ import * as os from 'os';
 import * as path from 'path';
 
 import { createHarnessRepl, type HarnessRepl } from '../src/repl/index.js';
+import { HistoryStore } from '../src/repl/history.js';
 import type { DMLEvent, LLMBackend, LLMBackendRequest, LLMBackendResponse } from '../src/types.js';
 
 interface CannedResponse {
@@ -207,5 +208,64 @@ describe('harness history', () => {
     );
     expect(head.version).toBe(0);
     expect(head.maxVersion).toBe(2);
+  });
+
+  it('resumes a previous session: restores the harness and continues turns', async () => {
+    const id = 'sess_resume';
+    repl = await createHarnessRepl({
+      sessionId: id,
+      workspacePath: workspace,
+      model: 'test-model',
+      provider: 'openai',
+      llmBackend: new CannedBackend([commitResponse('demo :- output(one).')]),
+      tools: new Map(),
+      history: HISTORY,
+    });
+    await collect(repl.prompt('make demo'));
+    await repl.dispose();
+    repl = undefined;
+
+    // The durable snapshot lands beside the session.
+    const snapshot = JSON.parse(
+      await fs.readFile(path.join(workspace, '.deepclause/repl/sessions', id, 'harness.json'), 'utf8'),
+    );
+    expect(snapshot.module).toContain('demo');
+    expect(snapshot.version).toBe(1);
+    expect(snapshot.hash).toBeTruthy();
+
+    // Resume the same session: the harness comes back and turns continue at 2.
+    repl = await createHarnessRepl({
+      sessionId: id,
+      resume: true,
+      workspacePath: workspace,
+      model: 'test-model',
+      provider: 'openai',
+      llmBackend: new CannedBackend([commitResponse('demo :- output(two).')]),
+      tools: new Map(),
+      history: HISTORY,
+    });
+
+    expect(outputs(await collect(repl.query('demo')))).toContain('one');
+    const changed = await collect(repl.prompt('change demo'));
+    expect(changed.some((event) => event.type === 'error')).toBe(false);
+    expect(outputs(await collect(repl.query('demo')))).toContain('two');
+
+    const history = await fs.readFile(path.join(workspace, '.deepclause/repl/history.dml'), 'utf8');
+    expect(history).toContain('harness_session_resume(');
+    expect(history).toMatch(new RegExp(`harness_turn\\('${id}', 2,`));
+  });
+
+  it('indexes sessions and resolves the latest for --session last', async () => {
+    const first = new HistoryStore(workspace, 'sess_a', HISTORY);
+    await first.init();
+    await first.startSession({ model: 'm', backend: 'openai' });
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    const second = new HistoryStore(workspace, 'sess_b', HISTORY);
+    await second.init();
+    await second.startSession({ model: 'm', backend: 'openai' });
+
+    expect(await second.sessionExists('sess_a')).toBe(true);
+    expect(await second.sessionExists('nope')).toBe(false);
+    expect(await second.latestSessionId()).toBe('sess_b');
   });
 });

@@ -36,7 +36,8 @@ overrides it to `.pi/deepclause/repl/` to honor "never create `.deepclause/`".
 │       └── 0001_2026-01-15T10-35-12-900Z.json   # full snapshot per version
 └── sessions/
     └── repl_m9x1_1/
-        ├── session.json                  # metadata, start/end, exit
+        ├── session.json                  # metadata, start/end, exit, resumes
+        ├── harness.json                  # durable harness snapshot for --session
         ├── turns.jsonl                   # one summary per turn
         └── events.jsonl                  # the runtime event trace
 ```
@@ -50,6 +51,7 @@ begins with the full queryable history. Everything else is detail.
 % One per REPL session. TraceDir is workspace-relative.
 harness_session(SessionId, StartedAt, Model, Backend, TraceDir).
 harness_session_end(SessionId, EndedAt).
+harness_session_resume(SessionId, At).        % the session was reopened
 
 % One per turn.
 harness_turn(SessionId, Turn, Timestamp, Mode, Outcome).
@@ -182,9 +184,49 @@ still gets a fresh number. Repeating `rollback.` walks further back; a commit in
 between branches forward from the restored version. Rollback preserves runtime
 conversation memory (it restores code, not the conversation).
 
-## 10. Follow-ups
+## 10. Resuming a session (`--session`)
+
+`deepclause repl --session <id>` (or `--session last`) reopens an earlier
+session: the same `sessionId`, its restored harness, and its conversation
+memory, with turn numbering continuing where it stopped. A
+`harness_session_resume/2` fact records the reopen; `session.json` keeps its
+original `startedAt` and gains a `resumedAt` entry.
+
+Resume is anchored by a **durable harness snapshot** written beside the session
+(`sessions/<id>/harness.json`):
+
+```json
+{
+  "sessionId": "repl_…",
+  "version": 3,
+  "hash": "…",
+  "clean": true,
+  "savedAt": "…",
+  "scripts": [{ "path": "scripts/x.py", "sha256": "…" }],
+  "memory": { "harness": "[message{…}]", "meta": "[message{…}]" },
+  "module": "% DML harness …\n…"
+}
+```
+
+* **When it is written.** After every recorded change (commit/load/reset) and
+  again on session end. The end-of-session write captures the *current* module,
+  including any goal-mode drift, so the harness is never lost when the process
+  ends. The temp `.zip` safety net for aborted turns is unchanged.
+* **What it restores.** The module is loaded back into the living module (a
+  restore, not a new change); the serialized `harness`/`meta` memory seeds
+  `create_session/4`; `turnCounter` continues from the last `harness_turn`.
+* **Consistency.** `hash` covers the module *and* the linked script hashes.
+  Scripts live in the workspace and are *not* overwritten on resume; if the
+  recomputed hash differs from the snapshot, a warning is emitted (under
+  `DEBUG_REPL`) that the harness or its scripts changed since the session was
+  saved.
+* **Why not the scratch `.zip`?** It lives in the temp dir and may be gone. The
+  session snapshot is durable, workspace-relative, and pruned with the session.
+
+## 11. Follow-ups
 
 * `export --with-history` to bundle `history.dml` + `HEAD.json`.
-* CLI: `deepclause repl history`, `--session`, `--version`, `diff v1 v2`.
+* CLI: `deepclause repl history`, `--version`, `diff v1 v2`.
 * Optional read-only `repl_version/1` for skills to stamp their output.
 * Optionally reconstruct a version back into a workspace (`repl restore vN`).
+* Expose `--session` from the pi extension (`/dc-run --session`).

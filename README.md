@@ -10,13 +10,8 @@ is in-process and portable, with no native Prolog to install.
 
 ## Why would I use this?
 
-DeepClause is an attempt at one specific idea: an agent's workflow may be easier
-to trust when it is written down as a program rather than described in a prompt.
-It is early, it is not the right tool for every problem, and it is probably only
-worth trying if one of the following matters to you.
-
 - **Reproducibility.** Control flow, retries, and validation are Prolog clauses
-  you can read and re-run, so a harness tends to produce the same result shape
+  you can read and re-run, so a DML harness tends to produce the same result shape
   across sessions and machines. The model is consulted only at the points you
   choose, and its outputs are typed where that helps.
 - **Auditability.** Each turn is a transaction: the module is snapshotted, the
@@ -84,6 +79,15 @@ C = [x-2, y-1]
 `script_file/2` scripts. `--export <file>` exports on exit, and exiting without
 an export auto-saves the harness to a temp `.zip` bundle.
 
+The REPL also records sessions, turns, and harness versions under
+`.deepclause/repl/`, so you can pick a session back up later. Its harness,
+conversation memory, and turn count are restored:
+
+```bash
+deepclause repl --session last          # resume the most recent session
+deepclause repl --session repl_m9x1_1   # …or one by id
+```
+
 ### Why Prolog/DML for a self-modifying harness
 
 An RLM-style harness works best when the harness *is* the program the model
@@ -149,6 +153,7 @@ npm install deepclause-sdk
 deepclause init                 # write .deepclause/config.json
 deepclause login                # sign in to provider, then pick a model
 deepclause repl                 # interactive
+deepclause repl --session last  # resume the most recent session
 deepclause run skill.dml "arg"  # one-shot
 ```
 

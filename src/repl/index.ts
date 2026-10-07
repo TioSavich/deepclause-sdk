@@ -28,6 +28,8 @@ export type ReplEvent = DMLEvent;
 
 export interface HarnessReplOptions {
   sessionId?: string;
+  /** Resume the session identified by `sessionId` (restore its saved harness). */
+  resume?: boolean;
   workspacePath?: string;
   params?: Record<string, unknown>;
   gasLimit?: number;
@@ -178,6 +180,7 @@ export async function createHarnessRepl(options: HarnessReplOptions): Promise<Ha
 
   const session = await DMLSession.open({
     sessionId: options.sessionId,
+    resume: options.resume,
     workspacePath: options.workspacePath,
     params: options.params,
     gasLimit: options.gasLimit,
