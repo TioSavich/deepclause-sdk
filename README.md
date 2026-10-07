@@ -1,12 +1,12 @@
 # DeepClause SDK
 
-DeepClause is a **neuro-symbolic runtime for self-modifying agent harnesses**. A
-harness is a living **DML** module — Prolog with model calls, semantic
-judgments, and constraints — that an LLM agent reads, extends, and tests turn by
-turn. You drive it from an interactive **REPL**; `run` executes a harness
-one-shot; a small **TypeScript SDK** embeds the runtime.
+DeepClause is a **Prolog-based runtime for self-modifying agent harnesses**. A
+harness is a living **DML** module. DML (DeepClause Meta Language) is a Prolog DSL with added functionality for LLM model calls, semantic
+judgments (Jev-type models), and constraints. An LLM agent embedded in the runtime reads, extends, and tests code in a living module a turn by
+turn. You drive it from an interactive **REPL**.
 
-Three surfaces: **repl**, **run**, **SDK**.
+DML runs on **SWI-Prolog compiled to WebAssembly** — the whole language runtime
+is in-process and portable, with no native Prolog to install.
 
 ## The REPL: a living, self-modifying harness
 
@@ -84,8 +84,33 @@ See [`docs/REPL.md`](docs/REPL.md) and
 `trace.`/`notrace.`, `params.`, `halt.`
 
 When you leave (`halt.`, Ctrl-D, or Ctrl-C), the harness is saved to a temp
-`.zip` bundle. `export research.dml.` writes a portable file; reload it with
-`deepclause repl -l research.dml`.
+`.zip` bundle.
+
+### Saving and re-loading a harness
+
+A harness is a normal `.dml` file you can check in, diff, and re-open.
+
+```text
+dml> add a tally(List, Counts) skill and a demo
+dml> goal: tally([a,b,a,c,a], C).
+C = [a-3, b-1, c-1]
+
+dml> export tally.dml.
+exported 3 clauses, 0 tools, 0 scripts → tally.dml
+
+dml> halt.
+```
+
+```bash
+deepclause run tally.dml --goal 'tally([a,b,a], C)'   # run a goal from the file
+deepclause repl -l tally.dml                           # or re-open it and keep building
+dml> goal: tally([x,y,x], C).
+C = [x-2, y-1]
+```
+
+`export <file>.` writes a portable `.dml`; use a `.zip` target to bundle linked
+`script_file/2` scripts. `--export <file>` exports on exit, and exiting without
+an export auto-saves the harness to a temp `.zip` bundle.
 
 ## Install
 
@@ -93,16 +118,11 @@ When you leave (`halt.`, Ctrl-D, or Ctrl-C), the harness is saved to a temp
 npm install deepclause-sdk
 ```
 
-The `pi` model/credential libraries (`@earendil-works/pi-coding-agent`,
-`@earendil-works/pi-ai`) are regular dependencies, so **no global `pi` install is
-needed** — a globally installed `pi` is deliberately ignored so versions are
-deterministic.
-
 ## Quick start
 
 ```bash
 deepclause init                 # write .deepclause/config.json
-deepclause login                # sign in via pi, then pick a default model
+deepclause login                # sign in to provider, then pick a model
 deepclause repl                 # interactive
 deepclause run skill.dml "arg"  # one-shot
 ```
@@ -120,11 +140,11 @@ deepclause set-backend env       # switch to provider API keys
 ```
 
 Credentials live in pi's agent dir (`~/.pi/agent`) unless `backend.agentDir`
-overrides it.
+overrides it. Existing pi installations stay untouched.
 
 ## run
 
-`run` uses the **same engine as the REPL**: it opens a living module, loads the
+`run` uses the **same engine as the REPL**: it opens a module, loads the
 DML file (`.dml` or a `.zip` bundle), runs one entry, and renders events through
 the REPL renderer. The entry is `agent_main/N` (chosen by the number of
 positional arguments) or an explicit `--goal`.
@@ -135,6 +155,42 @@ deepclause run <file.dml> --goal '<dml>'             # explicit entry goal
 deepclause run <file.dml> --dry-run                  # print the resolved entry
 deepclause run <file.dml> --trace t.json --usage u.json
 deepclause run <file.dml> --no-stream --no-events    # only outputs/answers
+```
+
+## Runtime and sandboxing
+
+**Engine.** DML is executed by **SWI-Prolog compiled to WebAssembly**
+(`vendor/swipl-wasm`, loaded through `src/prolog/`). It runs in-process — no
+native Prolog install, no external server — with the standard SWI libraries
+available (constraint solving via `clpfd`, `clpq`, `clpr`; plus regex, dicts,
+and DCGs). Validation runs on the same engine.
+
+**Workspace confinement.** DML file predicates and `bash` all run against the
+active **workspace** (`.` or `--workspace <path>`) using workspace-relative
+paths; harness paths cannot escape it.
+
+**Shell execution.** `bash` is the only capability tool, with two backends:
+
+| Backend | When | Notes |
+|---|---|---|
+| host shell | default | isolated by a wrapper: `clean-room`, `bwrap` (bubblewrap), or `sandbox-exec` (macOS); `auto` picks the best available |
+| AgentVM | `--sandbox` | WASM micro-VM; network disabled by default |
+
+Network access is **off by default** (`agentvm.network: false`), and `bwrap`
+with `shell.strictIsolation: true` also disables it. `--no-tools` registers no
+capability tool at all; `ask_user` / `input/2` remain the human-in-the-loop
+channel.
+
+```bash
+deepclause repl --sandbox      # run bash inside the AgentVM micro-VM
+deepclause repl --no-tools     # no capability host tools
+```
+
+```json
+{
+  "agentvm": { "network": false },
+  "shell": { "wrapper": "auto", "strictIsolation": false }
+}
 ```
 
 ## TypeScript SDK
@@ -183,6 +239,7 @@ const { valid, errors, warnings } = await validateWithProlog(dmlSource);
   "temperatures": { "run": 0.7 },
   "providers": { "openai": { "apiKey": "..." } },
   "agentvm": { "network": false },
+  "shell": { "wrapper": "auto", "strictIsolation": false },
   "repl": {
     "maxModelCalls": 100,
     "history": { "enabled": true, "dir": ".deepclause/repl", "trace": "summary" }
@@ -205,6 +262,9 @@ src/
 ├── runner.ts     # DML execution
 ├── sdk.ts        # createDeepClause
 └── validate.ts   # DML validation/linting
+
+vendor/
+└── swipl-wasm/   # SWI-Prolog compiled to WebAssembly (the DML engine)
 ```
 
 Bundled prompt assets: `META_PROMPT.md` (the meta task contract),
