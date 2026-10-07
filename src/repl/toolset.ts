@@ -1,15 +1,15 @@
 /**
- * Default REPL capability host tools (M5).
+ * REPL capability host tools.
  *
- * By default the only capability tool is `bash`, registered through the SDK's
- * existing shell manager and sandbox config. DML file I/O is language (the MI
- * predicates), not a host tool, so `--no-tools` still leaves open/3, write/2,
- * write_file/2, … available. `ask_user` is the separate human-in-the-loop
- * channel and is not governed by this toolset.
+ * The only capability tool is **`bash`**, registered through the SDK's shell
+ * manager and sandbox config. Everything else the model needs (file I/O,
+ * search, fetching) is DML language, a linked script run through `bash`, or the
+ * human-in-the-loop channel (`ask_user` / `input/2`). `--tools`/`--no-tools`
+ * control whether `bash` is registered.
  */
 
 import { createShellManager, type HostShellConfig } from '../system/runtime/shell-manager.js';
-import { createLocalRuntimeTools } from '../system/runtime/runtime-tools.js';
+import { createShellToolEventBridge } from '../system/runtime/shell-tool-events.js';
 import type { DMLEvent, ToolDefinition } from '../types.js';
 
 export const DEFAULT_REPL_TOOLS = ['bash'] as const;
@@ -35,7 +35,7 @@ export interface ReplToolset {
 /** Human-readable catalog of the registered capability tools. */
 export function buildToolCatalog(tools: Map<string, ToolDefinition>): string {
   if (tools.size === 0) {
-    return 'No capability host tools are registered. Use DML/Prolog, or embed a script as a fact and run it with bash.';
+    return 'No capability host tools are registered. Use DML/Prolog, or write a script file and run it with exec(bash(...)).';
   }
   const lines: string[] = [];
   for (const [name, tool] of tools) {
@@ -52,25 +52,50 @@ export async function createReplToolset(options: ReplToolsetOptions): Promise<Re
   const requested = options.toolNames === null
     ? []
     : options.toolNames ?? [...DEFAULT_REPL_TOOLS];
-  // The shell is cheap to construct (AgentVM starts lazily on first exec).
-  const shell = createShellManager({
-    workspacePath: options.workspacePath,
-    sandbox: options.sandbox,
-    network: options.network,
-    hostConfig: options.hostConfig,
-  });
-  const tools = createLocalRuntimeTools({
-    shell,
-    workspacePath: options.workspacePath,
-    toolNames: requested,
-    signal: options.signal,
-    onEvent: options.onEvent,
-  });
+  const tools = new Map<string, ToolDefinition>();
+  let shell = requested.includes('bash')
+    ? createShellManager({
+      workspacePath: options.workspacePath,
+      sandbox: options.sandbox,
+      network: options.network,
+      hostConfig: options.hostConfig,
+    })
+    : null;
+
+  if (shell) {
+    const shellManager = shell;
+    tools.set('bash', {
+      description: 'Run a shell command in the active workspace shell.',
+      parameters: {
+        type: 'object',
+        properties: {
+          command: { type: 'string', description: 'Shell command to execute.' },
+        },
+        required: ['command'],
+      },
+      execute: async (args) => {
+        const command = String(args.command ?? args.arg1 ?? '');
+        return shellManager.exec(
+          command,
+          options.signal,
+          createShellToolEventBridge({
+            toolName: 'bash',
+            toolArgs: { command },
+            emit: options.onEvent,
+          }),
+        );
+      },
+    });
+  }
+
   return {
     tools,
     catalog: buildToolCatalog(tools),
     dispose: async () => {
-      await shell.dispose();
+      if (shell) {
+        await shell.dispose();
+        shell = null;
+      }
     },
   };
 }

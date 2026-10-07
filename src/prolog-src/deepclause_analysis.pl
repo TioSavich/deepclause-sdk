@@ -192,9 +192,17 @@ find_capability(Terms, file_io) :-
 find_capability(Terms, network) :-
     member(term((_ :- Body), _), Terms),
     goals_list(Body, Goals),
-    (member(exec(web_search(_),_), Goals) ; member(exec(fetch(_),_), Goals)).
+    member(exec(bash(Args), _), Goals),
+    bash_command_mentions_network(Args).
 
 find_capability(Terms, shell) :-
     member(term((_ :- Body), _), Terms),
     goals_list(Body, Goals),
-    member(exec(vm_exec(_),_), Goals).
+    member(exec(bash(_), _), Goals).
+
+bash_command_mentions_network(Args) :-
+    arg(_, Args, Cmd),
+    string(Cmd),
+    ( sub_string(Cmd, _, _, _, "curl")
+    ; sub_string(Cmd, _, _, _, "wget")
+    ; sub_string(Cmd, _, _, _, "http") ).

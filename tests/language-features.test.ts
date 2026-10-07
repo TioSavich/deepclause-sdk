@@ -1783,27 +1783,6 @@ describe('File I/O Operations', () => {
       expect(answer).toContain('Second line');
     });
 
-    it('should expose validate_dml in the generic local runtime with compiler warnings', async () => {
-      const code = `
-        agent_main :-
-            open("draft.dml", write, S),
-            write(S, "agent_main :- answer(\\\"ok\\\").\\n"),
-            close(S),
-            exec(validate_dml(dml_file: "draft.dml"), Validation),
-            get_dict(valid, Validation, true),
-            get_dict(warnings, Validation, Warnings),
-            member(Warning, Warnings),
-            sub_string(Warning, _, _, _, "No tool() definitions found"),
-            answer("warned").
-      `;
-
-      const events: any[] = [];
-      for await (const event of sdk.runDML(code, { workspacePath: testWorkspace })) {
-        events.push(event);
-      }
-
-      expect(events.find(e => e.type === 'answer')?.content).toBe('warned');
-    });
   });
 });
 

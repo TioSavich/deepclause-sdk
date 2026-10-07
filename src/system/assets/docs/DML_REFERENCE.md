@@ -270,10 +270,11 @@ tool(format_data(Data, FormattedOutput)) :-
 
 ```prolog
 % Example: Passing context explicitly
-tool(smart_search(Context, Query, Summary), "Search with context") :-
-    system(Context),  % Add context to nested task's memory
-    exec(web_search(query: Query), Results),
-    format(string(Desc), "Summarize: ~w", [Results]),
+tool(smart_grep(BuildContext, Pattern, Summary), "Grep with context") :-
+    system(BuildContext),            % add context to the nested task's memory
+    format(atom(Cmd), "grep -rn '~w' .", [Pattern]),
+    exec(bash(command: Cmd), Results),
+    format(string(Desc), "Summarize these matches: ~w", [Results]),
     task(Desc, Summary).
 ```
 

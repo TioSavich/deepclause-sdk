@@ -1,6 +1,6 @@
 # SDK refactor / cleanup plan
 
-Status: done (P0–P6). Goal: reduce the SDK to **REPL + run + TS SDK**, remove
+Status: done (P0–P7). Goal: reduce the SDK to **REPL + run + TS SDK**, remove
 the TUI, the Markdown→DML compiler, and the old coding-harness DMLs, unify the
 runtime backend (pi/env), harmonize `run`/REPL rendering, and simplify docs.
 
@@ -90,6 +90,21 @@ Commit the plan.
 ### P6 — docs + tests
 - Rewrite `README.md` (REPL + run + TS SDK only); prune docs.
 - Delete dead tests; keep the build and the remaining suite green.
+
+### P7 — final polish (bash-only host tools, de-experiment)
+- **Host tools are `bash` only.** Deleted `src/system/runtime/runtime-tools.ts`
+  and `src/cli/search.ts`; `createReplToolset` registers only `bash`; `run` uses
+  the same toolset. Removed the `web_search`/`vm_exec`/`url_fetch`/`validate_dml`
+  runtime tools and their tests.
+- Removed the `src/cli/tui/` stub, the legacy `main`-branch example folders
+  (`deepclause-skill-dev`, `dml-examples`, `markdown-examples`) and the
+  `benchmarks/` tree (archived outside the repo), and the untracked scratch
+  JSON/tests fixtures.
+- Removed all images and stale docs (`DML_FILE_PATTERNS.md`, `TODOS.md`,
+  `specs/verification_requirements.md`, the duplicate `docs/DML_REFERENCE.md`).
+- Rewrote `README.md` (REPL centerpiece + RLM rationale + transactions /
+  auditability) and `AGENTS.md`; refreshed `CHANGELOG.md`.
+- Bumped the version to **0.1.0**.
 
 ## Guardrails
 - Each phase: `npm run build` and `npm test` with no *new* failures.

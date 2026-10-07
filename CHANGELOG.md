@@ -1,5 +1,40 @@
 # Changelog
 
+## 0.1.0
+
+A ground-up simplification. The SDK is now three surfaces: **repl**, **run**,
+and the **TypeScript SDK**.
+
+### Added
+
+- **Living-module REPL** (`deepclause repl`): a persistent DML/Prolog harness.
+  Plain English is the authoring mode — a meta task writes, tests, and commits
+  DML — while `goal: <dml>.` queries it directly.
+- **Edit transactions**: every turn snapshots the module and commits
+  replace-by-predicate, so a failed turn leaves the harness unchanged.
+- **Auditability**: sessions, turns, traces, and versions are recorded under
+  `.deepclause/repl/` and exposed to DML as `harness_*` facts; `rollback.`
+  restores a previous version.
+- **pi backend by default** (`backend.kind: "pi"`): reuses pi's model catalog,
+  credentials, streaming, cancellation, and usage accounting. `deepclause
+  login`/`logout` port pi's OAuth/API-key flow. `env` remains an opt-in backend.
+- **`run` uses the REPL engine**: load a `.dml`/`.zip` harness, call
+  `agent_main/N` or `--goal`, and stream through the REPL renderer.
+- `--no-stream` / `--no-events` REPL and run flags; harness auto-save on exit.
+
+### Changed
+
+- **Host tools reduced to `bash`** (plus the human-in-the-loop channel).
+  Built-in `web_search`, `vm_exec`, `url_fetch`, and `validate_dml` runtime
+  tools are gone; non-Prolog steps go through `bash` or a linked `script_file/2`.
+- README rewritten around the REPL; docs updated.
+
+### Removed
+
+- The Markdown→DML **compiler** (use `deepclause-sdk/validate` for validation).
+- The **TUI**, conductor/planner/skill-creator DMLs, recipes, the skill catalog,
+  MCP tooling, and the old examples/benchmarks.
+
 ## 0.0.89 - 2026-09-20
 
 - Include the meta-interpreter correctness fixes: `assertz/1`, `asserta/1`,

@@ -1,86 +1,128 @@
 # DeepClause: Guide for AI Agents
 
-DeepClause is a neuro-symbolic framework that allows you to build reliable agents by compiling Markdown specifications into executable Prolog-based DML (DeepClause Meta Language) programs.
+DeepClause is a **neuro-symbolic runtime for self-modifying agent harnesses**. A
+harness is a living **DML** program — Prolog with model calls, semantic
+judgments, and constraints. You (an LLM agent) can read it, extend it, test it,
+and run it from an interactive **REPL**; the `run` command executes a harness
+one-shot; the **TypeScript SDK** embeds the runtime.
 
-As an AI coding agent, you can use DeepClause to:
-1. **Automate complex workflows** with guaranteed execution semantics (backtracking, recursion).
-2. **Implement hard logic/math constraints** using Prolog's CLP libraries.
-3. **Isolate context** between sub-tasks to prevent "context-window bias".
+There is **no Markdown→DML compiler**. DML is authored directly (by you), and a
+harness is a normal, inspectable Prolog module.
 
----
-
-## 1. Using the CLI Tool
-
-The `deepclause` CLI is your primary interface for creating and testing skills.
-
-### Compilation
-Convert a Markdown specification into a logic program:
-```bash
-deepclause compile tasks/my-task.md
-```
-This generates `.deepclause/tools/my-task.dml` and a metadata file.
-
-### Execution
-Run a compiled skill:
-```bash
-deepclause run .deepclause/tools/my-task "Positional Arg" --param key=value
-```
-
-### One-Shot Mode (Experimental)
-Generate and run a DML program on the fly from a prompt:
-```bash
-deepclause run --prompt "Search for latest news on AI and summarize them" --verbose
-```
+Three surfaces: **repl**, **run**, **SDK**.
 
 ---
 
-## 2. DML Reference for Agents
+## 1. The CLI
 
-DML combines LLM "vibes" with Prolog "hard logic".
+```bash
+deepclause init                 # write .deepclause/config.json
+deepclause login                # sign in via pi, pick a default model
+deepclause repl                 # interactive living-module REPL
+deepclause run skill.dml "arg"  # run one entry of a DML file / .zip bundle
+```
 
-### Core Predicates
-- `task(Description, ...Vars)`: LLM call with current context. Supports type wrappers: `integer(X)`, `boolean(Y)`, `list(string(Z))`.
-- `prompt(Description, ...Vars)`: LLM call with **fresh context** (empty memory).
-- `exec(Tool(Args), Result)`: Direct call to external tools (AgentVM, Search, MCP).
-- `system(Text)` / `user(Text)`: Manage backtrackable conversation memory.
-- `answer(Text)`: Terminate and commit the final result.
+`run` opens the file as a library, calls `agent_main/N` (arity = number of
+positional args) or an explicit `--goal`, and streams events.
 
-### Solving Logic/Math (CLP)
-Avoid Python for math constraints. Use Constraint Logic Programming:
+---
+
+## 2. The REPL: a living harness
+
+Two input modes:
+
+- **Plain English** (default) — a meta task writes/test DML and commits it
+  (replace-by-predicate). Use this to add skills, add tools, change logic, or
+  ask about the harness.
+- **`goal: <dml>.`** — query the current harness directly with Prolog/DML.
+
+Every prompt turn is an **edit transaction**: the module is snapshotted, the
+meta task edits a scratch copy and tests it with `execute`, and the result is
+committed only if it succeeds. Failed turns leave the harness unchanged.
+
+Sessions, turns, traces, and versions are recorded under `.deepclause/repl/`
+and exposed to DML as `harness_*` facts (`harness_session/5`, `harness_turn/5`,
+`harness_change/5`, `harness_changed/4`, `harness_head/4`, `harness_trace/3`).
+`rollback.` restores the previous version.
+
+Useful commands: `help.`, `listing.`, `listing(Name/Arity).`, `reset.`,
+`rollback.`, `export <file>.`, `freeze.`/`unfreeze.`, `model.`, `trace.`,
+`params.`, `halt.`.
+
+---
+
+## 3. DML Reference for Agents
+
+DML combines LLM calls with Prolog's hard logic.
+
+### Core predicates
+
+- `task(Description, ...Vars)` — model call **with** the current memory.
+- `prompt(Description, ...Vars)` — model call with **fresh** memory (isolated).
+- `exec(bash(command: Cmd), Result)` — run a host capability (only `bash`).
+- `system(Text)` / `user(Text)` — backtrackable conversation memory.
+- `answer(Text)` — terminate and commit the final result.
+- `tool(Head, Description) :- Body.` — declare a DML tool for nested tasks.
+- `script_file(Name, Path)` — link a workspace-relative script file (bundled on
+  export; no runtime semantics of its own).
+
+Type wrappers make model output reliable: `integer(X)`, `number(X)`,
+`boolean(Y)`, `list(string(Z))`, `string(S)`, etc.
+
+### Logic and math (CLP)
+
+Use constraint logic programming instead of hand-rolled arithmetic:
+
 ```prolog
-:- use_module(library(clpfd)). % Integers
-:- use_module(library(clpq)).  % Rational numbers
-:- use_module(library(clpr)).  % Real numbers
+:- use_module(library(clpfd)).   % integers
+:- use_module(library(clpq)).    % rationals
+:- use_module(library(clpr)).    % reals
 ```
+
+### Judgments
+
+Semantic judgments return **typed** values backed by a judge backend:
+`choose/3`, `rate/3`, `verify/3`, `probability/3` (see
+`src/system/assets/docs/DML_REFERENCE.md`).
 
 ---
 
-## 3. Using as a Library (SDK)
-
-To integrate DeepClause into a TypeScript application:
+## 4. Using as a Library (SDK)
 
 ```typescript
 import { createDeepClause } from 'deepclause-sdk';
 
-const dc = await createDeepClause({
-  model: 'gpt-4o',
-  apiKey: process.env.OPENAI_API_KEY,
-});
+const dc = await createDeepClause({ model: 'gpt-4o', provider: 'openai' });
 
-// Run DML code
-for await (const event of dc.runDML(dmlCode, { params: { topic: 'AI' } })) {
-  if (event.type === 'answer') console.log('Result:', event.content);
+for await (const event of dc.runDML(dmlCode, { args: ['topic'] })) {
+  if (event.type === 'answer') console.log('Result:', event.answer ?? event.content);
 }
 
 await dc.dispose();
 ```
 
+To reuse pi's model and credentials, pass an injected `LLMBackend`
+(`createPiBackend`) and judge backends (`createLLMJudgeBackend`,
+`createJevJudgeBackend`). The REPL is embeddable via `createHarnessRepl`.
+
 ---
 
-## 4. Best Practices for Agents
+## 5. Best practices
 
-1. **Prefer Prolog for File I/O**: Use `open/3`, `write/2`, `read/2` instead of calling `vm_exec` with Python.
-2. **Type-Safe Tasks**: Always use type wrappers in `task/N` (e.g., `integer(Count)`) to ensure the LLM returns valid data types.
-3. **Backtracking for Retries**: Define multiple clauses for `agent_main` to implement fallback strategies.
-4. **Context Hygiene**: Use `push_context` or `prompt/N` to keep the context window clean for specific sub-tasks.
-5. **Spec-Driven**: Start by writing a high-quality Markdown file, compile it, and then refine the generated `.dml` if necessary.
+1. **Prefer Prolog for data work.** Use `open/3`, `read_string/3`, `write/2`,
+   `findall/3`, `sort/4`, and DCGs before reaching for a script.
+2. **Type-safe tasks.** Always wrap `task/N` outputs (`integer(Count)`,
+   `list(string(Tags))`) so the model returns valid data.
+3. **Backtracking for retries.** Multiple clauses / `;` give fallbacks for free.
+4. **Context hygiene.** Use `prompt/N` (or `push_context/1`) to keep sub-tasks
+   isolated from accumulated memory.
+5. **Keep the harness inspectable.** Add `doc(Name/Arity, Text)` facts so the
+   manifest and `listing` describe the module.
+6. **Scripts are files.** Put non-Prolog steps in a workspace script and link
+   them with `script_file/2`; the exporter bundles them.
+7. **Author, don't compile.** There is no compiler — write valid DML directly and
+   let the REPL's transaction/test/commit loop verify it.
+
+See `.pi/` / bundled docs for the full language reference and reviewed harness
+shapes: `DML_REFERENCE.md`, `DML_AUTHORING.md`, `HARNESS_EXAMPLES.md`,
+`PROLOG_SNIPPETS.md`.

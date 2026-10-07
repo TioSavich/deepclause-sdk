@@ -72,57 +72,6 @@ describe('Parameter Parsing', () => {
 // Dry Run Formatting Tests
 // =============================================================================
 
-describe('Dry Run Formatting', () => {
-  it('should format basic dry run output', () => {
-    const formatDryRun = (
-      dmlPath: string,
-      meta: { description: string; parameters: Array<{ name: string }>; tools: string[] } | null,
-      params: Record<string, unknown>,
-      model: string,
-      provider: string,
-      workspacePath: string
-    ): string => {
-      const lines: string[] = [
-        '═══════════════════════════════════════════════════════════════',
-        '  DRY RUN - Would execute the following:',
-        '═══════════════════════════════════════════════════════════════',
-        '',
-        `  DML File:    ${dmlPath}`,
-        `  Model:       ${provider}/${model}`,
-        `  Workspace:   ${workspacePath}`,
-      ];
-      return lines.join('\n');
-    };
-    
-    const output = formatDryRun(
-      '/path/to/test.dml',
-      null,
-      {},
-      'gpt-4o',
-      'openai',
-      '/workspace'
-    );
-    
-    expect(output).toContain('DRY RUN');
-    expect(output).toContain('/path/to/test.dml');
-    expect(output).toContain('openai/gpt-4o');
-    expect(output).toContain('/workspace');
-  });
-
-  it('should include meta information when available', () => {
-    const meta = {
-      description: 'Test task',
-      parameters: [{ name: 'topic' }, { name: 'depth' }],
-      tools: ['web_search', 'vm_exec']
-    };
-    
-    // Just verify structure - actual formatting tested in integration
-    expect(meta.description).toBe('Test task');
-    expect(meta.parameters).toHaveLength(2);
-    expect(meta.tools).toContain('web_search');
-  });
-});
-
 // =============================================================================
 // Run Integration Tests (require filesystem)
 // =============================================================================
@@ -245,24 +194,4 @@ describe('run integration', () => {
   });
 });
 
-// =============================================================================
-// Tool Verification Tests
-// =============================================================================
 
-describe('Tool Verification', () => {
-  it('should recognize AgentVM tools as available', () => {
-    const agentVmToolNames = ['vm_exec'];
-    const required = ['vm_exec'];
-    
-    const missing = required.filter(t => !agentVmToolNames.includes(t));
-    expect(missing).toHaveLength(0);
-  });
-
-  it('should identify missing non-AgentVM tools', () => {
-    const agentVmToolNames = ['vm_exec'];
-    const required = ['vm_exec', 'web_search', 'read_file'];
-    
-    const missing = required.filter(t => !agentVmToolNames.includes(t));
-    expect(missing).toEqual(['web_search', 'read_file']);
-  });
-});

@@ -31,12 +31,12 @@ scripts are ordinary files.
 A plain user predicate links a name to a workspace-relative path:
 
 ```prolog
-script_file(web_search, ".dc-repl/scripts/web_search.py").
+script_file(fetch_text, ".dc-repl/scripts/fetch_text.py").
 
-tool(web_search(Query, Result), "Search the web.") :-
-    script_file(web_search, ScriptPath),
-    write_file(".dc-tmp/query.txt", Query),
-    format(atom(Cmd), "python3 '~w' '.dc-tmp/query.txt'", [ScriptPath]),
+tool(fetch_text(Url, Result), "Fetch a URL as text.") :-
+    script_file(fetch_text, ScriptPath),
+    write_file(".dc-tmp/url.txt", Url),
+    format(atom(Cmd), "python3 '~w' '.dc-tmp/url.txt'", [ScriptPath]),
     exec(bash(command: Cmd), R),
     get_dict(stdout, R, Result).
 ```

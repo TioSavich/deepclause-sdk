@@ -1,8 +1,0 @@
-agent_main :-
-    % param/3 used to get a 'command' from the user
-    param(command, "The command to run", UserCmd),
-    
-    % Sink: The untrusted parameter flows directly into a shell execution
-    exec(vm_exec(command: UserCmd), Result),
-    
-    answer(Result).

@@ -1,7 +1,7 @@
 {
   "name": "deepclause-sdk",
-  "version": "0.0.89",
-  "description": "DeepClause CLI Tool, TUI and Typescript SDK",
+  "version": "0.1.0",
+  "description": "Neuro-symbolic runtime: a self-modifying DML/Prolog REPL, one-shot runner, and TypeScript SDK", 
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -25,7 +25,7 @@
   },
   "scripts": {
     "build": "tsc && npm run copy:prolog && npm run copy:assets",
-    "copy:prolog": "cp src/prolog-src/*.pl dist/prolog-src/",
+    "copy:prolog": "mkdir -p dist/prolog-src && cp src/prolog-src/*.pl dist/prolog-src/",
     "copy:assets": "mkdir -p dist/system/assets/compactors dist/system/assets/docs && cp src/system/assets/compactors/*.dml dist/system/assets/compactors/ && cp src/system/assets/docs/*.md dist/system/assets/docs/ && cp src/system/assets/model-database.json dist/system/assets/",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -36,20 +36,7 @@
     "example": "tsx sdk-examples/quick-start.ts",
     "examples": "tsx sdk-examples/basic-usage.ts",
     "examples:smoke": "tsx sdk-examples/no-api-key.ts && npm run example && npm run examples && tsx sdk-examples/neurosymbolic.ts 1 && tsx sdk-examples/deep-research.ts \"test topic\"",
-    "cli": "tsx src/cli/index.ts",
-    "compaction:probe": "tsx scripts/compaction-probe.ts",
-    "benchmark:swebench": "node benchmarks/run-swebench-lite.mjs",
-    "benchmark:swebench:prefetch": "node benchmarks/prefetch-swebench-lite.mjs",
-    "benchmark:swebench:evaluate": "node benchmarks/evaluate-predictions.mjs",
-    "benchmark:deepplanning": "node benchmarks/run-deepplanning.mjs",
-    "benchmark:chess:probe": "node benchmarks/chess/probe.mjs",
-    "benchmark:chess:select": "node benchmarks/chess/select.mjs",
-    "benchmark:chess:match": "node benchmarks/chess/match.mjs",
-    "benchmark:chess:framings": "node benchmarks/chess/probe-framings.mjs",
-    "benchmark:chess:positions": "node benchmarks/chess/make-positions.mjs",
-    "benchmark:deepplanning:evaluate": "node benchmarks/evaluate-deepplanning.mjs",
-    "benchmark:nl2repo": "node benchmarks/run-nl2repo.mjs",
-    "benchmark:nl2repo:evaluate": "node benchmarks/evaluate-nl2repo.mjs"
+    "cli": "tsx src/cli/index.ts"
   },
   "dependencies": {
     "@earendil-works/pi-ai": "^1.0.4",

@@ -1450,8 +1450,7 @@ anything on its own and is not governed by `--tools`/`--no-tools`.
 |---|---|
 | default capability | `bash` |
 | human-in-the-loop | `ask_user` (meta) and `input/2` / `exec(ask_user(...))` (harness) |
-| `--tools`/config | explicitly enabled SDK runtime tools (`vm_exec`, `url_fetch`, `web_search`, …) |
-| MCP | tools from configured `mcp.servers` |
+| `--tools` | register `bash` (the only capability tool; default) |
 | `--no-tools` | no capability tools (ask_user still on unless `--no-ask`) |
 
 **File reading and writing are not host tools.** They are DML/Prolog

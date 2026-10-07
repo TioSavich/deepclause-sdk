@@ -18,7 +18,6 @@ import { ReplRenderer, type RenderMode } from '../repl/render.js';
 import { createReplToolset } from '../repl/toolset.js';
 import { resolveLlmBackend, type BackendKind } from '../repl/backend.js';
 import { resolveReplJudgeSelection } from '../repl/judge.js';
-import { getBuiltInRuntimeToolNames } from '../system/runtime/runtime-tools.js';
 import { recordTokenUsage, type TokenUsageByModel } from '../system/runtime/token-usage.js';
 import { buildDmlParams } from '../system/runtime/dml-params.js';
 
@@ -135,7 +134,6 @@ export async function run(
     sandbox: options.sandbox,
     network: config.agentvm?.network ?? false,
     hostConfig: config.shell,
-    toolNames: getBuiltInRuntimeToolNames(),
     signal: options.signal,
     onEvent: (event) => {
       // The runner already emits tool_call events; only render the extras
