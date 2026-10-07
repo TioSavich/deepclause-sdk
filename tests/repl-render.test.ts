@@ -86,6 +86,40 @@ describe('ReplRenderer', () => {
     expect(plain.lines.join('')).not.toMatch(/\u001b\[48;/);
   });
 
+  it('word-wraps and indents a long bash script to the panel width', () => {
+    const width = 50;
+    const { lines, renderer } = capture('rich', true, width);
+    const command = 'for f in $(ls *.png); do convert "$f" -resize 50% "small-$f"; done';
+    renderer.render({ type: 'tool_call', toolName: 'bash', toolState: 'starting', toolArgs: { command } } as DMLEvent);
+
+    const ansi = /\u001b\[[0-9;]*m/g;
+    const visible = lines.map((line) => line.replace(ansi, '').replace(/\n$/, ''));
+    expect(visible[0]).toContain('⚙ bash');
+    expect(visible.length).toBeGreaterThan(2); // wrapped onto several lines
+    for (const line of visible.slice(1)) {
+      expect(line.length).toBeLessThanOrEqual(width);
+      expect(line.startsWith('    ')).toBe(true); // indented script lines
+    }
+    // Wrapping only reflows whitespace; the script text is intact.
+    const joined = visible.slice(1).map((line) => line.trim()).join(' ');
+    expect(joined).toContain('convert "$f" -resize 50% "small-$f"; done');
+  });
+
+  it('hard-breaks a single over-long token to fit the panel width', () => {
+    const width = 40;
+    const { lines, renderer } = capture('rich', true, width);
+    renderer.render({
+      type: 'tool_call', toolName: 'bash', toolState: 'starting', toolArgs: { command: `curl ${'x'.repeat(120)}` },
+    } as DMLEvent);
+
+    const ansi = /\u001b\[[0-9;]*m/g;
+    const visible = lines.map((line) => line.replace(ansi, '').replace(/\n$/, ''));
+    expect(visible.length).toBeGreaterThan(3);
+    for (const line of visible) {
+      expect(line.length).toBeLessThanOrEqual(width);
+    }
+  });
+
   it('colours output and answer differently (rich mode)', () => {
     const { lines, renderer } = capture('rich', true, 100);
     renderer.render({ type: 'output', content: 'intermediate' } as DMLEvent);

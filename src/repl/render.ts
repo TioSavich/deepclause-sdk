@@ -55,6 +55,25 @@ function formatArgs(args: Record<string, unknown> | undefined): string {
   return `(${parts.join(', ')})`;
 }
 
+/** Word-wrap a single line to `width`, hard-breaking tokens that are longer. */
+function wrapLine(text: string, width: number): string[] {
+  if (width <= 0 || text.length <= width) {
+    return [text];
+  }
+  const out: string[] = [];
+  let remaining = text;
+  while (remaining.length > width) {
+    let breakAt = remaining.lastIndexOf(' ', width);
+    if (breakAt <= 0) {
+      breakAt = width; // no space: hard-break a long token (URL, path, flag)
+    }
+    out.push(remaining.slice(0, breakAt));
+    remaining = remaining.slice(breakAt).replace(/^ +/, '');
+  }
+  out.push(remaining);
+  return out;
+}
+
 function truncate(text: string, max: number): string {
   const singleLine = text.replace(/\s+/g, ' ').trim();
   return singleLine.length > max ? `${singleLine.slice(0, max - 1)}…` : singleLine;
@@ -277,8 +296,14 @@ export class ReplRenderer {
       if (command !== this.lastBashCommand) {
         this.lastBashCommand = command;
         this.writeLine(this.toolPanel(`${prefix}  ⚙ ${name}`, 'normal'));
-        for (const line of command.replace(/\r\n?/g, '\n').split('\n')) {
-          this.writeLine(this.toolPanel(`${prefix}    ${line}`, 'normal'));
+        // Print the script on panel lines, word-wrapped to the available width
+        // and indented under the header so wrapped scripts stay aligned.
+        const indent = '    ';
+        const avail = Math.max(20, this.width - stripAnsi(prefix).length - indent.length);
+        for (const rawLine of command.replace(/\r\n?/g, '\n').split('\n')) {
+          for (const segment of wrapLine(rawLine, avail)) {
+            this.writeLine(this.toolPanel(`${prefix}${indent}${segment}`, 'normal'));
+          }
         }
       }
       return;
