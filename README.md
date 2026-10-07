@@ -30,6 +30,32 @@ task edits the module for you. Ask for anything — add a skill, add a tool,
 change existing logic, run or test code in the living module, or just ask a
 question about the harness.
 
+### Saving and re-loading a harness
+
+A harness is a normal `.dml` file you can check in, diff, and re-open.
+
+```text
+dml> add a tally(List, Counts) skill and a demo
+dml> goal: tally([a,b,a,c,a], C).
+C = [a-3, b-1, c-1]
+
+dml> export tally.dml.
+exported 3 clauses, 0 tools, 0 scripts → tally.dml
+
+dml> halt.
+```
+
+```bash
+deepclause run tally.dml --goal 'tally([a,b,a], C)'   # run a goal from the file
+deepclause repl -l tally.dml                          # or re-open it and keep building
+dml> goal: tally([x,y,x], C).
+C = [x-2, y-1]
+```
+
+`export <file>.` writes a portable `.dml`; use a `.zip` target to bundle linked
+`script_file/2` scripts. `--export <file>` exports on exit, and exiting without
+an export auto-saves the harness to a temp `.zip` bundle.
+
 ### Why Prolog/DML for a self-modifying harness
 
 An RLM-style harness works best when the harness *is* the program the model
@@ -82,35 +108,6 @@ See [`docs/REPL.md`](docs/REPL.md) and
 `goal:`, `help.`, `listing.`, `listing(Name/Arity).`, `reset.`, `rollback.`,
 `export <file>.`, `freeze.`/`unfreeze.`, `model.`/`model <provider/id>.`,
 `trace.`/`notrace.`, `params.`, `halt.`
-
-When you leave (`halt.`, Ctrl-D, or Ctrl-C), the harness is saved to a temp
-`.zip` bundle.
-
-### Saving and re-loading a harness
-
-A harness is a normal `.dml` file you can check in, diff, and re-open.
-
-```text
-dml> add a tally(List, Counts) skill and a demo
-dml> goal: tally([a,b,a,c,a], C).
-C = [a-3, b-1, c-1]
-
-dml> export tally.dml.
-exported 3 clauses, 0 tools, 0 scripts → tally.dml
-
-dml> halt.
-```
-
-```bash
-deepclause run tally.dml --goal 'tally([a,b,a], C)'   # run a goal from the file
-deepclause repl -l tally.dml                           # or re-open it and keep building
-dml> goal: tally([x,y,x], C).
-C = [x-2, y-1]
-```
-
-`export <file>.` writes a portable `.dml`; use a `.zip` target to bundle linked
-`script_file/2` scripts. `--export <file>` exports on exit, and exiting without
-an export auto-saves the harness to a temp `.zip` bundle.
 
 ## Install
 
