@@ -1,6 +1,9 @@
 # Common Prolog/DML snippets (tested)
 
-Tested against the bundled SWI-Prolog. Use these as building blocks in skills.
+Tested against the bundled SWI-Prolog. These are **glue**, not the shape of a
+skill: use a snippet to bind or check a value between `task/N` steps, not to
+write a Prolog algorithm. Prefer a `task/N`/`prompt/N` step when the
+transformation is open-ended (`DML_AUTHORING.md` §0).
 `Y` is the output; `>>` introduces a yall lambda.
 
 ## Strings

@@ -3,6 +3,12 @@
 Copy-paste shapes for REPL harnesses. Keep each skill small and compose them.
 (The snippets are tested against the bundled SWI-Prolog.)
 
+Most skills should look like §2–§3: a short sequence of `task/N`/`prompt/N` calls
+with thin guards between them. §4–§7 (facts, pure logic, judgments, CLP) are the
+exception — reach for them only when the task is genuinely data- or
+logic-shaped, not as the default style. DML is the orchestration layer over model
+calls, not the logic library (`DML_AUTHORING.md` §0).
+
 Every skill carries a `doc(Name/Arity, Text)` annotation and the harness a
 `module_doc(Text)` line (`DML_AUTHORING.md` §3) — they appear in the manifest
 and `listing`, so the harness stays self-describing. Keep them terse.
@@ -55,6 +61,19 @@ report(Topic, Result) :-
     format(string(Desc), "Rank these risks and explain the top one: ~w", [Risks]),
     task(Desc, Top),
     format(string(Result), "Top risk: ~w", [Top]).
+```
+
+Compose the steps and let the model do the thinking; keep only thin guards
+between them — an if-then-else for a branch, `once/1` to commit the first
+answer, or a simple check that fails a step:
+
+```prolog
+summarise(Doc, Summary) :-
+    task("Extract the document's main claim. Store it in Claim.", Claim),
+    (   Claim == ""
+    ->  Summary = "no claim found"
+    ;   task("Summarise this claim in one sentence: {Claim}", Summary)
+    ).
 ```
 
 ## 4. Data as facts (data = code)

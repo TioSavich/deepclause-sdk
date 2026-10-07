@@ -199,6 +199,9 @@ describe('prompt mode', () => {
     expect(promptText).toContain('SKILLS VS ONE-SHOT WORK');
     expect(promptText).toContain('NO HARDCODED ENVIRONMENT');
     expect(promptText).toContain('describe_image(Path, Text)');
+    // Skills are orchestration, not hand-written Prolog algorithms.
+    expect(promptText).toContain('KEEP SKILLS ABSTRACT');
+    expect(promptText).toContain('orchestration layer over model calls, not a logic library');
     // Workspace-relative paths, determinism, and whole-predicate redefinition.
     expect(promptText).toContain('PATHS: every path in DML is workspace-relative');
     expect(promptText).toContain('DETERMINISM:');
