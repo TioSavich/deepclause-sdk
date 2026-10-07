@@ -24,6 +24,8 @@ export interface ReplRendererOptions {
   stream?: boolean;
   /** Render activity events (task activity, tool calls, usage, logs); default true. `--no-events` disables. */
   events?: boolean;
+  /** Terminal width for the tool-call panel background (default: stdout columns, or 80). */
+  width?: number;
   /** Sink for normal lines. */
   sink?: (text: string) => void;
   /** Sink for error lines. */
@@ -66,6 +68,17 @@ const ANSI = {
   red: '\u001b[31m',
 } as const;
 
+/** Tool-call panel colours (256-colour): a subtle tint behind tool activity. */
+const TOOL_PANEL_BG = '\u001b[48;5;236m';
+const TOOL_PANEL_FG = '\u001b[38;5;252m';
+const TOOL_PANEL_ERROR_BG = '\u001b[48;5;52m';
+const TOOL_PANEL_ERROR_FG = '\u001b[38;5;224m';
+
+/** Strip ANSI SGR sequences (for measuring visible width). */
+function stripAnsi(text: string): string {
+  return text.replace(/\u001b\[[0-9;]*m/g, '');
+}
+
 /** Format solution bindings as `Name = value` lines (or `true`). */
 export function formatBindings(bindings: DMLBinding[]): string {
   if (bindings.length === 0) {
@@ -80,6 +93,7 @@ export class ReplRenderer {
   private readonly verbose: boolean;
   private readonly showStream: boolean;
   private readonly showEvents: boolean;
+  private readonly width: number;
   private readonly sink: (text: string) => void;
   private readonly errorSink: (text: string) => void;
   /** Frame key of the currently open streamed-text region, or null. */
@@ -94,6 +108,7 @@ export class ReplRenderer {
     this.verbose = options.verbose ?? false;
     this.showStream = options.stream ?? true;
     this.showEvents = options.events ?? true;
+    this.width = options.width ?? (process.stdout.columns || 80);
     this.sink = options.sink ?? ((text) => process.stdout.write(text));
     this.errorSink = options.errorSink ?? ((text) => process.stderr.write(text));
   }
@@ -214,13 +229,13 @@ export class ReplRenderer {
     if (state === 'completed') {
       const summary = event.toolSummary ? ` — ${truncate(event.toolSummary, 80)}` : '';
       this.lastBashCommand = undefined;
-      this.writeLine(this.paint(`${prefix}  ✔ ${name}${args}${summary}`, ANSI.dim));
+      this.writeLine(this.toolPanel(`${prefix}  ✔ ${name}${args}${summary}`, 'normal'));
       return;
     }
     if (state === 'failed') {
       const reason = event.toolError ?? event.toolSummary ?? 'failed';
       this.lastBashCommand = undefined;
-      this.writeLine(this.paint(`${prefix}  ✖ ${name}${args} — ${truncate(reason, 120)}`, ANSI.red));
+      this.writeLine(this.toolPanel(`${prefix}  ✖ ${name}${args} — ${truncate(reason, 120)}`, 'error'));
       return;
     }
 
@@ -228,15 +243,31 @@ export class ReplRenderer {
       // A call emits `starting` then `running`; print the script once.
       if (command !== this.lastBashCommand) {
         this.lastBashCommand = command;
-        this.writeLine(this.paint(`${prefix}  ⚙ ${name}`, ANSI.dim));
+        this.writeLine(this.toolPanel(`${prefix}  ⚙ ${name}`, 'normal'));
         for (const line of command.replace(/\r\n?/g, '\n').split('\n')) {
-          this.writeLine(this.paint(`${prefix}    ${line}`, ANSI.dim));
+          this.writeLine(this.toolPanel(`${prefix}    ${line}`, 'normal'));
         }
       }
       return;
     }
 
-    this.writeLine(this.paint(`${prefix}  ⚙ ${name}${args}`, ANSI.dim));
+    this.writeLine(this.toolPanel(`${prefix}  ⚙ ${name}${args}`, 'normal'));
+  }
+
+  /**
+   * A full-width, tinted line for tool activity (pi-style panel). Falls back to
+   * the bare text when colour is disabled. Existing ANSI in `text` is preserved
+   * and the visible width (ignoring SGR) is padded out to the terminal width.
+   */
+  private toolPanel(text: string, tone: 'normal' | 'error'): string {
+    if (!this.color) {
+      return text;
+    }
+    const bg = tone === 'error' ? TOOL_PANEL_ERROR_BG : TOOL_PANEL_BG;
+    const fg = tone === 'error' ? TOOL_PANEL_ERROR_FG : TOOL_PANEL_FG;
+    const width = this.width - stripAnsi(text).length;
+    const pad = width > 0 ? ' '.repeat(width) : '';
+    return `${bg}${fg}${text}${pad}${ANSI.reset}`;
   }
 
   /** Write a streamed chunk, prefixing it with its frame label on first use. */

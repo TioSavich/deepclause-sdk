@@ -6,11 +6,12 @@ import { describe, expect, it } from 'vitest';
 import { ReplRenderer, formatBindings } from '../src/repl/render.js';
 import type { DMLEvent } from '../src/types.js';
 
-function capture(mode: 'rich' | 'plain' | 'json', color = true): { lines: string[]; renderer: ReplRenderer } {
+function capture(mode: 'rich' | 'plain' | 'json', color = true, width = 100): { lines: string[]; renderer: ReplRenderer } {
   const lines: string[] = [];
   const renderer = new ReplRenderer({
     mode,
     color,
+    width,
     sink: (text) => lines.push(text),
     errorSink: (text) => lines.push(text),
   });
@@ -63,6 +64,26 @@ describe('ReplRenderer', () => {
     // A second call with the same script prints again.
     renderer.render({ type: 'tool_call', toolName: 'bash', toolState: 'starting', toolArgs: { command } } as DMLEvent);
     expect(lines.join('').match(/jq -r/g)).toHaveLength(2);
+  });
+
+  it('tints tool-call lines with a full-width panel background (rich mode)', () => {
+    const { lines, renderer } = capture('rich', true, 60);
+    renderer.render({
+      type: 'tool_call', toolName: 'bash', toolState: 'starting', toolArgs: { command: 'echo hi' },
+    } as DMLEvent);
+
+    // Panel background + foreground codes are applied.
+    expect(lines[0]).toContain('\u001b[48;5;236m');
+    // Visible text (ignoring SGR) is padded out to the panel width.
+    const visible = lines[0].replace(/\u001b\[[0-9;]*m/g, '').replace(/\n$/, '');
+    expect(visible).toHaveLength(60);
+
+    // Plain mode has no panel background.
+    const plain = capture('plain', false, 60);
+    plain.renderer.render({
+      type: 'tool_call', toolName: 'bash', toolState: 'starting', toolArgs: { command: 'echo hi' },
+    } as DMLEvent);
+    expect(plain.lines.join('')).not.toContain('\u001b[48;5;236m');
   });
 
   it('formatBindings renders values, or true when there are none', () => {
