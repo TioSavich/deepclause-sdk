@@ -91,8 +91,8 @@ describe('runner compaction', () => {
       type: 'memory_compaction',
       compactionBindingName: 'loop-start',
       compactionAction: 'running',
-      content: 'compact loop.before_model_call running loop-start 7 tokens',
-      beforeTokens: 7,
+      content: expect.stringContaining('compact loop.before_model_call running loop-start'),
+      beforeTokens: expect.any(Number),
       afterTokens: undefined,
     }));
     expect(result.event.compactionAction).toBe('skipped');

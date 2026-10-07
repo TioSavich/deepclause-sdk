@@ -258,8 +258,10 @@ program
         console.error('❌ Error:', result.error);
         process.exit(1);
       }
-      if (options.trace) {
+      if (options.trace && result.trace) {
         console.log(`\n📊 Trace saved to: ${options.trace}`);
+      } else if (options.trace) {
+        console.log('\n(no execution trace was produced for this run)');
       }
       if (options.usage && result.usageByModel && Object.keys(result.usageByModel).length > 0) {
         const usagePath = path.resolve(options.usage);

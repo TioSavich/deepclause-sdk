@@ -44,6 +44,8 @@ export interface DMLSessionOptions {
   /** Session parameters exposed via param/2 and string interpolation. */
   params?: Record<string, unknown>;
   gasLimit?: number;
+  /** Enable the DML execution trace (surfaced on the `finished` event). */
+  trace?: boolean;
   /** Runner configuration (model/provider/temperature/backend). */
   runnerOptions: RunnerOptions;
   tools?: Map<string, ToolDefinition>;
@@ -188,7 +190,7 @@ export class DMLSession {
 
     const sessionParams: Record<string, unknown> = {
       workspace_path: options.workspacePath ?? './',
-      trace: false,
+      trace: options.trace ?? false,
       ...options.params,
     };
     if (options.gasLimit !== undefined) {

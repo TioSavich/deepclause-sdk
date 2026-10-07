@@ -145,6 +145,8 @@ export async function run(
   const session = await DMLSession.open({
     workspacePath,
     gasLimit: options.gasLimit,
+    // Enable the DML trace in the engine too (the runner option alone is not enough).
+    trace: !!options.trace,
     params: buildDmlParams(args, options.params, null),
     tools: toolset.tools,
     runnerOptions: {
@@ -222,6 +224,10 @@ export async function run(
 
     if (Object.keys(usageByModel).length > 0) {
       result.usageByModel = usageByModel;
+    }
+    if (options.trace && result.trace) {
+      const tracePath = path.resolve(options.trace);
+      await fs.writeFile(tracePath, `${JSON.stringify(result.trace, null, 2)}\n`, 'utf8');
     }
     return result;
   } finally {

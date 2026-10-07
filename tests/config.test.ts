@@ -1,36 +1,41 @@
 /**
- * DeepClause CLI Config Module Tests
+ * Config module: init/load/validate/update and the model-id helpers.
+ *
+ * The filesystem is replaced with memfs so nothing touches the real disk.
  */
-
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { vol } from 'memfs';
+
 import {
-  ensureWorkspaceDocSeeds,
-  getSystemDir,
-  initConfig,
-  loadConfig,
-  validateConfig,
-  setModel,
-  showModel,
-  updateConfig,
   configExists,
+  ensureWorkspaceDocSeeds,
+  formatModelString,
   getConfigDir,
   getConfigPath,
   getDocsDir,
-  getToolsDir,
   getMCPServers,
+  getSystemDir,
+  getToolsDir,
+  initConfig,
+  loadConfig,
   parseModelString,
-  formatModelString,
-  ConfigSchema,
-  type Config,
-  type Provider
+  setModel,
+  showModel,
+  updateConfig,
+  validateConfig,
 } from '../src/cli/config.js';
 
-// Mock fs module
 vi.mock('fs/promises', async () => {
   const memfs = await import('memfs');
   return memfs.fs.promises;
 });
+
+const WS = '/workspace';
+const configFile = `${WS}/.deepclause/config.json`;
+
+function readConfig(): Record<string, unknown> {
+  return JSON.parse(vol.readFileSync(configFile, 'utf8') as string) as Record<string, unknown>;
+}
 
 describe('Config Module', () => {
   beforeEach(() => {
@@ -39,527 +44,150 @@ describe('Config Module', () => {
 
   afterEach(() => {
     vol.reset();
+    vi.clearAllMocks();
   });
 
-  // ===========================================================================
-  // Path Helpers
-  // ===========================================================================
-
-  describe('Path Helpers', () => {
-    it('should return correct config directory path', () => {
-      expect(getConfigDir('/workspace')).toBe('/workspace/.deepclause');
-    });
-
-    it('should return correct config file path', () => {
-      expect(getConfigPath('/workspace')).toBe('/workspace/.deepclause/config.json');
-    });
-
-    it('should return correct tools directory path', () => {
-      expect(getToolsDir('/workspace')).toBe('/workspace/.deepclause/tools');
-    });
-
-    it('should return correct docs directory path', () => {
-      expect(getDocsDir('/workspace')).toBe('/workspace/.deepclause/docs');
-    });
+  it('roots every workspace path under .deepclause', () => {
+    expect(getConfigDir(WS)).toBe(`${WS}/.deepclause`);
+    expect(getConfigPath(WS)).toBe(configFile);
+    expect(getDocsDir(WS)).toBe(`${WS}/.deepclause/docs`);
+    expect(getToolsDir(WS)).toBe(`${WS}/.deepclause/tools`);
+    expect(getSystemDir(WS)).toBe(`${WS}/.deepclause/system`);
   });
 
-  // ===========================================================================
-  // Config Validation
-  // ===========================================================================
-
-  describe('validateConfig', () => {
-    it('should accept valid minimal config', () => {
-      const config = { model: 'gpt-4o' };
-      const result = validateConfig(config);
-      
-      expect(result.model).toBe('gpt-4o');
-      expect(result.providers).toEqual({});
-      expect(result.mcp).toEqual({ servers: {} });
-    });
-
-    it('should accept valid full config', () => {
-      const config = {
-        model: 'claude-3-opus',
-        providers: {
-          anthropic: { apiKey: 'test-key' }
-        },
-        mcp: {
-          servers: {
-            'brave-search': {
-              command: 'npx',
-              args: ['-y', '@anthropic/mcp-brave-search'],
-              env: { BRAVE_API_KEY: 'key' }
-            }
-          }
-        },
-        dmlBase: 'custom/tools',
-        workspace: './data'
-      };
-      
-      const result = validateConfig(config);
-      expect(result.model).toBe('claude-3-opus');
-      expect(result.providers?.anthropic?.apiKey).toBe('test-key');
-      expect(result.mcp?.servers?.['brave-search']?.command).toBe('npx');
-    });
-
-    it('should reject config without model', () => {
-      const config = {};
-      expect(() => validateConfig(config)).toThrow(/model/i);
-    });
-
-    it('should reject empty model', () => {
-      const config = { model: '' };
-      expect(() => validateConfig(config)).toThrow(/model/i);
-    });
-
-    it('should reject MCP server without command', () => {
-      const config = {
-        model: 'gpt-4o',
-        mcp: {
-          servers: {
-            'test-server': {}
-          }
-        }
-      };
-      expect(() => validateConfig(config)).toThrow(/command/i);
-    });
-
-    it('should use default values for optional fields', () => {
-      const config = { model: 'gpt-4o' };
-      const result = validateConfig(config);
-      
-      expect(result.dmlBase).toBe('.deepclause/tools');
-      expect(result.workspace).toBe('./');
-        expect(result.shell).toEqual({ wrapper: 'auto', strictIsolation: false });
-    });
+  it('configExists reflects whether initConfig has run', async () => {
+    expect(await configExists(WS)).toBe(false);
+    await initConfig(WS);
+    expect(await configExists(WS)).toBe(true);
   });
 
-  // ===========================================================================
-  // initConfig
-  // ===========================================================================
+  it('initConfig writes a valid default config and seeds assets', async () => {
+    await initConfig(WS);
 
-  describe('initConfig', () => {
-    it('should create config directory structure', async () => {
-      vol.fromJSON({});
-      
-      await initConfig('/workspace');
-      
-      expect(vol.existsSync('/workspace/.deepclause')).toBe(true);
-      expect(vol.existsSync('/workspace/.deepclause/config.json')).toBe(true);
-      expect(vol.existsSync('/workspace/.deepclause/tools')).toBe(true);
-      expect(vol.existsSync('/workspace/.deepclause/docs')).toBe(true);
-      expect(vol.existsSync('/workspace/.deepclause/docs/TUI.md')).toBe(true);
-      expect(vol.existsSync('/workspace/.deepclause/system')).toBe(true);
-      expect(vol.existsSync('/workspace/.deepclause/system/conductor.dml')).toBe(true);
-      expect(vol.existsSync('/workspace/.deepclause/system/skill-creator.dml')).toBe(true);
-      expect(vol.existsSync('/workspace/.deepclause/system/CONDUCTOR_PROMPT.md')).toBe(true);
-      expect(vol.existsSync('/workspace/.deepclause/system/DML_COMPILER_PROMPT.md')).toBe(true);
-      expect(vol.existsSync('/workspace/.deepclause/.gitignore')).toBe(true);
-    });
+    const raw = readConfig();
+    expect(raw.models).toMatchObject({ run: 'openai:gpt-4o' });
+    const config = validateConfig(raw);
+    expect(config.backend.kind).toBe('pi');
+    expect(config.shell.wrapper).toBe('auto');
 
-    it('should create valid default config', async () => {
-      vol.fromJSON({});
-      
-      await initConfig('/workspace');
-      
-      const content = vol.readFileSync('/workspace/.deepclause/config.json', 'utf-8') as string;
-      const config = JSON.parse(content);
-      
-      expect(config.model).toBe('gpt-4o');
-      expect(validateConfig(config)).toBeTruthy();
-    });
+    expect(vol.existsSync(`${WS}/.deepclause/.gitignore`)).toBe(true);
+    expect(vol.existsSync(`${WS}/.deepclause/tools`)).toBe(true);
+    expect(vol.existsSync(`${WS}/.deepclause/docs/DML_REFERENCE.md`)).toBe(true);
+    expect(vol.existsSync(`${WS}/.deepclause/docs/DML_AUTHORING.md`)).toBe(true);
+    expect(vol.existsSync(`${WS}/.deepclause/system/default-loop-compactor.dml`)).toBe(true);
+  });
 
-    it('should use custom model when specified', async () => {
-      vol.fromJSON({});
-      
-      await initConfig('/workspace', { model: 'claude-3-opus' });
-      
-      const content = vol.readFileSync('/workspace/.deepclause/config.json', 'utf-8') as string;
-      const config = JSON.parse(content);
-      
-      expect(config.model).toBe('claude-3-opus');
-    });
+  it('initConfig refuses to clobber an existing config without force', async () => {
+    await initConfig(WS);
+    await expect(initConfig(WS)).rejects.toThrow(/already exists/i);
+    await initConfig(WS, { force: true });
+  });
 
+  it('initConfig honors a custom model', async () => {
+    await initConfig(WS, { model: 'anthropic/claude-3-opus' });
+    expect((readConfig().models as Record<string, string>).run).toBe('anthropic:claude-3-opus');
+  });
 
-    describe('loadConfig shell settings', () => {
-      it('should load shell wrapper preferences from config', async () => {
-        vol.fromJSON({
-          '/workspace/.deepclause/config.json': JSON.stringify({
-            model: 'gpt-4o',
-            shell: {
-              wrapper: 'bwrap',
-              strictIsolation: true,
-            },
-          }),
-        });
+  it('loadConfig throws a helpful error before init', async () => {
+    await expect(loadConfig(WS)).rejects.toThrow(/Run 'deepclause init'/);
+  });
 
-        const config = await loadConfig('/workspace');
+  it('loadConfig backfills docs/system and returns a validated config', async () => {
+    await initConfig(WS);
+    vol.rmSync(`${WS}/.deepclause/docs`, { recursive: true, force: true });
+    const config = await loadConfig(WS);
+    expect(config.models.run).toBe('openai:gpt-4o');
+    expect(vol.existsSync(`${WS}/.deepclause/docs/DML_REFERENCE.md`)).toBe(true);
+  });
 
-        expect(config.shell).toEqual({ wrapper: 'bwrap', strictIsolation: true });
-      });
+  it('validateConfig fills defaults and rejects invalid values', () => {
+    const config = validateConfig({});
+    expect(config.models.run).toBe('openai:gpt-4o');
+    expect(config.temperatures.run).toBe(0.7);
+    expect(config.repl.maxModelCalls).toBe(100);
+    expect(() => validateConfig({ temperatures: { run: 'hot' } })).toThrow(/Invalid configuration/);
+    expect(() => validateConfig({ backend: { kind: 'nope' } })).toThrow(/Invalid configuration/);
+  });
 
-      it('backfills missing default local skills without requiring re-init', async () => {
-        vol.fromJSON({
-          '/workspace/.deepclause/config.json': JSON.stringify({
-            model: 'gpt-4o',
-          }),
-        });
+  it('parseModelString normalizes to the canonical provider:model form', () => {
+    expect(parseModelString('anthropic/claude-3-opus')).toBe('anthropic:claude-3-opus');
+    expect(parseModelString('openai:gpt-4o')).toBe('openai:gpt-4o');
+    expect(parseModelString('openai/gpt-4o')).toBe('openai:gpt-4o');
+    expect(parseModelString('gpt-4-turbo')).toBe('openai:gpt-4-turbo');
+    expect(parseModelString('o1-preview')).toBe('openai:o1-preview');
+    expect(parseModelString('claude-3-sonnet')).toBe('anthropic:claude-3-sonnet');
+    expect(parseModelString('gemini-pro')).toBe('google:gemini-pro');
+    expect(parseModelString('some-other-model')).toBe('openrouter:some-other-model');
+    expect(() => parseModelString('')).toThrow(/cannot be empty/i);
+  });
 
-        await loadConfig('/workspace');
+  it('formatModelString returns the canonical id', () => {
+    expect(formatModelString('openai:gpt-4o')).toBe('openai:gpt-4o');
+    expect(formatModelString('anthropic/claude-3-opus')).toBe('anthropic:claude-3-opus');
+  });
 
-        const toolsDir = getToolsDir('/workspace');
-        const systemDir = getSystemDir('/workspace');
-        const docsDir = getDocsDir('/workspace');
-        expect(vol.existsSync(`${systemDir}/plan.dml`)).toBe(true);
-        expect(vol.existsSync(`${docsDir}/DML_REFERENCE.md`)).toBe(true);
-        expect(vol.existsSync(`${toolsDir}/deep-research.dml`)).toBe(true);
-        expect(vol.existsSync(`${toolsDir}/research-search-reader.dml`)).toBe(true);
-      });
-    });
-    it('should fail if config exists without --force', async () => {
-      vol.fromJSON({
-        '/workspace/.deepclause/config.json': JSON.stringify({ model: 'existing' })
-      });
-      
-      await expect(initConfig('/workspace')).rejects.toThrow(/already exists/);
-    });
+  it('setModel updates every slot by default and reports the result', async () => {
+    await initConfig(WS);
 
-    it('should overwrite config with --force', async () => {
-      vol.fromJSON({
-        '/workspace/.deepclause/config.json': JSON.stringify({ model: 'existing' })
-      });
-      
-      await initConfig('/workspace', { force: true });
-      
-      const content = vol.readFileSync('/workspace/.deepclause/config.json', 'utf-8') as string;
-      const config = JSON.parse(content);
-      
-      expect(config.model).toBe('gpt-4o');
-    });
+    const result = await setModel(WS, 'anthropic/claude-3-opus');
+    expect(result.modelId).toBe('anthropic:claude-3-opus');
+    expect(result.updatedSlots).toEqual(['gateway', 'run', 'compile']);
+    expect(result.info).toContain('anthropic:claude-3-opus');
 
-    it('should seed missing workspace docs without overwriting an existing guide', async () => {
-      vol.fromJSON({
-        '/workspace/.deepclause/config.json': JSON.stringify({ model: 'gpt-4o' }),
-        '/workspace/.deepclause/docs/TUI.md': '# Custom Guide\n'
-      });
-
-      await ensureWorkspaceDocSeeds('/workspace');
-
-      expect(vol.readFileSync('/workspace/.deepclause/docs/TUI.md', 'utf-8')).toBe('# Custom Guide\n');
-      expect(vol.existsSync('/workspace/.deepclause/docs/DML_REFERENCE.md')).toBe(true);
+    const config = await loadConfig(WS);
+    expect(config.models).toMatchObject({
+      gateway: 'anthropic:claude-3-opus',
+      run: 'anthropic:claude-3-opus',
+      compile: 'anthropic:claude-3-opus',
     });
   });
 
-  // ===========================================================================
-  // loadConfig
-  // ===========================================================================
+  it('setModel can target a single slot', async () => {
+    await initConfig(WS);
 
-  describe('loadConfig', () => {
-    it('should load valid config', async () => {
-      vol.fromJSON({
-        '/workspace/.deepclause/config.json': JSON.stringify({ model: 'gpt-4o' })
-      });
-      
-      const config = await loadConfig('/workspace');
-      
-      expect(config.model).toBe('gpt-4o');
-    });
+    const result = await setModel(WS, 'gemini-2.0-flash', 'run');
+    expect(result.updatedSlots).toEqual(['run']);
 
-    it('should fail if config not found', async () => {
-      vol.fromJSON({});
-      
-      await expect(loadConfig('/workspace')).rejects.toThrow(/not found/);
-    });
-
-    it('should fail on invalid JSON', async () => {
-      vol.fromJSON({
-        '/workspace/.deepclause/config.json': 'not valid json {'
-      });
-      
-      await expect(loadConfig('/workspace')).rejects.toThrow();
-    });
-
-    it('should resolve environment variables', async () => {
-      process.env.TEST_API_KEY = 'resolved-key';
-      
-      vol.fromJSON({
-        '/workspace/.deepclause/config.json': JSON.stringify({
-          model: 'gpt-4o',
-          providers: {
-            openai: { apiKey: '${TEST_API_KEY}' }
-          }
-        })
-      });
-      
-      const config = await loadConfig('/workspace');
-      
-      expect(config.providers?.openai?.apiKey).toBe('resolved-key');
-      
-      delete process.env.TEST_API_KEY;
-    });
-
-    it('should preserve unresolved env vars', async () => {
-      vol.fromJSON({
-        '/workspace/.deepclause/config.json': JSON.stringify({
-          model: 'gpt-4o',
-          providers: {
-            openai: { apiKey: '${NONEXISTENT_VAR}' }
-          }
-        })
-      });
-      
-      const config = await loadConfig('/workspace');
-      
-      expect(config.providers?.openai?.apiKey).toBe('${NONEXISTENT_VAR}');
-    });
+    const config = await loadConfig(WS);
+    expect(config.models.run).toBe('google:gemini-2.0-flash');
+    expect(config.models.gateway).toBe('openai:gpt-4o');
   });
 
-  // ===========================================================================
-  // parseModelString / formatModelString
-  // ===========================================================================
+  it('showModel reports per-slot models and temperatures', async () => {
+    await initConfig(WS);
+    await setModel(WS, 'anthropic/claude-3-opus');
 
-  describe('parseModelString', () => {
-    it('should parse provider/model format', () => {
-      const result = parseModelString('anthropic/claude-3-opus');
-      expect(result.provider).toBe('anthropic');
-      expect(result.model).toBe('claude-3-opus');
-    });
-
-    it('should parse openai provider', () => {
-      const result = parseModelString('openai/gpt-4o');
-      expect(result.provider).toBe('openai');
-      expect(result.model).toBe('gpt-4o');
-    });
-
-    it('should parse google provider', () => {
-      const result = parseModelString('google/gemini-2.0-flash');
-      expect(result.provider).toBe('google');
-      expect(result.model).toBe('gemini-2.0-flash');
-    });
-
-    it('should parse openrouter provider', () => {
-      const result = parseModelString('openrouter/meta-llama/llama-3-70b');
-      expect(result.provider).toBe('openrouter');
-      expect(result.model).toBe('meta-llama/llama-3-70b');
-    });
-
-    it('should infer openai from gpt- prefix', () => {
-      const result = parseModelString('gpt-4-turbo');
-      expect(result.provider).toBe('openai');
-      expect(result.model).toBe('gpt-4-turbo');
-    });
-
-    it('should infer openai from o1/o3 prefix', () => {
-      expect(parseModelString('o1-preview').provider).toBe('openai');
-      expect(parseModelString('o3-mini').provider).toBe('openai');
-    });
-
-    it('should infer anthropic from claude- prefix', () => {
-      const result = parseModelString('claude-3-sonnet');
-      expect(result.provider).toBe('anthropic');
-      expect(result.model).toBe('claude-3-sonnet');
-    });
-
-    it('should infer google from gemini- prefix', () => {
-      const result = parseModelString('gemini-pro');
-      expect(result.provider).toBe('google');
-      expect(result.model).toBe('gemini-pro');
-    });
-
-    it('should default to openrouter for unknown models', () => {
-      const result = parseModelString('some-other-model');
-      expect(result.provider).toBe('openrouter');
-      expect(result.model).toBe('some-other-model');
-    });
-
-    it('should reject empty string', () => {
-      expect(() => parseModelString('')).toThrow(/invalid model/i);
-    });
-
-    it('should reject whitespace-only', () => {
-      expect(() => parseModelString('   ')).toThrow(/invalid model/i);
-    });
-
-    it('should reject unknown provider', () => {
-      expect(() => parseModelString('unknown/model')).toThrow(/unknown provider/i);
-    });
+    const shown = await showModel(WS);
+    expect(shown.models.run).toBe('anthropic:claude-3-opus');
+    expect(shown.temperatures.run).toBe(0.7);
+    expect(shown.formatted).toContain('run: anthropic:claude-3-opus');
   });
 
-  describe('formatModelString', () => {
-    it('should format provider/model', () => {
-      expect(formatModelString('openai', 'gpt-4o')).toBe('openai/gpt-4o');
-      expect(formatModelString('anthropic', 'claude-3-opus')).toBe('anthropic/claude-3-opus');
-    });
+  it('updateConfig deep-merges and validates the result', async () => {
+    await initConfig(WS);
+
+    const updated = await updateConfig(WS, {
+      repl: { maxModelCalls: 42 },
+      models: { run: 'google:gemini-pro' },
+    } as never);
+
+    expect(updated.repl.maxModelCalls).toBe(42);
+    expect(updated.models.run).toBe('google:gemini-pro');
+    // Untouched slots survive the merge.
+    expect(updated.models.gateway).toBe('openai:gpt-4o');
   });
 
-  // ===========================================================================
-  // setModel / showModel
-  // ===========================================================================
-
-  describe('setModel', () => {
-    it('should update model and provider in config', async () => {
-      vol.fromJSON({
-        '/workspace/.deepclause/config.json': JSON.stringify({ model: 'gpt-4o', provider: 'openai' })
-      });
-      
-      const result = await setModel('/workspace', 'anthropic/claude-3-opus');
-      
-      expect(result.provider).toBe('anthropic');
-      expect(result.model).toBe('claude-3-opus');
-      
-      const content = vol.readFileSync('/workspace/.deepclause/config.json', 'utf-8') as string;
-      const config = JSON.parse(content);
-      
-      expect(config.model).toBe('claude-3-opus');
-      expect(config.provider).toBe('anthropic');
-    });
-
-    it('should infer provider when not specified', async () => {
-      vol.fromJSON({
-        '/workspace/.deepclause/config.json': JSON.stringify({ model: 'gpt-4o', provider: 'openai' })
-      });
-      
-      const result = await setModel('/workspace', 'gemini-2.0-flash');
-      
-      expect(result.provider).toBe('google');
-      expect(result.model).toBe('gemini-2.0-flash');
-    });
-
-    it('should reject empty model', async () => {
-      vol.fromJSON({
-        '/workspace/.deepclause/config.json': JSON.stringify({ model: 'gpt-4o', provider: 'openai' })
-      });
-      
-      await expect(setModel('/workspace', '')).rejects.toThrow(/invalid model/i);
-    });
-
-    it('should reject whitespace-only model', async () => {
-      vol.fromJSON({
-        '/workspace/.deepclause/config.json': JSON.stringify({ model: 'gpt-4o', provider: 'openai' })
-      });
-      
-      await expect(setModel('/workspace', '   ')).rejects.toThrow(/invalid model/i);
-    });
+  it('getMCPServers returns the configured servers', () => {
+    const config = validateConfig({ mcp: { servers: { local: { command: 'run.sh' } } } });
+    expect(getMCPServers(config).local).toMatchObject({ command: 'run.sh' });
   });
 
-  describe('showModel', () => {
-    it('should return provider and model', async () => {
-      vol.fromJSON({
-        '/workspace/.deepclause/config.json': JSON.stringify({ model: 'claude-3-opus', provider: 'anthropic' })
-      });
-      
-      const result = await showModel('/workspace');
-      
-      expect(result.provider).toBe('anthropic');
-      expect(result.model).toBe('claude-3-opus');
-      expect(result.formatted).toBe('anthropic/claude-3-opus');
-    });
-  });
+  it('ensureWorkspaceDocSeeds does not overwrite an existing doc', async () => {
+    vol.mkdirSync(`${WS}/.deepclause/docs`, { recursive: true });
+    vol.writeFileSync(`${WS}/.deepclause/docs/DML_REFERENCE.md`, 'custom content');
 
-  // ===========================================================================
-  // updateConfig
-  // ===========================================================================
+    await ensureWorkspaceDocSeeds(WS);
 
-  describe('updateConfig', () => {
-    it('should merge updates into config', async () => {
-      vol.fromJSON({
-        '/workspace/.deepclause/config.json': JSON.stringify({
-          model: 'gpt-4o',
-          workspace: './old'
-        })
-      });
-      
-      const updated = await updateConfig('/workspace', { workspace: './new' });
-      
-      expect(updated.model).toBe('gpt-4o');
-      expect(updated.workspace).toBe('./new');
-    });
-
-    it('should validate after update', async () => {
-      vol.fromJSON({
-        '/workspace/.deepclause/config.json': JSON.stringify({ model: 'gpt-4o' })
-      });
-      
-      await expect(updateConfig('/workspace', { model: '' })).rejects.toThrow();
-    });
-  });
-
-  // ===========================================================================
-  // configExists
-  // ===========================================================================
-
-  describe('configExists', () => {
-    it('should return true when config exists', async () => {
-      vol.fromJSON({
-        '/workspace/.deepclause/config.json': JSON.stringify({ model: 'gpt-4o' })
-      });
-      
-      expect(await configExists('/workspace')).toBe(true);
-    });
-
-    it('should return false when config missing', async () => {
-      vol.fromJSON({});
-      
-      expect(await configExists('/workspace')).toBe(false);
-    });
-  });
-
-  // ===========================================================================
-  // getMCPServers
-  // ===========================================================================
-
-  describe('getMCPServers', () => {
-    it('should return MCP servers from config', () => {
-      const config: Config = {
-        model: 'gpt-4o',
-        providers: {},
-        mcp: {
-          servers: {
-            'test-server': { command: 'test', args: [], env: {} }
-          }
-        },
-        dmlBase: '.deepclause/tools',
-        workspace: './'
-      };
-      
-      const servers = getMCPServers(config);
-      
-      expect(servers).toHaveProperty('test-server');
-      expect(servers['test-server'].command).toBe('test');
-    });
-
-    it('should return empty object when no servers', () => {
-      const config: Config = {
-        model: 'gpt-4o',
-        providers: {},
-        mcp: { servers: {} },
-        dmlBase: '.deepclause/tools',
-        workspace: './'
-      };
-      
-      const servers = getMCPServers(config);
-      
-      expect(servers).toEqual({});
-    });
-  });
-});
-
-// ===========================================================================
-// Schema Tests
-// ===========================================================================
-
-describe('ConfigSchema', () => {
-  it('should be a valid Zod schema', () => {
-    expect(ConfigSchema).toBeDefined();
-    expect(typeof ConfigSchema.parse).toBe('function');
-  });
-
-  it('should parse minimal config', () => {
-    const result = ConfigSchema.parse({ model: 'test' });
-    expect(result.model).toBe('test');
-  });
-
-  it('should fail on invalid input', () => {
-    expect(() => ConfigSchema.parse({})).toThrow();
+    expect(vol.readFileSync(`${WS}/.deepclause/docs/DML_REFERENCE.md`, 'utf8')).toBe('custom content');
   });
 });

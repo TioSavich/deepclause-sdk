@@ -15,10 +15,22 @@
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import { createDeepClause, DeepClauseSDK } from '../src/index.js';
 
+// These tests make real model calls, so they only run when provider API keys
+// are present. Without credentials every task fails and the assertions are
+// meaningless, so skip the whole suite instead of reporting false failures.
+const HAS_LLM_CREDENTIALS = Boolean(
+  process.env.GOOGLE_GENERATIVE_AI_API_KEY
+  || process.env.OPENAI_API_KEY
+  || process.env.ANTHROPIC_API_KEY
+  || process.env.OPENROUTER_API_KEY
+  || process.env.DEEPCLAUSE_TEST_MODEL_API_KEY,
+);
+const describeWithCredentials = HAS_LLM_CREDENTIALS ? describe : describe.skip;
+
 // ============================================================================
 // TASK PREDICATE
 // ============================================================================
-describe('task() predicate', () => {
+describeWithCredentials('task() predicate', () => {
   let sdk: DeepClauseSDK;
 
   beforeAll(async () => {
@@ -125,7 +137,7 @@ describe('task() predicate', () => {
 // ============================================================================
 // USER-DEFINED TOOLS FOR LLM
 // ============================================================================
-describe('User-defined tools for task()', () => {
+describeWithCredentials('User-defined tools for task()', () => {
   let sdk: DeepClauseSDK;
 
   beforeAll(async () => {
@@ -228,7 +240,7 @@ describe('User-defined tools for task()', () => {
 // ============================================================================
 // MEMORY AFFECTING LLM BEHAVIOR
 // ============================================================================
-describe('Memory affecting LLM behavior', () => {
+describeWithCredentials('Memory affecting LLM behavior', () => {
   let sdk: DeepClauseSDK;
 
   beforeAll(async () => {
@@ -297,7 +309,7 @@ describe('Memory affecting LLM behavior', () => {
 // ============================================================================
 // STRING INTERPOLATION IN TASK
 // ============================================================================
-describe('String interpolation in task()', () => {
+describeWithCredentials('String interpolation in task()', () => {
   let sdk: DeepClauseSDK;
 
   beforeAll(async () => {
@@ -367,7 +379,7 @@ describe('String interpolation in task()', () => {
 // ============================================================================
 // ASK_USER TOOL
 // ============================================================================
-describe('ask_user tool', () => {
+describeWithCredentials('ask_user tool', () => {
   let sdk: DeepClauseSDK;
 
   beforeAll(async () => {
@@ -437,7 +449,7 @@ describe('ask_user tool', () => {
 // ============================================================================
 // SUB-AGENT PATTERNS
 // ============================================================================
-describe('Sub-agent patterns', () => {
+describeWithCredentials('Sub-agent patterns', () => {
   let sdk: DeepClauseSDK;
 
   beforeAll(async () => {
@@ -497,7 +509,7 @@ describe('Sub-agent patterns', () => {
 // ============================================================================
 // PARALLEL TOOL CALLING
 // ============================================================================
-describe('Parallel tool calling', () => {
+describeWithCredentials('Parallel tool calling', () => {
   let sdk: DeepClauseSDK;
   const toolCallLog: { tool: string; time: number; order: number }[] = [];
   let callOrder = 0;
@@ -620,7 +632,7 @@ describe('Parallel tool calling', () => {
 // ============================================================================
 // ABORT SIGNAL
 // ============================================================================
-describe('Abort signal', () => {
+describeWithCredentials('Abort signal', () => {
   let sdk: DeepClauseSDK;
 
   beforeAll(async () => {

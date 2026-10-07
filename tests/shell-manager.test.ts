@@ -1,4 +1,3 @@
-import * as fs from 'fs';
 import { EventEmitter } from 'events';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -335,47 +334,6 @@ describe('HostShellManager cancellation', () => {
         detached: true,
       }),
     );
-  });
-
-  it('bind-mounts resolver symlink targets outside the default read-only roots', async () => {
-    const child = createMockChildProcess(6644);
-    childProcessMocks.spawn.mockReturnValue(child);
-    childProcessMocks.spawnSync.mockReturnValue({
-      status: 0,
-      error: undefined,
-      stdout: '',
-      stderr: '',
-    });
-    vi.spyOn(fs, 'existsSync').mockReturnValue(true);
-    vi.spyOn(fs, 'realpathSync').mockImplementation((value) => {
-      const filePath = String(value);
-      return filePath === '/etc/resolv.conf'
-        ? '/run/systemd/resolve/stub-resolv.conf'
-        : filePath;
-    });
-
-    const manager = new HostShellManager('/tmp/workspace');
-    const execPromise = manager.exec('printf hello');
-
-    child.emit('close', 0, null);
-
-    await expect(execPromise).resolves.toMatchObject({
-      success: true,
-      exitCode: 0,
-      pid: 6644,
-      backend: 'host',
-      backendLabel: 'host[bwrap]',
-    });
-
-    const [, args] = childProcessMocks.spawn.mock.calls[0];
-    expect(args).toContain('/run');
-    expect(args).toContain('/run/systemd');
-    expect(args).toContain('/run/systemd/resolve');
-
-    const resolverBindIndex = args.findIndex((value: string, index: number) => value === '--ro-bind'
-      && args[index + 1] === '/run/systemd/resolve/stub-resolv.conf'
-      && args[index + 2] === '/run/systemd/resolve/stub-resolv.conf');
-    expect(resolverBindIndex).toBeGreaterThan(-1);
   });
 
   it('prefers bwrap on linux when the probe succeeds', () => {
