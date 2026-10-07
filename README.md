@@ -1,12 +1,43 @@
 # DeepClause SDK
 
 DeepClause is a **Prolog-based runtime for self-modifying agent harnesses**. A
-harness is a living **DML** module. DML (DeepClause Meta Language) is a Prolog DSL with added functionality for LLM model calls, semantic
-judgments (Jev-type models), and constraints. An LLM agent embedded in the runtime reads, extends, and tests code in a living module a turn by
-turn. You drive it from an interactive **REPL**.
+harness created with DeepClause is a self contained library in the form of a **DML** module. DML (DeepClause Meta Language) is a Prolog DSL with added functionality for LLM model calls, semantic
+judgments (Jev-type models), and constraints. An LLM agent embedded in the runtime reads, extends, and tests code in a live module a turn by
+turn. You drive it from an interactive **REPL**. Using the REPL once can successively build a custom harness that is optimized for a specific use case.
 
 DML runs on **SWI-Prolog compiled to WebAssembly** — the whole language runtime
 is in-process and portable, with no native Prolog to install.
+
+## Why would I use this?
+
+Most agent code is a prompt plus a loop: it works until it doesn't, and the
+failure lives in prose you can't test. DeepClause moves the parts you care about
+into a program you can read, run, and version — and leaves the model only the
+parts that genuinely need judgment.
+
+Reach for it when you want:
+
+- **Repeatability.** Control flow, retries, and validation live in Prolog, not
+  in a sentence the model may reinterpret next run. The same harness produces
+  the same answer shape every time.
+- **A durable capability, not a chat.** The agent doesn't re-derive your
+  workflow each session — it grows a library of named skills you keep in the
+  repo and extend over time.
+- **Hard logic done properly.** Scheduling, counting, planning, and constraint
+  problems go to CLP and backtracking instead of asking the model to “be careful
+  with math”.
+- **Inspectable, auditable runs.** Every turn is a transaction with a recorded
+  trace and a version you can diff or roll back; `export` a harness to a file
+  and run it the same way in CI.
+- **Tamed context.** Isolate sub-tasks so a long session doesn't bias a focused
+  step, instead of stuffing everything into one growing prompt.
+- **No lock-in.** It's SWI-Prolog in WebAssembly and plain files; bring your own
+  model (pi's credentials or provider keys) and run `bash` in a sandbox.
+
+Skip it when a single prompt or a short script already does the job, or when
+there's no structure worth encoding and nothing you'd want to reuse. DeepClause
+earns its keep on multi-step workflows with branching, constraints, retries, and
+sub-agents — not on one-shot text generation.
 
 ## The REPL: a living, self-modifying harness
 
@@ -32,7 +63,7 @@ question about the harness.
 
 ### Saving and re-loading a harness
 
-A harness is a normal `.dml` file you can check in, diff, and re-open.
+Once you are happy with what your harness can do, you can save it for later re-use. A harness is a normal `.dml` file you can check in, diff, and re-open.
 
 ```text
 dml> add a tally(List, Counts) skill and a demo
