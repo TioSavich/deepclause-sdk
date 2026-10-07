@@ -45,6 +45,26 @@ describe('ReplRenderer', () => {
     expect(rendered).not.toContain('bash');
   });
 
+  it('renders the full bash script (not truncated) once per call', () => {
+    const { lines, renderer } = capture('plain');
+    const command = 'curl -s "https://example.com/data.json" \\\n  | jq -r ".items[] | select(.ok) | .id"';
+    renderer.render({ type: 'tool_call', toolName: 'bash', toolState: 'starting', toolArgs: { command } } as DMLEvent);
+    renderer.render({ type: 'tool_call', toolName: 'bash', toolState: 'running', toolArgs: { command } } as DMLEvent);
+    renderer.render({ type: 'tool_call', toolName: 'bash', toolState: 'completed', toolArgs: { command }, toolSummary: 'exit 0' } as DMLEvent);
+
+    const rendered = lines.join('');
+    expect(rendered).toContain('curl -s "https://example.com/data.json"');
+    expect(rendered).toContain('jq -r ".items[] | select(.ok) | .id"');
+    // Printed once for the call, not on every lifecycle event.
+    expect(rendered.match(/jq -r/g)).toHaveLength(1);
+    // Full script: no inline truncation ellipsis.
+    expect(rendered).not.toContain('…');
+
+    // A second call with the same script prints again.
+    renderer.render({ type: 'tool_call', toolName: 'bash', toolState: 'starting', toolArgs: { command } } as DMLEvent);
+    expect(lines.join('').match(/jq -r/g)).toHaveLength(2);
+  });
+
   it('formatBindings renders values, or true when there are none', () => {
     expect(formatBindings([])).toBe('true');
     expect(formatBindings([{ name: 'X', value: 'a' }, { name: 'Y', value: '2' }])).toBe('X = a\nY = 2');

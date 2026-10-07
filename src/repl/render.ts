@@ -85,6 +85,8 @@ export class ReplRenderer {
   /** Frame key of the currently open streamed-text region, or null. */
   private lastStreamFrame: string | null = null;
   private atLineStart = true;
+  /** Last bash command printed for a running call (dedupes start/running). */
+  private lastBashCommand?: string;
 
   constructor(options: ReplRendererOptions = {}) {
     this.mode = options.mode ?? 'plain';
@@ -202,17 +204,39 @@ export class ReplRenderer {
 
   private renderToolCall(event: DMLEvent, prefix: string): void {
     const name = event.toolName ?? 'tool';
-    const args = formatArgs(event.toolArgs);
     const state = event.toolState;
+    // Show the full shell script for `bash` (not the truncated inline args).
+    const command = name === 'bash' && typeof event.toolArgs?.command === 'string'
+      ? String(event.toolArgs.command)
+      : undefined;
+    const args = command === undefined ? formatArgs(event.toolArgs) : '';
+
     if (state === 'completed') {
       const summary = event.toolSummary ? ` — ${truncate(event.toolSummary, 80)}` : '';
+      this.lastBashCommand = undefined;
       this.writeLine(this.paint(`${prefix}  ✔ ${name}${args}${summary}`, ANSI.dim));
-    } else if (state === 'failed') {
-      const reason = event.toolError ?? event.toolSummary ?? 'failed';
-      this.writeLine(this.paint(`${prefix}  ✖ ${name}${args} — ${truncate(reason, 120)}`, ANSI.red));
-    } else {
-      this.writeLine(this.paint(`${prefix}  ⚙ ${name}${args}`, ANSI.dim));
+      return;
     }
+    if (state === 'failed') {
+      const reason = event.toolError ?? event.toolSummary ?? 'failed';
+      this.lastBashCommand = undefined;
+      this.writeLine(this.paint(`${prefix}  ✖ ${name}${args} — ${truncate(reason, 120)}`, ANSI.red));
+      return;
+    }
+
+    if (command !== undefined) {
+      // A call emits `starting` then `running`; print the script once.
+      if (command !== this.lastBashCommand) {
+        this.lastBashCommand = command;
+        this.writeLine(this.paint(`${prefix}  ⚙ ${name}`, ANSI.dim));
+        for (const line of command.replace(/\r\n?/g, '\n').split('\n')) {
+          this.writeLine(this.paint(`${prefix}    ${line}`, ANSI.dim));
+        }
+      }
+      return;
+    }
+
+    this.writeLine(this.paint(`${prefix}  ⚙ ${name}${args}`, ANSI.dim));
   }
 
   /** Write a streamed chunk, prefixing it with its frame label on first use. */
