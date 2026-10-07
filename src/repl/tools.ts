@@ -23,7 +23,7 @@ export interface MetaToolContext {
   prologQuery: (goal: string) => Record<string, unknown> | null;
   isFrozen: () => boolean;
   /** Run a goal in an `execute` child frame and collect its result. */
-  executeGoal: (goal: string, limit?: number) => Promise<ExecuteResult>;
+  executeGoal: (goal: string, limit?: number, signal?: AbortSignal) => Promise<ExecuteResult>;
   /** Human-in-the-loop channel (M6). */
   askUser?: (prompt: string, options?: string[]) => Promise<{ answer: string } | { cancelled: true }>;
   /** Catalog of capability host tools, returned by listing(tools). */
@@ -224,10 +224,10 @@ export function createMetaTools(ctx: MetaToolContext): Map<string, ToolDefinitio
       },
       required: ['goal'],
     },
-    execute: (args) => serialized(async () => {
+    execute: (args, context) => serialized(async () => {
       const goal = String(args.goal ?? '');
       const limit = typeof args.limit === 'number' ? args.limit : undefined;
-      const result = await ctx.executeGoal(goal, limit);
+      const result = await ctx.executeGoal(goal, limit, context?.signal);
       notify(
         'execute',
         { goal },

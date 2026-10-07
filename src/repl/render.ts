@@ -55,6 +55,24 @@ function formatArgs(args: Record<string, unknown> | undefined): string {
   return `(${parts.join(', ')})`;
 }
 
+/** Max captured output lines previewed under a completed tool call. */
+const TOOL_OUTPUT_LINES = 3;
+
+/** Pull a few output lines from a tool result (bash stdout/stderr). */
+function extractToolOutput(result: unknown): string[] {
+  if (!result || typeof result !== 'object') return [];
+  const r = result as Record<string, unknown>;
+  const text = typeof r.stdout === 'string' && r.stdout.trim()
+    ? r.stdout
+    : (typeof r.stderr === 'string' ? r.stderr : '');
+  if (!text.trim()) return [];
+  return text
+    .replace(/\r\n?/g, '\n')
+    .split('\n')
+    .map((line) => line.replace(/\t/g, '    ').trimEnd())
+    .filter((line) => line.trim() !== '');
+}
+
 /** Word-wrap a single line to `width`, hard-breaking tokens that are longer. */
 function wrapLine(text: string, width: number): string[] {
   if (width <= 0 || text.length <= width) {
@@ -307,6 +325,12 @@ export class ReplRenderer {
       const summary = event.toolSummary ? ` — ${truncate(event.toolSummary, 80)}` : '';
       this.lastToolDetail = undefined;
       this.writeLine(this.toolPanel(`${prefix}  ✔ ${name}${args}${summary}`, tone));
+      // A short tail of the captured output (bash). Full output is --verbose.
+      if (!this.verbose) {
+        for (const line of this.toolOutputLines(prefix, tone, event.toolResult)) {
+          this.writeLine(line);
+        }
+      }
       return;
     }
     if (state === 'failed') {
@@ -336,6 +360,26 @@ export class ReplRenderer {
     }
 
     this.writeLine(this.toolPanel(`${prefix}  ⚙ ${name}${args}`, tone));
+  }
+
+  /** Up to TOOL_OUTPUT_LINES captured output lines, as tinted panel lines. */
+  private toolOutputLines(prefix: string, tone: ToolTone, result: unknown): string[] {
+    const lines = extractToolOutput(result);
+    if (lines.length === 0) {
+      return [];
+    }
+    const indent = '    ';
+    const avail = Math.max(20, this.width - stripAnsi(prefix).length - indent.length);
+    const shown = lines.slice(-TOOL_OUTPUT_LINES);
+    const omitted = lines.length - shown.length;
+    const out: string[] = [];
+    if (omitted > 0) {
+      out.push(this.toolPanel(`${prefix}${indent}… (+${omitted} more line${omitted === 1 ? '' : 's'})`, tone));
+    }
+    for (const line of shown) {
+      out.push(this.toolPanel(`${prefix}${indent}${line.length > avail ? `${line.slice(0, avail - 1)}…` : line}`, tone));
+    }
+    return out;
   }
 
   /** Show/hide the live model-call indicator. */

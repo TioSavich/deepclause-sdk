@@ -73,11 +73,13 @@ export async function createReplToolset(options: ReplToolsetOptions): Promise<Re
         },
         required: ['command'],
       },
-      execute: async (args) => {
+      execute: async (args, context) => {
         const command = String(args.command ?? args.arg1 ?? '');
+        // Prefer the per-turn signal the runner/agent loop passes so Ctrl-C
+        // terminates the running command (fall back to a startup signal).
         return shellManager.exec(
           command,
-          options.signal,
+          context?.signal ?? options.signal,
           createShellToolEventBridge({
             toolName: 'bash',
             toolArgs: { command },

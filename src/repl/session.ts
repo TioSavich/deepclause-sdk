@@ -856,6 +856,7 @@ export class DMLSession {
     goal: string,
     limit = 5,
     onEvent?: (event: DMLEvent) => void,
+    signal?: AbortSignal,
   ): Promise<ExecuteResult> {
     const childDepth = this.frameDepth + 1;
     if (childDepth > this.maxDepth) {
@@ -885,7 +886,7 @@ export class DMLSession {
     let runError: string | undefined;
     this.frameDepth = childDepth;
     try {
-      for await (const event of this.runner.runFrame(frame.id, this.buildRunOptions({}))) {
+      for await (const event of this.runner.runFrame(frame.id, this.buildRunOptions({ signal }))) {
         onEvent?.(event);
         if (event.type === 'solution' && solutions.length < limit) {
           solutions.push(event.solution?.bindings ?? []);
@@ -1009,7 +1010,7 @@ export class DMLSession {
           sessionId: this.sessionId,
           prologQuery: (goal) => this.prologQuery(goal),
           isFrozen: () => this.isFrozen(),
-          executeGoal: (goal, limit) => this.executeGoal(goal, limit, emit),
+          executeGoal: (goal, limit, signal) => this.executeGoal(goal, limit, emit, signal),
           askUser: async (prompt, choices) => {
             const answer = await this.requireInput(prompt, choices);
             return answer === undefined ? { cancelled: true } : { answer };

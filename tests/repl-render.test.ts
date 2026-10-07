@@ -152,6 +152,38 @@ describe('ReplRenderer', () => {
     expect(joined).toContain('what_is_in("images", "*.png", File, Text), output(File), output(Text)');
   });
 
+  it('previews a few tail lines of tool output on completion', () => {
+    const { lines, renderer } = capture('rich', true, 80);
+    const command = 'ls -la';
+    renderer.render({ type: 'tool_call', toolName: 'bash', toolState: 'starting', toolArgs: { command } } as DMLEvent);
+    renderer.render({
+      type: 'tool_call',
+      toolName: 'bash',
+      toolState: 'completed',
+      toolArgs: { command },
+      toolResult: { success: true, stdout: 'l1\nl2\nl3\nl4\nl5\n', stderr: '' },
+      toolSummary: 'exit 0',
+    } as DMLEvent);
+
+    const ansi = /\u001b\[[0-9;]*m/g;
+    const text = lines.map((line) => line.replace(ansi, '').replace(/\n$/, '')).join('\n');
+    expect(text).toMatch(/\+2 more lines/);
+    for (const kept of ['l3', 'l4', 'l5']) expect(text).toContain(kept);
+    for (const dropped of ['l1', 'l2']) expect(text).not.toContain(dropped);
+  });
+
+  it('verbose mode shows no output preview (the full logs are already streamed)', () => {
+    const lines: string[] = [];
+    const renderer = new ReplRenderer({
+      mode: 'plain', color: false, verbose: true, width: 80, sink: (t) => lines.push(t),
+    });
+    renderer.render({
+      type: 'tool_call', toolName: 'bash', toolState: 'completed', toolArgs: { command: 'ls' },
+      toolResult: { success: true, stdout: 'l1\nl2\nl3\nl4\nl5\n', stderr: '' }, toolSummary: 'exit 0',
+    } as DMLEvent);
+    expect(lines.join('')).not.toContain('l5');
+  });
+
   it('colours output and answer differently (rich mode)', () => {
     const { lines, renderer } = capture('rich', true, 100);
     renderer.render({ type: 'output', content: 'intermediate' } as DMLEvent);

@@ -328,13 +328,19 @@ export interface DMLEvent extends FrameEventMeta {
 /**
  * Tool definition for registering external tools
  */
+/** Per-call context handed to a tool's `execute`. */
+export interface ToolExecutionContext {
+  /** Abort signal for the current turn; long-running tools should honor it. */
+  signal?: AbortSignal;
+}
+
 export interface ToolDefinition {
   /** Human-readable description of what the tool does */
   description: string;
   /** JSON Schema for tool parameters */
   parameters: JsonSchema;
   /** Function to execute the tool */
-  execute: (args: Record<string, unknown>) => Promise<unknown>;
+  execute: (args: Record<string, unknown>, context?: ToolExecutionContext) => Promise<unknown>;
 }
 
 /**

@@ -992,8 +992,12 @@ export class DMLRunner {
     // The meta frame gets the meta tools plus the capability host tools (bash by
     // default) so the author can probe the environment and run commands. Harness
     // tool/2 predicates stay hidden. Meta tools win on name collisions.
-    const availableTools = isMetaFrame && options.metaTools
-      ? new Map([...options.tools, ...options.metaTools(emitToolEvent)])
+    const metaTools = isMetaFrame && options.metaTools ? options.metaTools(emitToolEvent) : undefined;
+    // Meta tools emit their own completion events via `notify`; everything else
+    // (e.g. bash) gets a generic completion so the host can preview output.
+    const selfReportingTools = metaTools ? new Set(metaTools.keys()) : undefined;
+    const availableTools = metaTools
+      ? new Map([...options.tools, ...metaTools])
       : this.buildAgentTools(
         userTools,
         options.toolPolicy,
@@ -1066,6 +1070,14 @@ export class DMLRunner {
       },
       onModelCallPhase: (phase) => {
         streamQueue.push({ type: 'model_call', modelCallState: phase, modelId: this.options.model });
+        if (streamResolve) {
+          streamResolve();
+          streamResolve = null;
+        }
+      },
+      selfReportingTools,
+      onToolResult: (toolName, toolArgs, toolResult) => {
+        streamQueue.push(buildToolCompletionEvent(toolName, toolArgs, toolResult));
         if (streamResolve) {
           streamResolve();
           streamResolve = null;
@@ -1455,7 +1467,7 @@ export class DMLRunner {
       // Emit tool_call event before execution
       yield buildToolStartEvent(toolName, argsObj);
       
-      const result = await tool.execute(argsObj);
+      const result = await tool.execute(argsObj, { signal: options.signal });
 
       yield buildToolCompletionEvent(toolName, argsObj, result);
 
@@ -1803,7 +1815,7 @@ export class DMLRunner {
               try {
                 argsObj = this.argsToObject(execArgs, tool);
                 onToolEvent?.(buildToolStartEvent(execToolName, argsObj));
-                const execResult = await tool.execute(argsObj);
+                const execResult = await tool.execute(argsObj, { signal: runContext.signal });
                 onToolEvent?.(buildToolCompletionEvent(execToolName, argsObj, execResult));
                 const postGoal = `deepclause_mi:post_exec_result('${this.sessionId}', success, ${this.toPrologTerm(execResult)})`;
                 this.query(postGoal);

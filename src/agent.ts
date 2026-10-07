@@ -85,6 +85,13 @@ export interface AgentLoopOptions {
   onModelCall?: () => boolean | Promise<boolean>;
   /** Model-call lifecycle, for a live "in progress" indicator. */
   onModelCallPhase?: (phase: 'started' | 'completed' | 'failed') => void;
+  /**
+   * Tools that emit their own completion events (e.g. meta tools). For every
+   * other tool, `onToolResult` is called so the host can emit a completion
+   * event with the result (used to show a short bash output preview).
+   */
+  selfReportingTools?: Set<string>;
+  onToolResult?: (toolName: string, args: Record<string, unknown>, result: unknown) => void;
   onAskUser: (prompt: string) => Promise<string | undefined>;
   signal?: AbortSignal;
   streaming?: boolean;
@@ -745,10 +752,13 @@ async function runInjectedAgentLoop(
           result = { error: `Tool not found: ${call.name}` };
         } else {
           try {
-            result = cleanPrologMarkers(await tool.execute(call.arguments));
+            result = cleanPrologMarkers(await tool.execute(call.arguments, { signal: options.signal }));
           } catch (error) {
             result = { error: error instanceof Error ? error.message : String(error) };
           }
+        }
+        if (!options.selfReportingTools?.has(call.name)) {
+          options.onToolResult?.(call.name, call.arguments, result);
         }
       }
 
@@ -907,9 +917,11 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<AgentLoop
     aiTools[name] = aiTool({
       description: tool.description,
       inputSchema: zodSchema,
-      execute: async (input: unknown) => {
+      execute: async (input: unknown, execOptions?: { abortSignal?: AbortSignal }) => {
         try {
-          const result = await tool.execute(input as Record<string, unknown>);
+          const result = await tool.execute(input as Record<string, unknown>, {
+            signal: execOptions?.abortSignal ?? options.signal,
+          });
           return cleanPrologMarkers(result);
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
