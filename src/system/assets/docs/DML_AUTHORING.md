@@ -31,12 +31,15 @@ an existing predicate over a near-duplicate. Change it **only when the user
 asks** — create on a fresh workspace, and afterwards touch only what the request
 requires; never refactor or extend it on your own initiative.
 
-**Generalize, don't specialize.** A skill is a reusable component with explicit
-inputs, not a one-off script for the request in front of you. "Find the latest
-image in `~/Downloads`" is not a skill; `find_latest(Dir, Pattern, Path)` is,
-because it works for any folder and file type. Do not hard-code paths, names,
-or values the caller could pass, and do not add a predicate or script that
-another skill could reuse with different arguments.
+**Generalize, don't specialize.** Prefer a few small, composable primitives over
+a predicate per request, and express one-off requests by composing them (or a
+direct `goal:`) instead of naming a predicate for every phrasing. A hard-coded
+"latest image in `~/Downloads`" is wrong; even `find_latest(Dir, Pattern, Path)`
+is fairly narrow — the reusable parts (list a directory, filter, pick a
+best/latest element) are shared by many tasks. Ask whether another caller would
+plausibly reuse the predicate with different arguments; if only this request
+would, do not add it. A harness of many task-shaped helpers is as bad as one
+hard-coded script.
 
 ## 1. Only use tools from the catalog
 
@@ -62,8 +65,9 @@ never interpolated into the shell command string. See `HARNESS_EXAMPLES.md` §1.
 
 A linked script is for a genuinely external capability (a library, `ffmpeg`, an
 API) — not for glue that Prolog already does (`directory_files/2`, `findall/3`,
-`msort/2`, regex, string predicates) and not one script per request. Even a
-necessary script is a component: parameterize it and document it with `doc/2`.
+`msort/2`, `sort/4`, regex, string predicates) and not one script per request.
+Even a necessary script is a component: parameterize it and document it with
+`doc/2`.
 
 ## 3. Annotate the harness (self-describing)
 
