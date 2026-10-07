@@ -357,7 +357,6 @@ export async function createReplRuntime(options: ReplCliOptions): Promise<ReplRu
   };
 }
 
-/** Startup banner for the interactive REPL (proposal §2.1). */
 /** Package version, read once from package.json for the banner/`--version`. */
 export const PACKAGE_VERSION: string = (() => {
   try {
@@ -369,28 +368,60 @@ export const PACKAGE_VERSION: string = (() => {
   }
 })();
 
+/** Startup banner for the interactive REPL (proposal §2.1). */
 function printBanner(runtime: ReplRuntime, loaded: string[]): void {
   const rich = runtime.renderer.mode === 'rich';
   const paint = (text: string, code: string): string => (rich ? `\u001b[${code}m${text}\u001b[0m` : text);
   const dim = (text: string): string => paint(text, '2');
   const accent = (text: string): string => paint(text, '36');
+  const bold = (text: string): string => paint(text, '1');
 
   const state = loaded.length > 0
     ? `${loaded.length} file${loaded.length === 1 ? '' : 's'} loaded`
     : 'blank harness';
   const frozen = runtime.repl.isFrozen() ? `  ${paint(' FROZEN ', '41;97')}` : '';
 
-  const title = `  ${paint('DeepClause', '1;36')} ${paint('DML REPL', '1')}  ${dim(`v${runtime.version}`)}${frozen}`;
-  const meta = `  ${dim(state)}  ${dim('·')}  ${paint(runtime.model, '35')}  ${dim('·')}  ${dim(`backend ${runtime.backend}`)}`;
-  const cwd = `  ${dim(runtime.workspace)}`;
-  const help = [
+  const lines: string[] = [
+    '',
+    `  ${paint('DeepClause', '1;36')} ${paint('DML REPL', '1')}  ${dim(`v${runtime.version}`)}${frozen}`,
+    `  ${dim(state)}  ${dim('·')}  ${paint(runtime.model, '35')}  ${dim('·')}  ${dim(`backend ${runtime.backend}`)}`,
+    `  ${dim(runtime.workspace)}`,
+  ];
+
+  // A short getting-started guide, shown on a fresh (blank) harness only.
+  if (runtime.repl.session.isEmpty()) {
+    lines.push(
+      '',
+      `  ${bold('Two modes.')} Plain English is the default; ${accent('goal:')} runs DML directly.`,
+      '',
+      `    ${accent('<plain English>')}   default. Ask for anything: add a new skill, add a tool,`,
+      `                      change existing logic, run or test code in the living`,
+      `                      module, or just ask a question about the harness. A meta`,
+      `                      task writes the DML, tests it with ${dim('execute')}, and commits it.`,
+      `    ${accent('goal: <dml>.')}      run DML/Prolog directly against the current harness.`,
+      '',
+      `  ${bold('Example')}`,
+      `    ${dim('dml>')} add a web_search tool and a research(Question, Answer) skill that uses it`,
+      '',
+      `    ${dim('dml>')} ${accent('goal:')} research("why is the sky blue?", A).`,
+      `    A = "…"`,
+      '',
+      `  When you're ready, export the harness and re-use it whenever you need:`,
+      `    ${dim('dml>')} export research.dml.            save a portable harness`,
+      `    ${dim('$')} deepclause repl -l research.dml    load it back any time`,
+    );
+  }
+
+  lines.push(
+    '',
     `  ${accent('goal:')} ${dim('<dml>.')}           run a DML goal, e.g. ${dim('goal: member(X, [1,2,3]).')}`,
     `  ${accent('<plain English>')}        build the harness from a prompt`,
     '',
     `  ${accent('help.')}  ${accent('listing.')}  ${accent('export <file>.')}  ${accent('freeze.')}  ${accent('model.')}  ${accent('halt.')}`,
-  ];
+    '',
+  );
 
-  runtime.renderer.writeLine(['', title, meta, cwd, '', ...help, ''].join('\n'));
+  runtime.renderer.writeLine(lines.join('\n'));
 }
 
 /** Dispatch one classified input. Returns false when the REPL should exit. */
@@ -494,19 +525,50 @@ export async function dispatchReplInput(
 
 function helpText(runtime: ReplRuntime): string {
   return [
-    'DML REPL help',
-    '  goal: <dml>.        run a DML goal (enumerates solutions)',
-    '  <english text>      build the harness from a prompt (M3)',
-    '  listing.            list the living module',
-    '  listing(Name/Arity). list one predicate',
-    '  reset.              empty the harness',
-    '  rollback.           undo the last harness change',
-    '  model.              show the model; model <provider/id>. sets it',
-    '  export <file>.      write a self-contained harness',
-    '  freeze. / unfreeze. read-only lock',
-    '  params.             show session parameters',
-    '  trace. / notrace.   toggle verbose logging',
-    '  halt.               exit',
+    'DeepClause REPL — a living DML harness you author by talking to it.',
+    '',
+    '  Modes',
+    '    <plain English>    default. Ask for anything:',
+    '                         • add a new skill (a predicate / entry point)',
+    '                         • add a tool (a bash / exec wrapper used by skills)',
+    '                         • change or extend existing logic',
+    '                         • run or test code in the living module',
+    '                         • ask a question about the harness',
+    '                       A meta task writes the DML, tests it with execute,',
+    '                       and commits it (replace-by-predicate).',
+    '    goal: <dml>.       run DML/Prolog directly against the current harness.',
+    '',
+    '  Examples (plain mode first, then goal mode)',
+    '    dml> add a web_search tool and a research(Question, Answer) skill that uses it',
+    '    dml> change research to also cite its sources',
+    '    dml> what skills does this harness have?',
+    '',
+    '    dml> goal: research("why is the sky blue?", A).',
+    '',
+    '  Pure Prolog works too — no model needed:',
+    '    dml> add a tally(List, Counts) skill, plus a demo',
+    '    dml> goal: tally([a,b,a,c,a], C).',
+    '    C = [a-3, b-1, c-1]',
+    '',
+    '  Skills compose',
+    '    task/N              LLM calls          exec/2           host tools (bash, …)',
+    '    choose/rate/verify  judgments          CLP(FD)/CLP(Q)   constraints',
+    '    script_file/2       link a script file (bundled on export)',
+    '',
+    "  When you're ready, export the harness and re-use it whenever you need:",
+    '    export research.dml.                 save a portable harness',
+    '    deepclause repl -l research.dml      load it back any time',
+    '',
+    '  Commands',
+    '    listing. / listing(Name/Arity).   inspect the harness',
+    '    reset.                            empty it',
+    '    rollback.                         undo the last change',
+    '    export <file>.                    save (use .zip to bundle linked files)',
+    '    model. / model <provider/id>.     show / set the model',
+    '    freeze. / unfreeze.               read-only lock',
+    '    params.                           show session parameters',
+    '    trace. / notrace.                 toggle verbose logging',
+    '    help.  halt.',
     `  prompt: ${runtime.promptPrefix}`,
   ].join('\n');
 }
