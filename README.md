@@ -8,6 +8,15 @@ turn. You drive it from an interactive **REPL**. Using the REPL once can success
 DML runs on **SWI-Prolog compiled to WebAssembly** — the whole language runtime
 is in-process and portable, with no native Prolog to install.
 
+In most agent stacks these are separate moving parts: tools in one place,
+prompts in another, memory in a third, and the workflow as a graph or a chain
+somewhere else. DML folds them into one idea — a **predicate**. A skill is a
+clause, a tool is a clause, memory and state are clauses, control flow and
+retries are clause order and backtracking, and a workflow is simply predicates
+calling predicates. Because it is one language in one self-contained file, the
+parts can read, reuse, and extend one another, and a whole harness can be
+inspected, versioned, and moved as a unit.
+
 ## Why would I use this?
 
 - **Reproducibility.** Control flow, retries, and validation are Prolog clauses
