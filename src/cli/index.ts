@@ -9,12 +9,12 @@
 import { Command } from 'commander';
 import * as path from 'path';
 import * as fs from 'fs/promises';
-import { deepClauseDirExists, initConfig, setModel, showModel } from './config.js';
+import { deepClauseDirExists, initConfig, loadConfig, setModel, showModel } from './config.js';
 import { run } from './run.js';
 import type { ModelSlot } from '../system/config/model-slots.js';
 import { registerReplCommand } from './repl.js';
 import { registerVisualizeCommand } from './visualize.js';
-import { registerSetBackendCommand } from './set-backend.js';
+import { registerSetBackendCommand, setBackend } from './set-backend.js';
 import { registerLoginCommands } from './login.js';
 import { readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
@@ -59,9 +59,24 @@ program
   .description('Set the default LLM model (format: provider:model, or just a model name to search)')
   .option('--slot <slot>', 'Apply only to a single slot: gateway, run, or compile')
   .option('--provider <provider>', 'Non-interactive: specify provider directly (openai, anthropic, google, openrouter, custom:name)')
+  .option('--thinking <level>', 'thinking level for reasoning models (off|minimal|low|medium|high|xhigh|max)')
   .action(async (model, options) => {
     try {
       const slot = options.slot as ModelSlot | undefined;
+
+      // With the pi backend the model comes from pi's catalog, so route the
+      // change through set-backend (which validates auth and persists the
+      // model + thinking level together). The env backend keeps the DB flow.
+      const config = await loadConfig(process.cwd());
+      if ((config.backend?.kind ?? 'pi') === 'pi') {
+        const result = await setBackend(process.cwd(), 'pi', {
+          model: model.includes(':') || model.includes('/') ? model.replace(':', '/') : model,
+          provider: options.provider,
+          thinking: options.thinking,
+        });
+        console.log(result.info);
+        return;
+      }
 
       // If the model already has a provider prefix (contains : or is custom:), use as-is
       const hasProviderPrefix = model.includes(':') || model.startsWith('custom:');

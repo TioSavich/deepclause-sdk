@@ -510,12 +510,19 @@ block.
   "writeDepth": 20,
   "repairRounds": 1,
   "promptPrefix": "dml> ",
+  "tui": "auto",
   "render": "rich",
   "showReasoning": "summary",
   "showToolArgs": true,
   "maxToolResultChars": 2000,
   "color": true,
   "tools": null,
+  "compaction": {
+    "enabled": true,
+    "auto": true,
+    "reserveTokens": 16384,
+    "keepRecentTokens": 20000
+  },
   "history": {
     "enabled": true,
     "dir": ".deepclause/repl",

@@ -53,7 +53,7 @@ function stubHandle(options: {
 describe('choosePiModel', () => {
   it('resolves an explicit provider/model request', async () => {
     const model = await choosePiModel(stubHandle(), { model: 'acme/large' });
-    expect(model).toEqual(MODELS[1]);
+    expect(model).toMatchObject(MODELS[1]);
   });
 
   it('accepts a bare model id', async () => {

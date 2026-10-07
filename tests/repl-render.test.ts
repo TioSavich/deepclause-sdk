@@ -253,3 +253,69 @@ describe('ReplRenderer', () => {
     expect(parsed[1]).toEqual({ type: 'answer', content: 'done' });
   });
 });
+
+describe('block spacing', () => {
+  it('inserts a blank line between streamed text and a tool block', () => {
+    const { lines, renderer } = capture('plain');
+    renderer.render({ type: 'stream', content: 'thinking' } as DMLEvent);
+    renderer.render({ type: 'tool_call', toolName: 'bash', toolState: 'starting', toolArgs: { command: 'ls' } } as DMLEvent);
+    expect(lines.join('')).toMatch(/thinking\n\n/);
+  });
+
+  it('inserts a blank line between a tool block and following text', () => {
+    const { lines, renderer } = capture('plain');
+    renderer.render({ type: 'tool_call', toolName: 'bash', toolState: 'completed', toolArgs: { command: 'ls' }, toolSummary: 'exit 0' } as DMLEvent);
+    renderer.render({ type: 'stream', content: 'done' } as DMLEvent);
+    expect(lines.join('')).toMatch(/\n\ndone/);
+  });
+
+  it('inserts a blank line between consecutive tool calls', () => {
+    const { lines, renderer } = capture('plain');
+    renderer.render({ type: 'tool_call', toolName: 'bash', toolState: 'starting', toolArgs: { command: 'ls' } } as DMLEvent);
+    renderer.render({ type: 'tool_call', toolName: 'bash', toolState: 'starting', toolArgs: { command: 'pwd' } } as DMLEvent);
+    expect(lines.join('')).toMatch(/\n\n/);
+  });
+
+  it('keeps a single tool call lifecycle lines together', () => {
+    const { lines, renderer } = capture('plain');
+    renderer.render({ type: 'tool_call', toolName: 'bash', toolState: 'starting', toolArgs: { command: 'ls' } } as DMLEvent);
+    renderer.render({ type: 'tool_call', toolName: 'bash', toolState: 'completed', toolArgs: { command: 'ls' }, toolSummary: 'exit 0' } as DMLEvent);
+    expect(lines.join('')).not.toMatch(/\n\n/);
+  });
+
+  it('does not separate output from answer', () => {
+    const { lines, renderer } = capture('plain');
+    renderer.render({ type: 'output', content: 'intermediate' } as DMLEvent);
+    renderer.render({ type: 'answer', content: 'final' } as DMLEvent);
+    expect(lines.join('')).not.toMatch(/\n\n/);
+  });
+
+  it('separates a compaction notice from surrounding output', () => {
+    const { lines, renderer } = capture('plain');
+    renderer.render({ type: 'output', content: 'before' } as DMLEvent);
+    renderer.render({ type: 'memory_compaction', content: 'compact applied' } as DMLEvent);
+    expect(lines.join('')).toMatch(/before\n\ncompact applied/);
+  });
+
+  it('hides top-level and meta task activity, and skipped compaction notices', () => {
+    const { lines, renderer } = capture('plain');
+    renderer.render({ type: 'task_activity', taskState: 'started', taskDescription: 'How are you' } as DMLEvent);
+    renderer.render({ type: 'memory_compaction', compactionAction: 'skipped', content: 'compact skipped 62 -> 62' } as DMLEvent);
+    renderer.render({ type: 'memory_compaction', compactionAction: 'applied', content: 'compact applied 100 -> 10' } as DMLEvent);
+    renderer.render({ type: 'task_activity', taskState: 'started', frameKind: 'meta' } as DMLEvent);
+    renderer.render({ type: 'task_activity', taskState: 'started', taskDescription: 'nested subtask', frameKind: 'nested', depth: 1 } as DMLEvent);
+    const rendered = lines.join('');
+    expect(rendered).not.toContain('How are you');
+    expect(rendered).not.toContain('meta task (writing the harness)');
+    expect(rendered).not.toContain('skipped');
+    expect(rendered).toContain('compact applied 100 -> 10');
+    expect(rendered).toContain('nested subtask');
+  });
+
+  it('shows skipped compaction notices in verbose mode', () => {
+    const lines: string[] = [];
+    const renderer = new ReplRenderer({ mode: 'plain', color: false, verbose: true, sink: (text) => lines.push(text) });
+    renderer.render({ type: 'memory_compaction', compactionAction: 'skipped', content: 'compact skipped 62 -> 62' } as DMLEvent);
+    expect(lines.join('')).toContain('skipped');
+  });
+});

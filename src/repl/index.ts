@@ -19,6 +19,7 @@ import type { HarnessExportOptions, HarnessExportResult } from './export.js';
 import { resolveReplJudgeSelection, type JevJudgeOptions } from './judge.js';
 import type { HistoryOptions } from './history.js';
 import type { JudgeSelection } from '../judge/types.js';
+import type { CompactionSettings } from './compaction.js';
 
 export type RunOpts = DMLQueryOptions;
 
@@ -67,6 +68,10 @@ export interface HarnessReplOptions {
   onDiagnostic?: (message: string) => void;
   /** Persistent session/trace/harness history. Off unless provided. */
   history?: HistoryOptions;
+  /** TypeScript compaction settings (ported from pi). */
+  compaction?: { settings: CompactionSettings; auto: boolean };
+  /** Active model context window, used for compaction thresholds. */
+  contextWindow?: number;
 }
 
 export interface RollbackResult {
@@ -98,6 +103,8 @@ export interface HarnessRepl {
   reset(): Promise<void>;
   /** Undo the last harness transaction (requires history). */
   rollback(): Promise<RollbackResult>;
+  /** Compact the session (meta) memory (TypeScript, ported from pi). */
+  compact(customInstructions?: string): Promise<{ applied: boolean; beforeTokens: number; afterTokens: number; error?: string }>;
   dispose(): Promise<void>;
   /** The underlying session (used by the CLI for session id / frame kind). */
   readonly session: DMLSession;
@@ -158,6 +165,10 @@ class HarnessReplImpl implements HarnessRepl {
     return this.session.rollback();
   }
 
+  compact(customInstructions?: string): Promise<{ applied: boolean; beforeTokens: number; afterTokens: number; error?: string }> {
+    return this.session.compact(customInstructions);
+  }
+
   dispose(): Promise<void> {
     return this.session.dispose();
   }
@@ -195,6 +206,8 @@ export async function createHarnessRepl(options: HarnessReplOptions): Promise<Ha
     hostToolsCatalog: options.hostToolsCatalog,
     askUser: options.askUser,
     history: options.history,
+    compaction: options.compaction,
+    contextWindow: options.contextWindow,
     runnerOptions: {
       model: options.model,
       provider: options.provider,

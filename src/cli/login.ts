@@ -18,7 +18,7 @@ import {
   logoutProvider,
 } from '../repl/auth.js';
 import { pickFromList, type PickItem } from '../repl/picker.js';
-import { choosePiModel, type SetBackendOptions } from './set-backend.js';
+import { choosePiModel, chooseThinkingLevel, type SetBackendOptions } from './set-backend.js';
 
 export interface LoginCliOptions {
   agentDir?: string;
@@ -28,6 +28,8 @@ export interface LoginCliOptions {
   apiKey?: string;
   oauth?: boolean;
   model?: string;
+  /** Thinking level for reasoning models (skips the picker). */
+  thinking?: string;
   noModel?: boolean;
   json?: boolean;
 }
@@ -113,12 +115,14 @@ export async function loginCommand(
   console.log(`\n✓ Signed in to ${choice.id}.`);
 
   let model: string | undefined;
+  let thinkingLevel: string | undefined;
   if (!options.noModel) {
     const chosen = await choosePiModel(handle, {
       provider: choice.id,
       model: options.model,
     } as SetBackendOptions);
     model = `${chosen.provider}/${chosen.id}`;
+    thinkingLevel = await chooseThinkingLevel(chosen, options.thinking);
   } else if (options.model) {
     model = options.model;
   }
@@ -127,13 +131,14 @@ export async function loginCommand(
     backend: {
       kind: 'pi',
       model,
+      thinkingLevel,
       agentDir: options.agentDir,
       modelsPath: options.models ?? null,
       authPath: options.auth ?? null,
     },
   });
   if (model) {
-    console.log(`Default model set to ${model}.`);
+    console.log(`Default model set to ${model}${thinkingLevel ? ` (thinking: ${thinkingLevel})` : ''}.`);
   }
   return { provider: choice.id, model };
 }
@@ -169,6 +174,7 @@ export function registerLoginCommands(program: Command): void {
     .option('--api-key <key>', 'store an API key for the provider (requires --provider)')
     .option('--oauth', 'use OAuth / subscription sign-in')
     .option('--model <provider/model>', 'set the default model without the picker')
+    .option('--thinking <level>', 'thinking level for reasoning models (off|minimal|low|medium|high|xhigh|max)')
     .option('--no-model', 'do not change the default model')
     .option('--agent-dir <path>', "pi agent dir (default: pi's own)")
     .option('--models <path>', 'explicit models.json path')

@@ -13,10 +13,18 @@ import { strFromU8, strToU8, unzipSync, zipSync } from 'fflate';
 
 import { loadProlog, mountWorkspace, type SWIPLModule } from '../prolog/loader.js';
 import { getMetaPromptAssetPath, getWorkspaceDocAssetPath } from '../system/assets/index.js';
-import { DMLRunner, type Frame, type InternalRunOptions, type RunnerOptions } from '../runner.js';
+import { DMLRunner, toJsValue, type Frame, type InternalRunOptions, type RunnerOptions } from '../runner.js';
+import {
+  compactMemory,
+  estimateMemoryTokens,
+  shouldCompact,
+  toCompactionEvent,
+  type CompactionSettings,
+} from './compaction.js';
 import type {
   DMLEvent,
   FrameKind,
+  LLMBackend,
   MemoryMessage,
   ToolDefinition,
   ToolPolicy,
@@ -72,6 +80,10 @@ export interface DMLSessionOptions {
    * `docs/DML_REPL_SESSION_HISTORY.md`.
    */
   history?: HistoryOptions;
+  /** TypeScript compaction settings (ported from pi). Off by default. */
+  compaction?: { settings: CompactionSettings; auto: boolean };
+  /** Active model context window, used for compaction thresholds. */
+  contextWindow?: number;
   /**
    * Resume an existing session (identified by `sessionId`): restore its saved
    * harness and conversation memory and continue its turn numbering. Requires
@@ -114,6 +126,11 @@ export class DMLSession {
   private maxDepth: number;
   private maxModelCalls: number;
   private hostToolsCatalog?: string;
+  /** TypeScript compaction (ported from pi). */
+  private compactionSettings?: CompactionSettings;
+  private compactionAuto = false;
+  private contextWindow?: number;
+  private llmBackend?: LLMBackend;
 
   /** Current nested frame depth (used for the depth budget). */
   private frameDepth = 0;
@@ -155,7 +172,16 @@ export class DMLSession {
     this.hostToolsCatalog = options.hostToolsCatalog;
     this.historyOptions = options.history;
     this.resume = options.resume ?? false;
-    this.runner = new DMLRunner(swipl, options.runnerOptions);
+    this.compactionSettings = options.compaction?.settings;
+    this.compactionAuto = options.compaction?.auto ?? false;
+    this.contextWindow = options.contextWindow;
+    this.llmBackend = options.runnerOptions.llmBackend;
+    this.runner = new DMLRunner(swipl, {
+      ...options.runnerOptions,
+      compactMessages: options.compaction
+        ? (messages, lastInputTokens) => this.compactLoopMessages(messages, lastInputTokens)
+        : undefined,
+    });
     this.runner.bindSession(this.sessionId);
   }
 
@@ -941,6 +967,17 @@ export class DMLSession {
 
     yield { type: 'task_activity', taskState: 'started', taskDescription: request };
 
+    // Session compaction (TypeScript, ported from pi): rewrite meta memory
+    // before assembling this turn's meta prompt when the context is large.
+    if (this.compactionAuto) {
+      try {
+        const { event } = await this.compactMetaMemory(false, options.signal);
+        if (event) yield event;
+      } catch (error) {
+        this.warnHistory(error);
+      }
+    }
+
     try {
       for (let attempt = 0; attempt <= this.repairRounds && !succeeded; attempt += 1) {
         // 1. Snapshot the living module + bookkeeping + harness memory.
@@ -1188,6 +1225,134 @@ export class DMLSession {
         : async () => undefined,
       signal: options.signal,
       onModelCall: () => this.reserveModelCall(),
+    };
+  }
+
+  // ---- TypeScript compaction (ported from pi) ----
+
+  /** Read a live memory slot as `MemoryMessage[]`. */
+  private getMemory(slot: 'meta' | 'harness'): MemoryMessage[] {
+    const result = this.prologQuery(
+      `deepclause_mi:repl_get_memory('${this.sessionId}', ${slot}, Messages)`
+    );
+    const raw = toJsValue(result?.Messages);
+    if (!Array.isArray(raw)) return [];
+    const messages: MemoryMessage[] = [];
+    for (const entry of raw) {
+      const value = toJsValue(entry) as { role?: unknown; content?: unknown } | null;
+      if (!value || typeof value !== 'object') continue;
+      const role = String(toJsValue(value.role) ?? 'user');
+      const content = String(toJsValue(value.content) ?? '');
+      if (role !== 'system' && role !== 'user' && role !== 'assistant') continue;
+      messages.push({ role, content });
+    }
+    return messages;
+  }
+
+  /** Replace a live memory slot. */
+  private setMemory(slot: 'meta' | 'harness', messages: MemoryMessage[]): void {
+    const term = messages
+      .map((message) => `message{role: ${message.role}, content: ${quoteString(message.content)}}`)
+      .join(', ');
+    this.prologQuery(`deepclause_mi:repl_set_memory('${this.sessionId}', ${slot}, [${term}])`);
+  }
+
+  /** Build the `memory_compaction` event for a compaction result. */
+  private compactionEvent(
+    scope: 'loop' | 'session',
+    trigger: 'before_model_call' | 'before_user_message',
+    result: import('./compaction.js').CompactMemoryResult,
+  ): DMLEvent {
+    const event = toCompactionEvent(scope, trigger, result);
+    const suffix = event.error ? ` (${event.error})` : '';
+    return {
+      type: 'memory_compaction',
+      content: `compact ${scope}.${trigger} ${event.action} ${event.beforeTokens} -> ${event.afterTokens} tokens${suffix}`,
+      compactionScope: scope,
+      compactionTrigger: trigger,
+      compactionAction: event.action,
+      beforeTokens: event.beforeTokens,
+      afterTokens: event.afterTokens,
+      compactionError: event.error,
+    };
+  }
+
+  /** Loop compaction hook: run before each model call inside a frame. */
+  private async compactLoopMessages(
+    messages: MemoryMessage[],
+    lastInputTokens?: number,
+  ): Promise<{ messages: MemoryMessage[]; event?: DMLEvent }> {
+    const settings = this.compactionSettings;
+    if (!settings?.enabled || !this.llmBackend) {
+      return { messages };
+    }
+    const contextTokens = lastInputTokens ?? estimateMemoryTokens(messages);
+    if (!shouldCompact(contextTokens, this.contextWindow ?? 0, settings)) {
+      return { messages };
+    }
+    const result = await compactMemory({
+      messages,
+      backend: this.llmBackend,
+      model: this.model,
+      settings,
+      force: true,
+    });
+    return result.applied
+      ? { messages: result.messages, event: this.compactionEvent('loop', 'before_model_call', result) }
+      : { messages };
+  }
+
+  /** Session compaction: compact meta memory before assembling the meta prompt. */
+  private async compactMetaMemory(
+    force: boolean,
+    signal?: AbortSignal,
+    customInstructions?: string,
+  ): Promise<{ event?: DMLEvent; result?: import('./compaction.js').CompactMemoryResult }> {
+    const settings = this.compactionSettings;
+    if (!settings?.enabled || !this.llmBackend) {
+      return {};
+    }
+    const messages = this.getMemory('meta');
+    if (messages.length === 0) {
+      return {};
+    }
+    const result = await compactMemory({
+      messages,
+      backend: this.llmBackend,
+      model: this.model,
+      contextWindow: this.contextWindow,
+      settings,
+      signal,
+      customInstructions,
+      force,
+    });
+    if (result.applied) {
+      this.setMemory('meta', result.messages);
+      try {
+        if (this.history) {
+          await this.persistSessionHarness(this.history.currentVersion);
+        }
+      } catch (error) {
+        this.warnHistory(error);
+      }
+    }
+    return { event: this.compactionEvent('session', 'before_user_message', result), result };
+  }
+
+  /**
+   * Explicitly compact the session (meta) memory. Used by `compact.` and the
+   * `--compact` flag; returns the before/after token counts.
+   */
+  async compact(customInstructions?: string): Promise<{ applied: boolean; beforeTokens: number; afterTokens: number; error?: string }> {
+    const { result } = await this.compactMetaMemory(true, undefined, customInstructions);
+    if (!result) {
+      return { applied: false, beforeTokens: 0, afterTokens: 0, error: 'compaction is disabled' };
+    }
+    return {
+      applied: result.applied,
+      beforeTokens: result.tokensBefore,
+      afterTokens: result.tokensAfter,
+      error: result.error,
     };
   }
 

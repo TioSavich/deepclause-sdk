@@ -20,6 +20,7 @@ import {
   createPiBackend,
   isPiPackageAvailable,
   openPiRuntime,
+  toPiModelInfo,
   type PiModelInfo,
   type PiProviderInfo,
   type PiRuntimeHandle,
@@ -37,6 +38,8 @@ export interface SetBackendOptions {
   auth?: string;
   model?: string;
   provider?: string;
+  /** Thinking level for reasoning models (skips the picker). */
+  thinking?: string;
   apiKey?: string;
   install?: boolean;
   list?: boolean;
@@ -48,6 +51,7 @@ export interface SetBackendResult {
   kind: BackendKind;
   model?: string;
   provider?: string;
+  thinkingLevel?: string;
   info: string;
   /** Present when `--list` was used. */
   providers?: PiProviderInfo[];
@@ -77,14 +81,8 @@ export async function choosePiModel(
   handle: PiRuntimeHandle,
   options: SetBackendOptions,
 ): Promise<PiModelInfo> {
-  const toInfo = (model: { provider: string; id: string; name?: string; reasoning?: boolean; contextWindow?: number; maxTokens?: number }): PiModelInfo => ({
-    provider: model.provider,
-    id: model.id,
-    name: model.name ?? model.id,
-    reasoning: Boolean(model.reasoning),
-    contextWindow: model.contextWindow,
-    maxTokens: model.maxTokens,
-  });
+  const toInfo = (model: { provider: string; id: string; name?: string; reasoning?: boolean; contextWindow?: number; maxTokens?: number; thinkingLevelMap?: Partial<Record<string, string | null>> }): PiModelInfo =>
+    toPiModelInfo(model);
 
   if (options.model) {
     const requested = options.model.replace(':', '/');
@@ -92,7 +90,7 @@ export async function choosePiModel(
     const modelId = rest.join('/');
     const found = modelId ? handle.registry.find?.(provider, modelId) : undefined;
     if (found) {
-      return toInfo(found as { provider: string; id: string; name?: string; reasoning?: boolean });
+      return toInfo(found as { provider: string; id: string; name?: string; reasoning?: boolean; thinkingLevelMap?: Partial<Record<string, string | null>> });
     }
     const models = handle.listModels(options.provider);
     const match = models.find((model) => `${model.provider}/${model.id}` === requested || model.id === options.model);
@@ -167,6 +165,37 @@ export async function ensurePiAuth(
   await handle.login(provider, createTerminalAuthInteraction(), type);
 }
 
+/**
+ * Resolve a thinking level for a reasoning model: explicit (validated) or an
+ * interactive picker. Non-reasoning models resolve to `undefined`.
+ */
+export async function chooseThinkingLevel(
+  model: PiModelInfo,
+  requested?: string,
+): Promise<string | undefined> {
+  if (!model.reasoning) {
+    return undefined;
+  }
+  const levels: string[] = model.supportedThinkingLevels ?? ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
+  if (requested) {
+    if (levels.includes(requested)) {
+      return requested;
+    }
+    throw new Error(`thinking level '${requested}' is not supported by ${model.provider}/${model.id}; supported: ${levels.join(', ')}`);
+  }
+  if (levels.length <= 1) {
+    return levels[0];
+  }
+  if (!process.stdin.isTTY) {
+    return undefined;
+  }
+  const picked = await pickFromList({
+    message: `Thinking level for ${model.provider}/${model.id}`,
+    items: levels.map((level) => ({ id: level, label: level })),
+  });
+  return picked ?? undefined;
+}
+
 async function setupPiBackend(
   workspaceRoot: string,
   options: SetBackendOptions,
@@ -193,11 +222,13 @@ async function setupPiBackend(
 
   const model = await choosePiModel(handle, options);
   await ensurePiAuth(handle, model.provider, options);
+  const thinkingLevel = await chooseThinkingLevel(model, options.thinking);
 
   // Validate that the model is usable before persisting the choice.
   const probe = await createPiBackend({
     modelRegistry: handle.registry,
     model: `${model.provider}/${model.id}`,
+    thinkingLevel,
   });
 
   await updateConfig(workspaceRoot, {
@@ -207,6 +238,7 @@ async function setupPiBackend(
       modelsPath: options.models ?? null,
       authPath: options.auth ?? null,
       model: probe.modelId,
+      thinkingLevel: probe.thinkingLevel,
     },
   });
 
@@ -214,7 +246,8 @@ async function setupPiBackend(
     kind: 'pi',
     model: probe.modelId,
     provider: model.provider,
-    info: `backend: pi (model: ${probe.modelId})`,
+    thinkingLevel: probe.thinkingLevel,
+    info: `backend: pi (model: ${probe.modelId}${probe.thinkingLevel ? `, thinking: ${probe.thinkingLevel}` : ''})`,
   };
 }
 
@@ -237,6 +270,7 @@ export async function getBackendStatus(workspaceRoot: string): Promise<string> {
     return [
       'backend: pi',
       `model: ${backend.model ?? '(first available)'}`,
+      `thinking: ${backend.thinkingLevel ?? '(provider default)'}`,
       `agentDir: ${backend.agentDir ?? '(pi default)'}`,
       `pi package: ${isPiPackageAvailable() ? 'available' : 'NOT FOUND'}`,
     ].join('\n');
@@ -252,6 +286,7 @@ export function registerSetBackendCommand(program: Command): void {
     .option('--models <path>', 'explicit models.json path')
     .option('--auth <path>', 'explicit auth.json path')
     .option('--model <provider/model>', 'pin the default model (skips the picker)')
+    .option('--thinking <level>', 'thinking level for reasoning models (off|minimal|low|medium|high|xhigh|max)')
     .option('--provider <id>', 'restrict the catalog/picker to one provider')
     .option('--api-key <key>', 'store an API key for the provider in pi credentials')
     .option('--install', `(no-op) ${PI_PACKAGE} ships as a dependency`)
@@ -266,6 +301,7 @@ export function registerSetBackendCommand(program: Command): void {
             console.log(JSON.stringify({
               kind: config.backend?.kind ?? 'env',
               model: config.backend?.model,
+              thinkingLevel: config.backend?.thinkingLevel,
               agentDir: config.backend?.agentDir,
               piAvailable: isPiPackageAvailable(),
             }));
@@ -293,8 +329,7 @@ export function registerSetBackendCommand(program: Command): void {
             console.log(`\npi chat models (${result.models?.length ?? 0}):\n`);
             for (const model of result.models ?? []) {
               console.log(`  ${model.provider}/${model.id}${model.reasoning ? ' [reasoning]' : ''}`);
-            }
-          }
+            }          }
           return;
         }
         console.log(result.info);

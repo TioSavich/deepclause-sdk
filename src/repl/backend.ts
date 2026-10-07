@@ -26,6 +26,8 @@ export interface PiBackendConfig {
   modelsPath?: string | null;
   authPath?: string | null;
   model?: string;
+  /** Requested thinking level for reasoning models (see `ThinkingLevel`). */
+  thinkingLevel?: string;
 }
 
 export interface ResolvedBackendPaths {
@@ -40,6 +42,50 @@ export interface PiModelLike {
   provider: string;
   id: string;
   api?: string;
+  /** Whether the model accepts a thinking/reasoning level. */
+  reasoning?: boolean;
+  /** Model context window in tokens. */
+  contextWindow?: number;
+  /** Maximum output tokens. */
+  maxTokens?: number;
+  /** Maps pi thinking levels to provider values; `null` marks a level unsupported. */
+  thinkingLevelMap?: Partial<Record<ThinkingLevel, string | null>>;
+}
+
+/** pi's thinking levels, in ascending effort order. */
+export type ThinkingLevel = 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+
+export const THINKING_LEVELS: readonly ThinkingLevel[] = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
+
+/** Levels a model accepts: reasoning models expose all but explicitly-unsupported ones. */
+export function supportedThinkingLevels(model: PiModelLike): ThinkingLevel[] {
+  if (!model.reasoning) {
+    return ['off'];
+  }
+  return THINKING_LEVELS.filter((level) => model.thinkingLevelMap?.[level] !== null);
+}
+
+/**
+ * Validate a requested thinking level against the model. Returns the level to
+ * pass through (or `undefined` for the provider default) plus a warning when a
+ * request had to be dropped.
+ */
+export function resolveThinkingLevel(
+  model: PiModelLike,
+  requested?: string,
+): { level?: ThinkingLevel; supported: ThinkingLevel[]; warning?: string } {
+  const supported = supportedThinkingLevels(model);
+  if (!requested) {
+    return { level: undefined, supported };
+  }
+  if ((THINKING_LEVELS as readonly string[]).includes(requested) && supported.includes(requested as ThinkingLevel)) {
+    return { level: requested as ThinkingLevel, supported };
+  }
+  return {
+    level: undefined,
+    supported,
+    warning: `thinking level '${requested}' is not supported by ${model.provider}/${model.id}; using the provider default`,
+  };
 }
 
 export interface PiCompletionRequest {
@@ -183,15 +229,31 @@ function toPiMessages(messages: LLMBackendMessage[], model: PiModelLike): unknow
 /**
  * Wrap a pi registry + model as an SDK `LLMBackend`. Reused by the extension
  * embedding, which passes its live registry.
+ *
+ * `thinkingLevel` is forwarded to the provider only for reasoning models and
+ * non-`off` levels, so provider defaults are preserved for every other model.
  */
 export function createPiAdapter(
   registry: PiRegistryLike,
   model: PiModelLike,
   maxTokens = 65536,
-): { backend: LLMBackend; modelId: string; provider: string } {
+  thinkingLevel?: string,
+): {
+  backend: LLMBackend;
+  modelId: string;
+  provider: string;
+  contextWindow?: number;
+  maxTokens: number;
+  reasoning: boolean;
+  thinkingLevel?: ThinkingLevel;
+  supportedThinkingLevels: ThinkingLevel[];
+  warning?: string;
+} {
   if (!registry.hasConfiguredAuth(model)) {
     throw new Error(`pi has no configured authentication for ${modelLabel(model)}`);
   }
+
+  const resolved = resolveThinkingLevel(model, thinkingLevel);
 
   const backend: LLMBackend = {
     async complete(request: LLMBackendRequest): Promise<LLMBackendResponse> {
@@ -209,11 +271,14 @@ export function createPiAdapter(
           parameters: tool.parameters,
         })),
       };
-      const options = {
+      const options: Record<string, unknown> = {
         signal: request.signal,
         maxTokens: request.maxTokens ?? maxTokens,
         cacheRetention: 'none',
       };
+      if (model.reasoning && resolved.level && resolved.level !== 'off') {
+        options.thinkingLevel = resolved.level;
+      }
 
       let response: PiCompletionResult;
       if (registry.streamSimple) {
@@ -269,7 +334,17 @@ export function createPiAdapter(
     },
   };
 
-  return { backend, modelId: modelLabel(model), provider: model.provider };
+  return {
+    backend,
+    modelId: modelLabel(model),
+    provider: model.provider,
+    contextWindow: model.contextWindow,
+    maxTokens,
+    reasoning: Boolean(model.reasoning),
+    thinkingLevel: resolved.level,
+    supportedThinkingLevels: resolved.supported,
+    warning: resolved.warning,
+  };
 }
 
 interface PiModule {
@@ -338,6 +413,21 @@ export interface PiModelInfo {
   reasoning: boolean;
   contextWindow?: number;
   maxTokens?: number;
+  /** Thinking levels the model accepts (empty/undefined for non-reasoning). */
+  supportedThinkingLevels?: ThinkingLevel[];
+}
+
+/** Build the catalog `PiModelInfo` (with reasoning levels) from a raw model. */
+export function toPiModelInfo(model: PiModelLike & { name?: string }): PiModelInfo {
+  return {
+    provider: model.provider,
+    id: model.id,
+    name: model.name ?? model.id,
+    reasoning: Boolean(model.reasoning),
+    contextWindow: model.contextWindow,
+    maxTokens: model.maxTokens,
+    supportedThinkingLevels: supportedThinkingLevels(model),
+  };
 }
 
 export interface PiAuthPromptLike {
@@ -382,14 +472,7 @@ export function listPiProviders(runtime: PiRuntimeLike): PiProviderInfo[] {
 
 /** List chat models from a pi runtime, optionally filtered by provider. */
 export function listPiModels(runtime: PiRuntimeLike, providerId?: string): PiModelInfo[] {
-  return runtime.getModels(providerId).map((model) => ({
-    provider: model.provider,
-    id: model.id,
-    name: (model as { name?: string }).name ?? model.id,
-    reasoning: Boolean((model as { reasoning?: boolean }).reasoning),
-    contextWindow: (model as { contextWindow?: number }).contextWindow,
-    maxTokens: (model as { maxTokens?: number }).maxTokens,
-  }));
+  return runtime.getModels(providerId).map((model) => toPiModelInfo(model as PiModelLike & { name?: string }));
 }
 
 /** A pi runtime handle: the model registry plus catalog/auth operations. */
@@ -450,15 +533,25 @@ export async function openPiRuntime(
   };
 }
 
+/** Resolved pi backend plus the model capabilities the UI/config needs. */
+export interface PiBackendInfo {
+  backend: LLMBackend;
+  modelId: string;
+  provider: string;
+  contextWindow?: number;
+  maxTokens: number;
+  reasoning: boolean;
+  thinkingLevel?: ThinkingLevel;
+  supportedThinkingLevels: ThinkingLevel[];
+  /** Set when a requested thinking level was unsupported and dropped. */
+  warning?: string;
+}
+
 /**
  * Build an `LLMBackend` from pi's credential store. Throws a clear error when
  * the pi packages are not installed.
  */
-export async function createPiBackend(options: CreatePiBackendOptions = {}): Promise<{
-  backend: LLMBackend;
-  modelId: string;
-  provider: string;
-}> {
+export async function createPiBackend(options: CreatePiBackendOptions = {}): Promise<PiBackendInfo> {
   let registry = options.modelRegistry;
   let requested = options.model;
 
@@ -475,7 +568,7 @@ export async function createPiBackend(options: CreatePiBackendOptions = {}): Pro
   }
 
   const model = selectPiModel(registry, requested);
-  return createPiAdapter(registry, model, options.maxTokens);
+  return createPiAdapter(registry, model, options.maxTokens, options.thinkingLevel);
 }
 
 export interface ResolveBackendOptions {
@@ -486,6 +579,7 @@ export interface ResolveBackendOptions {
   agentDir?: string;
   modelsPath?: string | null;
   authPath?: string | null;
+  thinkingLevel?: string;
 }
 
 export interface ResolvedBackend {
@@ -497,6 +591,10 @@ export interface ResolvedBackend {
   model: string;
   /** `provider/model` (pi) or bare id (env), for display/persistence. */
   modelId: string;
+  /** pi model capabilities (undefined for env). */
+  contextWindow?: number;
+  reasoning?: boolean;
+  thinkingLevel?: ThinkingLevel;
 }
 
 /**
@@ -513,6 +611,7 @@ export async function resolveLlmBackend(options: ResolveBackendOptions = {}): Pr
       authPath: options.authPath ?? undefined,
       model: options.model,
       maxTokens: options.maxTokens,
+      thinkingLevel: options.thinkingLevel,
     });
     return {
       kind: 'pi',
@@ -520,6 +619,9 @@ export async function resolveLlmBackend(options: ResolveBackendOptions = {}): Pr
       provider: pi.provider,
       model: pi.modelId.split('/').slice(1).join('/') || pi.modelId,
       modelId: pi.modelId,
+      contextWindow: pi.contextWindow,
+      reasoning: pi.reasoning,
+      thinkingLevel: pi.thinkingLevel,
     };
   }
   const model = options.model ?? 'gpt-4o';

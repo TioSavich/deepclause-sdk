@@ -8,7 +8,9 @@ import {
   createPiBackend,
   isPiPackageAvailable,
   resolvePiPaths,
+  resolveThinkingLevel,
   selectPiModel,
+  supportedThinkingLevels,
   type PiModelLike,
   type PiRegistryLike,
 } from '../src/repl/backend.js';
@@ -178,5 +180,77 @@ describe('createPiBackend', () => {
     expect(modelId).toBe('anthropic/claude-test');
     const response = await backend.complete({ messages: [{ role: 'user', content: 'hi' }] });
     expect(response.text).toBe('hello from pi');
+  });
+});
+
+const REASONING_MODEL: PiModelLike = {
+  provider: 'anthropic',
+  id: 'claude-think',
+  api: 'anthropic',
+  reasoning: true,
+  contextWindow: 200_000,
+  maxTokens: 8192,
+  thinkingLevelMap: { high: 'high', xhigh: null, max: null },
+};
+
+function streamStub(): {
+  [Symbol.asyncIterator](): AsyncIterator<{ type: string }>;
+  result(): Promise<{ content: Array<{ type: 'text'; text: string }>; usage: { input: number; output: number; totalTokens: number }; stopReason: 'stop' }>;
+} {
+  return {
+    async *[Symbol.asyncIterator]() {
+      /* no deltas needed */
+    },
+    result: async () => ({
+      content: [{ type: 'text', text: 'ok' }],
+      usage: { input: 1, output: 1, totalTokens: 2 },
+      stopReason: 'stop',
+    }),
+  };
+}
+
+describe('reasoning levels', () => {
+  it('lists supported levels, excluding null map entries', () => {
+    expect(supportedThinkingLevels(REASONING_MODEL)).toEqual(['off', 'minimal', 'low', 'medium', 'high']);
+    expect(supportedThinkingLevels(MODEL)).toEqual(['off']);
+  });
+
+  it('validates a requested level and warns on an unsupported one', () => {
+    expect(resolveThinkingLevel(REASONING_MODEL, 'medium')).toMatchObject({ level: 'medium' });
+    const bad = resolveThinkingLevel(REASONING_MODEL, 'xhigh');
+    expect(bad.level).toBeUndefined();
+    expect(bad.warning).toMatch(/not supported/);
+    expect(resolveThinkingLevel(REASONING_MODEL).level).toBeUndefined();
+  });
+
+  it('forwards the thinking level to streamSimple and reports capabilities', async () => {
+    let seen: Record<string, unknown> | undefined;
+    const registry = stubRegistry({
+      streamSimple: (_model, _context, options) => {
+        seen = options as Record<string, unknown>;
+        return streamStub();
+      },
+    });
+    const info = createPiAdapter(registry, REASONING_MODEL, 8192, 'high');
+    await info.backend.complete({ messages: [{ role: 'user', content: 'hi' }] });
+    expect(seen?.thinkingLevel).toBe('high');
+    expect(info.contextWindow).toBe(200_000);
+    expect(info.reasoning).toBe(true);
+    expect(info.thinkingLevel).toBe('high');
+    expect(info.supportedThinkingLevels).toEqual(['off', 'minimal', 'low', 'medium', 'high']);
+  });
+
+  it('omits the thinking level for non-reasoning models and off', async () => {
+    const calls: Array<Record<string, unknown>> = [];
+    const registry = stubRegistry({
+      streamSimple: (_model, _context, options) => {
+        calls.push(options as Record<string, unknown>);
+        return streamStub();
+      },
+    });
+    await createPiAdapter(registry, REASONING_MODEL, 8192, 'off').backend.complete({ messages: [{ role: 'user', content: 'hi' }] });
+    await createPiAdapter(registry, MODEL, 8192, 'high').backend.complete({ messages: [{ role: 'user', content: 'hi' }] });
+    expect(calls[0].thinkingLevel).toBeUndefined();
+    expect(calls[1].thinkingLevel).toBeUndefined();
   });
 });

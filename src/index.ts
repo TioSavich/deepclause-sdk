@@ -33,9 +33,47 @@ export type {
 
 // DML REPL (goal + prompt mode) for CLI and embedding
 export { createHarnessRepl } from './repl/index.js';
-export { DMLSession } from './repl/session.js';
-export type { HarnessRepl, HarnessReplOptions, RunOpts, DMLQueryEvent, ReplEvent, RollbackResult } from './repl/index.js';
+export { DMLSession } from './repl/session.js';export type { HarnessRepl, HarnessReplOptions, RunOpts, DMLQueryEvent, ReplEvent, RollbackResult } from './repl/index.js';
 export type { DMLSessionOptions, DMLQueryOptions } from './repl/session.js';
+export { formatListing, highlightProlog, reflowListing } from './repl/highlight.js';
+
+// RepL status accounting (status bar) and TypeScript compaction (ported from pi)
+export {
+  ReplStatusTracker,
+  formatStatusLine,
+  formatTokens,
+  formatUsageSegment,
+  formatContextSegment,
+  formatModelSegment,
+} from './repl/status.js';
+export type {
+  ReplStatusSnapshot,
+  ReplStatusTrackerOptions,
+  StatusModelInfo,
+  StatusContextUsage,
+  StatusCompactionInfo,
+} from './repl/status.js';
+export {
+  DEFAULT_COMPACTION_SETTINGS,
+  SUMMARY_PREFIX,
+  buildSummaryMessage,
+  buildSummarizationPrompt,
+  calculateContextTokens,
+  compactMemory,
+  estimateMemoryTokens,
+  findCompactionCut,
+  findExistingSummary,
+  generateMemorySummary,
+  serializeMemoryConversation,
+  shouldCompact,
+  toCompactionEvent,
+} from './repl/compaction.js';
+export type {
+  CompactionSettings,
+  CompactMemoryResult,
+  CompactMemoryReason,
+  MemoryCompactionEvent,
+} from './repl/compaction.js';
 export type { HarnessExportOptions, HarnessExportResult } from './repl/export.js';
 export { createPiBackend, createPiAdapter, resolvePiPaths, selectPiModel } from './repl/backend.js';
 export { createReplToolset, buildToolCatalog } from './repl/toolset.js';

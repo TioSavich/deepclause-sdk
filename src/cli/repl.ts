@@ -17,10 +17,15 @@ import { createHarnessRepl, type HarnessRepl } from '../repl/index.js';
 import { HistoryStore } from '../repl/history.js';
 import { resolveReplJudgeSelection } from '../repl/judge.js';
 import { ReplRenderer, type RenderMode } from '../repl/render.js';
+import { ReplStatusTracker, type ReplStatusSnapshot } from '../repl/status.js';
+import { LineSink, TranscriptComponent } from '../repl/tui/transcript.js';
+import { StatusBarComponent } from '../repl/tui/status-bar.js';
+import { Container, Editor, ProcessTerminal, Spacer, TuiMainScreen, matchesKey } from '@earendil-works/pi-tui';
+import { editorTheme, formatInputAnswer } from '../repl/tui/theme.js';
 import { createPiBackend } from '../repl/backend.js';
 import { createReplToolset, type ReplToolset } from '../repl/toolset.js';
 import { parseModelId, type Provider } from '../system/config/model-slots.js';
-import { loadReplConfig, updateConfig } from './config.js';
+import { loadReplConfig, resolveReplCompactionConfig, updateConfig } from './config.js';
 
 export interface ReplCliOptions {
   goal?: string[];
@@ -33,6 +38,8 @@ export interface ReplCliOptions {
   workspace?: string;
   model?: string;
   provider?: string;
+  /** Thinking level for reasoning models (off|minimal|low|medium|high|xhigh|max). */
+  thinking?: string;
   temperature?: number;
   gasLimit?: number;
   depth?: number;
@@ -58,6 +65,8 @@ export interface ReplCliOptions {
   noAsk?: boolean;
   answer?: string;
   interactiveInput?: boolean;
+  /** Interactive UI: auto (TUI on a TTY), on, or off. */
+  tui?: 'auto' | 'on' | 'off';
 }
 
 export type ReplInput =
@@ -68,6 +77,7 @@ export type ReplInput =
   | { kind: 'listing'; filter?: string }
   | { kind: 'reset' }
   | { kind: 'rollback' }
+  | { kind: 'compact'; instructions?: string }
   | { kind: 'model'; model?: string }
   | { kind: 'export'; path?: string }
   | { kind: 'freeze' }
@@ -113,6 +123,12 @@ export function classifyReplInput(line: string): ReplInput {
   }
   if (commandLine.startsWith('model ')) {
     return { kind: 'model', model: commandLine.slice('model '.length).trim() || undefined };
+  }
+  if (commandLine === 'compact') {
+    return { kind: 'compact' };
+  }
+  if (commandLine.startsWith('compact ')) {
+    return { kind: 'compact', instructions: commandLine.slice('compact '.length).trim() || undefined };
   }
   if (commandLine === 'export') {
     return { kind: 'export' };
@@ -212,12 +228,20 @@ export interface ReplRuntime {
   /** Resolved model and backend, shown in the startup banner. */
   model: string;
   backend: 'env' | 'pi';
+  /** Active model capabilities (pi backend), used by the status bar. */
+  contextWindow?: number;
+  reasoning: boolean;
+  thinkingLevel?: string;
   /** Session id of this run. */
   sessionId: string;
   /** Session id when the run resumed an earlier session. */
   resumedSession?: string;
   /** True when persistent history is enabled (sessions can be resumed). */
   historyEnabled: boolean;
+  /** Current usage/context/model status for the status bar. */
+  statusSnapshot(): ReplStatusSnapshot;
+  /** Resolved interactive UI mode (`auto` unless overridden by config/flags). */
+  tuiMode: 'auto' | 'on' | 'off';
   /** Replace the input channel (the interactive loop uses its own readline). */
   setOnInput(handler: (prompt: string, choices?: string[]) => Promise<string | undefined>): void;
   /** Set when the env backend has no credentials for the selected provider. */
@@ -235,6 +259,7 @@ const PROVIDER_ENV_KEYS: Record<string, string> = {
 export async function createReplRuntime(options: ReplCliOptions): Promise<ReplRuntime> {
   const workspace = path.resolve(options.workspace ?? './');
   const config = await loadReplConfig(workspace);
+  const replCompaction = resolveReplCompactionConfig(config);
   const modelId = options.model ?? config.models.run;
   const resolved = resolveModel(modelId);
   const provider = (options.provider as Provider | undefined) ?? resolved.provider;
@@ -245,7 +270,9 @@ export async function createReplRuntime(options: ReplCliOptions): Promise<ReplRu
     verbose: options.verbose ?? false,
     stream: options.stream !== false,
     events: options.events !== false,
+    onEvent: (event) => statusHolder.tracker?.observe(event),
   });
+  const statusHolder: { tracker?: ReplStatusTracker } = {};
 
   // `null` means no capability tools; `undefined` means use the default
   // (bash). An explicit `tools: []` in config also disables capability tools.
@@ -273,6 +300,9 @@ export async function createReplRuntime(options: ReplCliOptions): Promise<ReplRu
   let llmBackend;
   let harnessModel = resolved.model;
   let harnessProvider: Provider = provider;
+  let contextWindow: number | undefined;
+  let reasoning = false;
+  let thinkingLevel: string | undefined;
   if (backendKind === 'pi') {
     try {
       const pi = await createPiBackend({
@@ -280,10 +310,15 @@ export async function createReplRuntime(options: ReplCliOptions): Promise<ReplRu
         modelsPath: config.backend?.modelsPath ?? undefined,
         authPath: config.backend?.authPath ?? undefined,
         model: options.model ?? config.backend?.model,
+        thinkingLevel: options.thinking ?? config.backend?.thinkingLevel,
       });
       llmBackend = pi.backend;
       harnessModel = pi.modelId.split('/').slice(1).join('/') || pi.modelId;
       harnessProvider = (pi.provider as Provider) ?? harnessProvider;
+      contextWindow = pi.contextWindow;
+      reasoning = pi.reasoning;
+      thinkingLevel = pi.thinkingLevel;
+      if (pi.warning) process.stderr.write(`[deepclause] ${pi.warning}\n`);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       throw new Error(
@@ -363,10 +398,23 @@ export async function createReplRuntime(options: ReplCliOptions): Promise<ReplRu
     llmBackend,
     judgeSelection,
     history: historyOptions,
+    compaction: { settings: replCompaction, auto: replCompaction.auto },
+    contextWindow,
     onInput: buildCliOnInput(options),
   });
 
   let missingCredential: string | undefined;
+
+  const statusTracker = new ReplStatusTracker({
+    model: {
+      id: harnessModel,
+      provider: String(harnessProvider),
+      reasoning,
+      thinkingLevel,
+    },
+    contextWindow,
+  });
+  statusHolder.tracker = statusTracker;
   if (backendKind === 'env') {
     const envKey = PROVIDER_ENV_KEYS[harnessProvider];
     const configured = config.providers?.[harnessProvider]?.apiKey;
@@ -386,9 +434,14 @@ export async function createReplRuntime(options: ReplCliOptions): Promise<ReplRu
     version: PACKAGE_VERSION,
     model: backendKind === 'pi' ? harnessModel : `${harnessProvider}:${harnessModel}`,
     backend: backendKind,
+    contextWindow,
+    reasoning,
+    thinkingLevel,
     sessionId: repl.session.getSessionId(),
     resumedSession: resume ? sessionId : undefined,
     historyEnabled: Boolean(historyOptions),
+    statusSnapshot: () => statusTracker.snapshot(),
+    tuiMode: options.tui ?? config.repl.tui ?? 'auto',
     setOnInput: (handler) => repl.setOnInput(handler),
     missingCredential,
   };
@@ -493,7 +546,7 @@ export async function dispatchReplInput(
       return true;
     case 'listing': {
       const text = await repl.list(input.filter);
-      print(text.trimEnd() || '% (empty harness)');
+      print(runtime.renderer.listing(text.trimEnd() || '% (empty harness)'));
       return true;
     }
     case 'reset':
@@ -510,6 +563,17 @@ export async function dispatchReplInput(
         print(`rolled back harness: version ${result.from} → ${result.to}`);
       } else {
         print(`ERROR: ${result.error ?? 'rollback failed'}`);
+      }
+      return true;
+    }
+    case 'compact': {
+      const result = await repl.compact(input.instructions);
+      if (result.applied) {
+        print(`compacted meta memory: ${result.beforeTokens} → ${result.afterTokens} tokens`);
+      } else if (result.error) {
+        print(`compact skipped: ${result.error}`);
+      } else {
+        print(`nothing to compact (${result.beforeTokens} tokens)`);
       }
       return true;
     }
@@ -832,6 +896,172 @@ export async function runInteractiveGoal(
   renderer.writeLine(answered ? '.' : 'false.');
 }
 
+/** Prompt used while a turn is gathering `ask_user` / `input/2` input. */
+const ASK_PROMPT = '> ';
+
+/**
+ * Interactive TUI for the REPL: a scrolling transcript, a fixed editor, and a
+ * fixed status bar below the input. It reuses `ReplRenderer` (rich mode) for all
+ * transcript formatting by redirecting its output through a `LineSink`.
+ *
+ * `ask_user` / `input/2` route through the same editor: a question is written
+ * to the transcript and the next submitted line is returned to the runtime, so
+ * input prompts never fight the main prompt for stdin.
+ */
+export async function runTui(
+  runtime: ReplRuntime,
+  options: ReplCliOptions,
+  onExit?: () => Promise<void>,
+  loaded: string[] = [],
+): Promise<number> {
+  const terminal = new ProcessTerminal();
+  const tui = new TuiMainScreen(terminal);
+  const transcript = new TranscriptComponent();
+  const sink = new LineSink(transcript);
+  const statusBar = new StatusBarComponent({
+    getSnapshot: () => runtime.statusSnapshot(),
+    workspace: runtime.workspace,
+    sessionId: runtime.sessionId,
+    backend: runtime.backend,
+    isFrozen: () => runtime.repl.isFrozen(),
+  });
+  transcript.onChange = () => tui.requestRender();
+
+  // Redirect the renderer into the transcript (including error lines).
+  runtime.renderer.setSink((text) => sink.write(text), (text) => sink.write(text));
+  runtime.renderer.setWidth(terminal.columns);
+  const onResize = (): void => {
+    runtime.renderer.setWidth(terminal.columns);
+    tui.requestRender();
+  };
+  process.stdout.on('resize', onResize);
+
+  const editorContainer = new Container();
+  let editor: Editor | undefined;
+  let activePrompt = runtime.promptPrefix;
+  let pendingResolve: ((value: string | null) => void) | null = null;
+  const holder: { turn: AbortController | null } = { turn: null };
+
+  const installEditor = (value = ''): void => {
+    const next = new Editor(tui, editorTheme());
+    if (value) next.addToHistory(value);
+    next.onSubmit = (text) => {
+      const resolve = pendingResolve;
+      pendingResolve = null;
+      if (text) {
+        if (activePrompt === runtime.promptPrefix) {
+          // A user turn: separate it from the previous output and from the
+          // response that follows; render it as a pi-style blue block.
+          if (transcript.getLines().length > 0) transcript.append('');
+          transcript.append(text, 'user');
+          transcript.append('');
+        } else if (activePrompt === ASK_PROMPT) {
+          transcript.append(formatInputAnswer(text));
+        } else if (activePrompt.trim() !== ';') {
+          transcript.append(`${activePrompt}${text}`);
+        }
+      }
+      installEditor(text);
+      tui.requestRender();
+      resolve?.(text);
+    };
+    editor = next;
+    editorContainer.clear();
+    editorContainer.addChild(next);
+    tui.setFocus(next);
+  };
+
+  const ask = (label: string): Promise<string | null> => new Promise((resolve) => {
+    activePrompt = label;
+    pendingResolve = resolve;
+    if (editor) tui.setFocus(editor);
+    tui.requestRender();
+  });
+
+  // Route ask_user / input/2 through the transcript + editor.
+  runtime.setOnInput(async (prompt, choices) => {
+    const suffix = choices && choices.length > 0 ? ` (${choices.join('/')})` : '';
+    transcript.append(`? ${prompt}${suffix}`);
+    const answer = await ask(ASK_PROMPT);
+    return answer === null ? undefined : answer;
+  });
+
+  const cancelTurn = (): void => {
+    if (holder.turn) {
+      holder.turn.abort(new Error('cancelled by user'));
+      transcript.append('(cancelling current turn… press Ctrl-C again to exit)');
+      tui.requestRender();
+      return;
+    }
+    void (onExit ? onExit() : Promise.resolve()).finally(() => {
+      tui.stop();
+      process.exit(130);
+    });
+  };
+
+  // Ctrl-C aborts the current turn; Ctrl-D (on an empty editor) exits. Use pi's
+  // key matcher so kitty/meta key encodings are recognized, not just raw bytes.
+  tui.addInputListener((data) => {
+    if (matchesKey(data, 'ctrl+c')) {
+      cancelTurn();
+      return { consume: true };
+    }
+    if (matchesKey(data, 'ctrl+d') && !holder.turn && (editor?.getText().length ?? 0) === 0) {
+      cancelTurn();
+      return { consume: true };
+    }
+    return undefined;
+  });
+  // Fallback for terminals/raw-mode setups that deliver SIGINT instead of \x03.
+  process.on('SIGINT', cancelTurn);
+
+  installEditor();
+  tui.addChild(transcript);
+  tui.addChild(new Spacer(1));
+  tui.addChild(editorContainer);
+  tui.addChild(statusBar);
+  tui.start();
+
+  printBanner(runtime, loaded);
+  tui.requestRender();
+
+  try {
+    while (true) {
+      const line = await ask(runtime.promptPrefix);
+      if (line === null) break;
+      const input = classifyReplInput(line);
+      if (input.kind === 'halt') break;
+
+      const controller = new AbortController();
+      holder.turn = controller;
+      try {
+        if (input.kind === 'goal') {
+          await runInteractiveGoal(runtime.repl, runtime.renderer, input.goal, options, ask, controller.signal);
+        } else {
+          const keepGoing = await dispatchReplInput(runtime, input, {
+            first: options.first,
+            exportPath: options.exportPath,
+            signal: controller.signal,
+          });
+          if (!keepGoing) break;
+        }
+      } finally {
+        holder.turn = null;
+      }
+    }
+  } finally {
+    tui.stop();
+    process.off('SIGINT', cancelTurn);
+    process.stdout.off('resize', onResize);
+    // Restore stdout so the exit footer and any later output are visible.
+    runtime.renderer.setSink(
+      (text) => process.stdout.write(text),
+      (text) => process.stderr.write(text),
+    );
+  }
+  return 0;
+}
+
 /** Entry point for `deepclause repl`. */
 export async function startRepl(options: ReplCliOptions): Promise<number> {
   let runtime: ReplRuntime;
@@ -896,8 +1126,16 @@ export async function startRepl(options: ReplCliOptions): Promise<number> {
     if (!process.stdin.isTTY) {
       return await runNonInteractive(runtime, options, saveHarnessOnExit);
     }
-    printBanner(runtime, options.load ?? []);
     bannerShown = true;
+    const tuiMode = runtime.tuiMode;
+    const wantTui = tuiMode !== 'off'
+      && !options.plain
+      && !options.json
+      && (tuiMode === 'on' || Boolean(process.stdout.isTTY));
+    if (wantTui) {
+      return await runTui(runtime, options, saveHarnessOnExit, options.load ?? []);
+    }
+    printBanner(runtime, options.load ?? []);
     return await runInteractive(runtime, options, saveHarnessOnExit);
   } finally {
     await saveHarnessOnExit();
@@ -937,6 +1175,7 @@ export function registerReplCommand(program: Command): void {
     .option('--workspace <path>', 'workspace root for file operations', './')
     .option('--model <model>', 'override the configured run model')
     .option('--provider <provider>', 'override the configured provider')
+    .option('--thinking <level>', 'thinking level for reasoning models (off|minimal|low|medium|high|xhigh|max)')
     .option('--temperature <number>', 'override temperature (0.0-2.0)', parseFloat)
     .option('--gas-limit <number>', 'per-frame step limit', parseInt)
     .option('--depth <number>', 'maximum nested frame depth (default 3)', parseInt)
@@ -952,6 +1191,12 @@ export function registerReplCommand(program: Command): void {
     .option('--no-ask', 'make ask_user / input/2 fail instead of prompting')
     .option('--answer <text>', 'canned answer for any input request')
     .option('--interactive-input', 'allow input requests to read stdin in non-TTY/--json mode')
+    .option('--tui <mode>', 'interactive UI: auto (TUI on a TTY), on, or off', (value: string) => {
+      if (value !== 'auto' && value !== 'on' && value !== 'off') {
+        throw new Error(`invalid --tui mode: ${value} (use auto, on, or off)`);
+      }
+      return value;
+    })
     .option('-P, --param <key=value>', 'session parameter (repeatable)', collectParams, {})
     .option('-f, --freeze', 'start with the harness frozen (read-only lock)')
     .option('--locked', 'like --freeze, but forbid unfreeze for this process')
@@ -970,6 +1215,7 @@ export function registerReplCommand(program: Command): void {
         workspace: options.workspace,
         model: options.model,
         provider: options.provider,
+        thinking: options.thinking,
         temperature: options.temperature,
         gasLimit: options.gasLimit,
         depth: options.depth,
@@ -985,6 +1231,7 @@ export function registerReplCommand(program: Command): void {
         noAsk: options.ask === false,
         answer: options.answer,
         interactiveInput: options.interactiveInput,
+        tui: options.tui,
         param: options.param,
         verbose: Boolean(options.verbose || options.debug),
         color: options.color,

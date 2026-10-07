@@ -79,6 +79,8 @@
     repl_execute_frame/4,
     repl_record_meta/3,
     repl_memory_term/3,
+    repl_get_memory/3,
+    repl_set_memory/3,
     post_agent_result/4,
     post_exec_result/3,
     post_sample_token_result/3,
@@ -1987,10 +1989,42 @@ repl_record_meta(SessionId, Request, Summary) :-
         [message{role: user, content: Request},
          message{role: assistant, content: Summary}],
         Combined),
-    % 20 messages = 10 request/outcome exchanges; entries are short now.
-    last_n(Combined, 20, Bounded),
+    % Keep every system message (compaction checkpoints) and the last 20
+    % conversational messages; naive last_n/3 would evict old checkpoints.
+    findall(M, (member(M, Combined), repl_system_message(M)), SystemMessages),
+    findall(M, (member(M, Combined), \+ repl_system_message(M)), Conversational),
+    last_n(Conversational, 20, Recent),
+    append(SystemMessages, Recent, Bounded),
     retractall(session_meta_memory(SessionId, _)),
     assertz(session_meta_memory(SessionId, Bounded)).
+
+%% repl_system_message(+Message)
+repl_system_message(message{role: system, content: _}).
+
+%% repl_get_memory(+SessionId, +Slot, -Messages)
+%% Read a live memory slot as the message list stored in the session.
+repl_get_memory(SessionId, Slot, Messages) :-
+    (   Slot == meta
+    ->  (   session_meta_memory(SessionId, Memory)
+        ->  true
+        ;   Memory = []
+        )
+    ;   (   session_repl_memory(SessionId, Memory)
+        ->  true
+        ;   Memory = []
+        )
+    ),
+    Messages = Memory.
+
+%% repl_set_memory(+SessionId, +Slot, +Messages)
+%% Replace a live memory slot (used by host-side TypeScript compaction).
+repl_set_memory(SessionId, Slot, Messages) :-
+    (   Slot == meta
+    ->  retractall(session_meta_memory(SessionId, _)),
+        assertz(session_meta_memory(SessionId, Messages))
+    ;   retractall(session_repl_memory(SessionId, _)),
+        assertz(session_repl_memory(SessionId, Messages))
+    ).
 
 %% ---- Edit transactions ----
 

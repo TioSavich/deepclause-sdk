@@ -13,6 +13,7 @@ import {
   getWorkspaceDocAssetPath,
 } from '../system/assets/index.js';
 import type { CompactionOptions } from '../types.js';
+import type { CompactionSettings } from '../repl/compaction.js';
 import {
   DEFAULT_MODEL_IDS,
   DEFAULT_TEMPERATURES,
@@ -119,6 +120,15 @@ const ModelOptionsSchema = z.object({
 /**
  * DML REPL settings. All optional; see docs/DML_REPL_PROPOSAL.md §13.4.
  */
+/** TypeScript compaction settings for the REPL (ported from pi). */
+const ReplCompactionSchema = z.object({
+  enabled: z.boolean().optional().default(true),
+  /** Compact automatically when the context crosses the threshold. */
+  auto: z.boolean().optional().default(true),
+  reserveTokens: z.number().int().positive().optional().default(16384),
+  keepRecentTokens: z.number().int().positive().optional().default(20000),
+}).optional().default({});
+
 const ReplConfigSchema = z.object({
   exportOnExit: z.boolean().optional().default(false),
   exportPath: z.string().optional().default('harness.dml'),
@@ -131,12 +141,16 @@ const ReplConfigSchema = z.object({
   writeDepth: z.number().int().positive().optional().default(20),
   repairRounds: z.number().int().nonnegative().optional().default(1),
   promptPrefix: z.string().optional().default('dml> '),
+  /** Interactive UI: auto (TUI on a TTY), on, or off (line mode). */
+  tui: z.enum(['auto', 'on', 'off']).optional().default('auto'),
   render: z.enum(['rich', 'plain', 'json']).optional(),
   showReasoning: z.enum(['off', 'summary', 'full']).optional().default('summary'),
   showToolArgs: z.boolean().optional().default(true),
   maxToolResultChars: z.number().int().positive().optional().default(2000),
   color: z.boolean().optional().default(true),
   tools: z.array(z.string()).nullish(),
+  /** pi-style context compaction (TypeScript; replaces the DML compactor). */
+  compaction: ReplCompactionSchema,
   /** Persistent session/trace/harness history (docs/DML_REPL_SESSION_HISTORY.md). */
   history: z.object({
     enabled: z.boolean().optional().default(true),
@@ -161,6 +175,8 @@ const BackendConfigSchema = z.object({
   modelsPath: z.string().nullish(),
   authPath: z.string().nullish(),
   model: z.string().optional(),
+  /** Thinking level for reasoning models: off|minimal|low|medium|high|xhigh|max. */
+  thinkingLevel: z.string().optional(),
 }).optional().default({ kind: 'pi' });
 
 const JevJudgeConfigSchema = z.object({
@@ -251,10 +267,17 @@ const DEFAULT_CONFIG: Config = {
     writeDepth: 20,
     repairRounds: 1,
     promptPrefix: 'dml> ',
+    tui: 'auto' as const,
     showReasoning: 'summary',
     showToolArgs: true,
     maxToolResultChars: 2000,
     color: true,
+    compaction: {
+      enabled: true,
+      auto: true,
+      reserveTokens: 16384,
+      keepRecentTokens: 20000,
+    },
     history: {
       enabled: true,
       dir: '.deepclause/repl',
@@ -602,7 +625,10 @@ export function getDefaultConfig(): Config {
     mcp: { servers: {} },
     agentvm: { network: DEFAULT_CONFIG.agentvm?.network ?? false },
     shell: { ...DEFAULT_CONFIG.shell },
-    repl: { ...DEFAULT_CONFIG.repl },
+    repl: {
+      ...DEFAULT_CONFIG.repl,
+      compaction: { ...DEFAULT_CONFIG.repl.compaction },
+    },
     compaction: DEFAULT_CONFIG.compaction
       ? {
         ...DEFAULT_CONFIG.compaction,
@@ -780,6 +806,22 @@ export function resolveCompactionConfig(
   return {
     ...compaction,
     bindings,
+  };
+}
+
+export interface ReplCompactionConfig extends CompactionSettings {
+  /** Whether compaction is applied automatically when the threshold is crossed. */
+  auto: boolean;
+}
+
+/** Resolve the REPL's TypeScript compaction settings. */
+export function resolveReplCompactionConfig(config: Config): ReplCompactionConfig {
+  const compaction = config.repl.compaction;
+  return {
+    enabled: compaction.enabled,
+    auto: compaction.auto,
+    reserveTokens: compaction.reserveTokens,
+    keepRecentTokens: compaction.keepRecentTokens,
   };
 }
 

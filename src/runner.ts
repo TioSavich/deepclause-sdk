@@ -44,7 +44,7 @@ import { resolveMediaRefs } from './system/runtime/media.js';
  * Convert swipl-wasm value to plain JavaScript value
  * Handles PrologString, PrologAtom, PrologList, etc.
  */
-function toJsValue(value: unknown): unknown {
+export function toJsValue(value: unknown): unknown {
   if (value === null || value === undefined) {
     return value;
   }
@@ -216,6 +216,15 @@ export interface RunnerOptions {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   providerOptions?: Record<string, Record<string, any>>;
   compaction?: CompactionOptions;
+  /**
+   * Host-provided TypeScript compaction (the REPL path). When set, it replaces
+   * the DML compactor bindings for the before-model-call hook. The callback may
+   * return a `memory_compaction` event to surface in the stream.
+   */
+  compactMessages?: (
+    messages: MemoryMessage[],
+    lastInputTokens?: number,
+  ) => Promise<{ messages: MemoryMessage[]; event?: DMLEvent }>;
   reasoningType?: ReasoningType;
   reasoningBudgetMap?: Record<string, number>;
   contextWindow?: number;
@@ -1083,21 +1092,25 @@ export class DMLRunner {
           streamResolve = null;
         }
       },
-      onBeforeModelCall: async (messages, lastInputTokens) => this.applyCompactionBindings({
-        messages,
-        lastInputTokens,
-        scope: 'loop',
-        trigger: 'before_model_call',
-        options,
-        executionContext: {
-          workspacePath: options.workspacePath,
-          signal: options.signal,
-          compaction: options.compaction,
-        },
-        registeredTools: options.tools,
-        toolPolicy: options.toolPolicy,
-        emitEvent: emitRunnerEvent,
-      }),
+      onBeforeModelCall: async (messages, lastInputTokens) => {
+        const hostCompacted = await this.applyHostCompaction(messages, lastInputTokens, emitRunnerEvent);
+        if (hostCompacted) return hostCompacted;
+        return this.applyCompactionBindings({
+          messages,
+          lastInputTokens,
+          scope: 'loop',
+          trigger: 'before_model_call',
+          options,
+          executionContext: {
+            workspacePath: options.workspacePath,
+            signal: options.signal,
+            compaction: options.compaction,
+          },
+          registeredTools: options.tools,
+          toolPolicy: options.toolPolicy,
+          emitEvent: emitRunnerEvent,
+        });
+      },
       onAskUser: options.onInputRequired,
       onModelCall: options.onModelCall,
       signal: options.signal,
@@ -2130,17 +2143,21 @@ export class DMLRunner {
                   onToolEvent?.({ type: 'model_call', modelCallState: phase, modelId: this.options.model });
                 },
                 onToolCall: onToolCall ?? (() => {}), // Forward tool call events to parent
-                onBeforeModelCall: async (messages, lastInputTokens) => this.applyCompactionBindings({
-                  messages,
-                  lastInputTokens,
-                  scope: 'loop',
-                  trigger: 'before_model_call',
-                  options: { compaction: runContext.compaction },
-                  executionContext: runContext,
-                  registeredTools,
-                  toolPolicy: runContext.toolPolicy ?? null,
-                  emitEvent: onToolEvent,
-                }),
+                onBeforeModelCall: async (messages, lastInputTokens) => {
+                  const hostCompacted = await this.applyHostCompaction(messages, lastInputTokens, onToolEvent);
+                  if (hostCompacted) return hostCompacted;
+                  return this.applyCompactionBindings({
+                    messages,
+                    lastInputTokens,
+                    scope: 'loop',
+                    trigger: 'before_model_call',
+                    options: { compaction: runContext.compaction },
+                    executionContext: runContext,
+                    registeredTools,
+                    toolPolicy: runContext.toolPolicy ?? null,
+                    emitEvent: onToolEvent,
+                  });
+                },
                 onAskUser: async () => { 
                   // Nested agent loops don't support ask_user directly
                   // If needed, the tool should use exec(ask_user, ...) instead
@@ -2213,6 +2230,22 @@ export class DMLRunner {
         console.log('[RUNNER] Tool engine destroyed:', toolEngineId);
       }
     }
+  }
+
+  private async applyHostCompaction(
+    messages: MemoryMessage[],
+    lastInputTokens: number | undefined,
+    emit?: (event: DMLEvent) => void,
+  ): Promise<MemoryMessage[] | null> {
+    const host = this.options.compactMessages;
+    if (!host) {
+      return null;
+    }
+    const result = await host(messages, lastInputTokens);
+    if (result.event) {
+      emit?.(result.event);
+    }
+    return result.messages;
   }
 
   private async applyCompactionBindings(params: {

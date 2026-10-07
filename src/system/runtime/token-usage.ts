@@ -38,6 +38,15 @@ export function recordTokenUsage(
   }
 
   const totals = usageByModel[modelId] ?? (usageByModel[modelId] = createTokenUsageTotals());
+  addUsageToTotals(totals, usage);
+}
+
+/** Accumulate one call's usage into a single totals record. */
+export function addUsageToTotals(totals: TokenUsageTotals, usage: LLMUsage | undefined): void {
+  if (!usage) {
+    return;
+  }
+
   totals.calls += 1;
   totals.inputTokens += usage.inputTokens ?? 0;
   totals.outputTokens += usage.outputTokens ?? 0;

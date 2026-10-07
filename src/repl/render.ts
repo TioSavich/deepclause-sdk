@@ -11,6 +11,7 @@
  */
 
 import type { DMLBinding, DMLEvent } from '../types.js';
+import { formatListing } from './highlight.js';
 
 export type RenderMode = 'rich' | 'plain' | 'json';
 
@@ -30,6 +31,8 @@ export interface ReplRendererOptions {
   sink?: (text: string) => void;
   /** Sink for error lines. */
   errorSink?: (text: string) => void;
+  /** Observe every event before filtering (used by the status tracker). */
+  onEvent?: (event: DMLEvent) => void;
 }
 
 /** Activity events hidden by `--no-events` (output/answer/input/error stay). */
@@ -168,9 +171,10 @@ export class ReplRenderer {
   private readonly verbose: boolean;
   private readonly showStream: boolean;
   private readonly showEvents: boolean;
-  private readonly width: number;
-  private readonly sink: (text: string) => void;
-  private readonly errorSink: (text: string) => void;
+  private width: number;
+  private sink: (text: string) => void;
+  private errorSink: (text: string) => void;
+  private eventSink?: (event: DMLEvent) => void;
   /** Frame key of the currently open streamed-text region, or null. */
   private lastStreamFrame: string | null = null;
   private atLineStart = true;
@@ -192,12 +196,36 @@ export class ReplRenderer {
     this.width = options.width ?? (process.stdout.columns || 80);
     this.sink = options.sink ?? ((text) => process.stdout.write(text));
     this.errorSink = options.errorSink ?? ((text) => process.stderr.write(text));
+    this.eventSink = options.onEvent;
+  }
+
+  /** Replace the output sinks (used when moving into a TUI transcript). */
+  setSink(sink: (text: string) => void, errorSink?: (text: string) => void): void {
+    this.sink = sink;
+    if (errorSink) this.errorSink = errorSink;
+  }
+
+  /** Update the rendering width (TUI resize). */
+  setWidth(width: number): void {
+    if (width > 0) this.width = width;
+  }
+
+  /** Clean up and syntax-highlight a Prolog listing for display. */
+  listing(text: string): string {
+    return formatListing(text, { color: this.color && this.mode === 'rich' });
   }
 
   /** Stop the live indicator (call before the renderer goes out of scope). */
   dispose(): void {
     this.stopSpinner();
   }
+
+  /** Last rendered block group, used to separate tool/text/output blocks. */
+  private currentBlock: string | null = null;
+  private toolBlockCounter = 0;
+  private currentToolBlock: string | null = null;
+  private taskBlockCounter = 0;
+  private currentTaskBlock: string | null = null;
 
   /** Write a raw chunk to the normal sink. */
   write(text: string): void {
@@ -218,8 +246,54 @@ export class ReplRenderer {
     this.errorSink(`${text}\n`);
   }
 
+  /**
+   * The visual block an event belongs to. Events in the same block are printed
+   * contiguously; switching blocks inserts one blank line. Returns null for
+   * events that do not participate (solutions, spinners, metadata).
+   */
+  private blockKeyFor(event: DMLEvent): string | null {
+    switch (event.type) {
+      case 'stream':
+        return `text:${event.frameKind ?? 'run'}@${event.depth ?? 0}`;
+      case 'reasoning':
+        return event.content ? `reasoning:${event.frameKind ?? 'run'}@${event.depth ?? 0}` : null;
+      case 'tool_call': {
+        if (this.currentToolBlock === null || event.toolState === 'starting') {
+          this.toolBlockCounter += 1;
+          this.currentToolBlock = `tool:${this.toolBlockCounter}`;
+        }
+        return this.currentToolBlock;
+      }
+      case 'task_activity': {
+        if (this.currentTaskBlock === null || event.taskState === 'started') {
+          this.taskBlockCounter += 1;
+          this.currentTaskBlock = `task:${this.taskBlockCounter}`;
+        }
+        return this.currentTaskBlock;
+      }
+      case 'output':
+      case 'answer':
+      case 'error':
+        return 'output';
+      case 'memory_compaction':
+        return 'compaction';
+      default:
+        return null;
+    }
+  }
+
+  /** Insert a separating blank line when the block changes. */
+  private beginBlock(key: string | null): void {
+    if (!key) return;
+    if (this.currentBlock !== null && this.currentBlock !== key) {
+      this.writeLine('');
+    }
+    this.currentBlock = key;
+  }
+
   /** Render one runtime event. */
   render(event: DMLEvent): void {
+    this.eventSink?.(event);
     if (!this.showStream && (event.type === 'stream' || event.type === 'reasoning')) {
       return;
     }
@@ -231,10 +305,25 @@ export class ReplRenderer {
       return;
     }
 
+    // The top-level prompt task and the meta frame simply echo work that is
+    // already shown by the user message and the streamed authoring text, and
+    // skipped compactions are noise. Hide them unless verbose; the status
+    // tracker still observes every event via `eventSink`.
+    if (
+      event.type === 'task_activity'
+      && (!event.frameKind || event.frameKind === 'meta')
+    ) {
+      return;
+    }
+    if (event.type === 'memory_compaction' && event.compactionAction === 'skipped' && !this.verbose) {
+      return;
+    }
+
     this.stopSpinner();
     if (event.type !== 'stream' && event.type !== 'reasoning') {
       this.flushStream();
     }
+    this.beginBlock(this.blockKeyFor(event));
     const prefix = this.frameLabel(event);
 
     switch (event.type) {
@@ -283,8 +372,10 @@ export class ReplRenderer {
           ));
         }
         break;
-      case 'finished':
       case 'memory_compaction':
+        this.writeLine(this.paint(`${prefix}${event.content ?? 'memory compacted'}`, ANSI.dim));
+        break;
+      case 'finished':
       case 'meta_result':
       default:
         break;

@@ -10,7 +10,7 @@
 import * as fs from 'fs/promises';
 import * as path from 'path';
 
-import { loadConfig, resolveCompactionConfig, type Provider } from './config.js';
+import { loadConfig, resolveReplCompactionConfig, type Provider } from './config.js';
 import { promptUser } from './readline.js';
 import type { DMLEvent } from '../types.js';
 import { DMLSession } from '../repl/session.js';
@@ -96,6 +96,7 @@ export async function run(
     agentDir: config.backend?.agentDir,
     modelsPath: config.backend?.modelsPath ?? undefined,
     authPath: config.backend?.authPath ?? undefined,
+    thinkingLevel: config.backend?.thinkingLevel,
   });
 
   const { selection: judgeSelection, warnings: judgeWarnings } = resolveReplJudgeSelection({
@@ -163,8 +164,9 @@ export async function run(
       baseUrl: providerConfig?.baseUrl,
       llmBackend: backend.llmBackend,
       judgeSelection,
-      compaction: resolveCompactionConfig(config, configRoot),
     },
+    compaction: { settings: resolveReplCompactionConfig(config), auto: true },
+    contextWindow: backend.contextWindow,
     onInput: options.onUserInput ?? promptUser,
   });
 

@@ -43,10 +43,25 @@ CLI commands: `init`, `login`, `logout`, `set-backend`, `set-model`, `show-model
   `task/N` (reference-only; no bytes in clauses). Vision-capable models only.
 - **Commands**: `goal:`, `help.`, `listing.`, `reset.`, `rollback.`, `export`,
   `freeze.`/`unfreeze.`, `model.`, `trace.`, `params.`, `halt.`
-- **UI**: rich mode tints tool calls (green for shell, blue for `execute`), shows a
-  model-call spinner, previews a few lines of bash output, and shows the full bash
-  script / `execute` goal wrapped. `--no-stream`, `--no-events`, `--plain`,
-  `--json`.
+- **UI**: on a TTY the default is a pi-style TUI (`repl.tui`): a scrolling
+transcript, a fixed status bar, and a fixed editor. The status bar shows
+cumulative tokens in/out (plus cache and hit rate), context usage for the active
+frame slot (`meta` while authoring, `run` while a child frame runs), and the
+current model with its reasoning level. `ask_user`/`input/2` reuse the same
+editor, so input prompts never fight the main prompt. `--plain`/`--no-tui` fall
+back to the line renderer, which tints tool calls (green for shell, blue for
+`execute`), shows a model-call spinner, previews a few lines of bash output, and
+shows the full bash script / `execute` goal wrapped. `--no-stream`,
+`--no-events`, `--json`.
+- **Reasoning models**: `backend.thinkingLevel` (off|minimal|low|medium|high|xhigh|max)
+is selectable in `deepclause login`, `set-backend`, `set-model`, and `repl`/`run`
+(`--thinking`) and is forwarded to pi's provider only for reasoning-capable
+models. The bundled catalog marks `[reasoning]` models in every picker.
+- **Compaction**: TypeScript compaction ported from pi (no DML compactor). It
+sizes context with the chars/4 estimate, cuts on user boundaries, and summarizes
+with the structured pi prompt through the active pi backend. Session (meta)
+memory compacts before a turn and in-loop memory compacts before a model call;
+`compact.` compacts on demand. `memory_compaction` events drive the status bar.
 - **Cancellation**: Ctrl-C aborts the current turn and terminates a running `bash`.
 
 ## Authoring model

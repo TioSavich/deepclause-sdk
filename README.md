@@ -17,6 +17,28 @@ calling predicates. Because it is one language in one self-contained file, the
 parts can read, reuse, and extend one another, and a whole harness can be
 inspected, versioned, and moved as a unit.
 
+## Dependencies and acknowledgements
+
+DeepClause stands on other people's work, and is grateful for it:
+
+- **[Pi](https://pi.dev)** (`@earendil-works/pi-coding-agent` and
+  `@earendil-works/pi-ai`) — the `pi` backend reuses Pi's model catalog,
+  credential store, streaming, cancellation, and usage accounting, and the
+  interactive REPL TUI is built on Pi's terminal UI library
+  (`@earendil-works/pi-tui`). Thanks to the **Pi developers** for building and
+  sharing it.
+- **[SWI-Prolog](https://www.swi-prolog.org/)** — the Prolog engine that DML
+  runs on, compiled to WebAssembly so the whole runtime is in-process and
+  portable. SWI-Prolog is created and maintained by **Jan Wielemaker** and the
+  SWI-Prolog community.
+- **[Markus Triska](https://www.metalevel.at/)** — his work on
+  meta-interpreters, constraint logic programming, and the
+  `library(clpfd)`/`library(clpq)` libraries underpins DML's executable
+  meta-interpreter and constraint layer.
+
+DML, the REPL, and the SDK are original work; these projects are used as
+dependencies and as conceptual foundations.
+
 ## Why would I use this?
 
 - **Reproducibility.** Control flow, retries, and validation are Prolog clauses
