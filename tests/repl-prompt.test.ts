@@ -327,6 +327,48 @@ describe('prompt mode', () => {
     expect(outputs).not.toContain('hi bob');
   });
 
+  it('runs a skill that wraps task/2 in once/1 (the MI intercepts once)', async () => {
+    // Regression: `once/1` was a raw builtin, so a wrapped task/prompt/exec ran
+    // in plain Prolog and failed with `task_named/3` undefined.
+    backend = new CannedBackend([
+      {
+        text: 'ok',
+        toolCalls: [
+          {
+            name: 'define',
+            arguments: {
+              head: 'research(Question, Answer)',
+              clauses: 'research(Question, Answer) :- once(task("Answer this: {Question}", Answer)).',
+            },
+          },
+          { name: 'execute', arguments: { goal: 'research("capital of Australia?", A), output(A)' } },
+          {
+            name: 'set_result',
+            arguments: {
+              variable: 'DMLCode',
+              value: 'research(Question, Answer) :- once(task("Answer this: {Question}", Answer)).',
+            },
+          },
+          { name: 'set_result', arguments: { variable: 'Answer', value: '' } },
+          { name: 'finish', arguments: { success: true } },
+        ],
+      },
+      {
+        text: '',
+        toolCalls: [
+          { name: 'set_result', arguments: { variable: 'Answer', value: 'Canberra' } },
+          { name: 'finish', arguments: { success: true } },
+        ],
+      },
+    ]);
+    repl = await openRepl();
+
+    const events = await collect(repl.prompt('add a research skill'));
+    expect(events.some((event) => event.type === 'error')).toBe(false);
+    const outputs = events.filter((event) => event.type === 'output').map((event) => event.content);
+    expect(outputs).toContain('Canberra');
+  });
+
   it('extracts and commits a fenced dml block', async () => {
     const fenced = ['```dml', 'demo :- output("fenced-ok").', '```'].join('\n');
     backend = new CannedBackend([finalResponse(fenced)]);

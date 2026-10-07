@@ -4076,6 +4076,12 @@ is_mi_special_predicate(format(_,_)).
 is_mi_special_predicate(writeln(_)).
 is_mi_special_predicate(input(_,_)).
 is_mi_special_predicate(call(_)).
+is_mi_special_predicate(call(_,_)).
+is_mi_special_predicate(call(_,_,_)).
+is_mi_special_predicate(call(_,_,_,_)).
+is_mi_special_predicate(once(_)).
+is_mi_special_predicate(ignore(_)).
+is_mi_special_predicate(not(_)).
 is_mi_special_predicate(push_context).
 is_mi_special_predicate(push_context(_)).
 is_mi_special_predicate(pop_context).
@@ -4155,6 +4161,51 @@ mi_call(call(Goal), StateIn, StateOut) :-
     guard_reserved_goal(Goal, StateIn),
     !,
     mi_call(Goal, StateIn, StateOut).
+
+%% mi_call(call(Closure, Extra...), +StateIn, -StateOut)
+%% call/2..4 must also route through the meta-interpreter; otherwise a wrapped
+%% task/prompt/exec runs in raw Prolog, where task_named/3 does not exist.
+mi_call(call(Goal, A), StateIn, StateOut) :-
+    !,
+    extend_callable(Goal, [A], Callable),
+    mi_call(call(Callable), StateIn, StateOut).
+
+mi_call(call(Goal, A, B), StateIn, StateOut) :-
+    !,
+    extend_callable(Goal, [A, B], Callable),
+    mi_call(call(Callable), StateIn, StateOut).
+
+mi_call(call(Goal, A, B, C), StateIn, StateOut) :-
+    !,
+    extend_callable(Goal, [A, B, C], Callable),
+    mi_call(call(Callable), StateIn, StateOut).
+
+%% extend_callable(+Closure, +ExtraArgs, -Callable)
+extend_callable(Closure, Extra, Callable) :-
+    Closure =.. List,
+    append(List, Extra, Extended),
+    Callable =.. Extended.
+
+%% mi_call(once(Goal), +StateIn, -StateOut)
+%% once/1 must route through the meta-interpreter. As a plain builtin it would
+%% run Goal in raw Prolog, so a wrapped task/prompt/exec fails with
+%% task_named/3 undefined. Commits to the first solution of Goal, like once/1.
+mi_call(once(Goal), StateIn, StateOut) :-
+    !,
+    once(mi_call(Goal, StateIn, StateOut)).
+
+%% mi_call(ignore(Goal), +StateIn, -StateOut)
+mi_call(ignore(Goal), StateIn, StateOut) :-
+    !,
+    (   once(mi_call(Goal, StateIn, StateOut0))
+    ->  StateOut = StateOut0
+    ;   StateOut = StateIn
+    ).
+
+%% mi_call(not(Goal), +StateIn, -StateOut)  (alias for \+/1)
+mi_call(not(Goal), StateIn, StateIn) :-
+    !,
+    mi_call(\+(Goal), StateIn, StateIn).
 
 %% Refuse reserved predicates invoked directly in non-meta frames. This is the
 %% second of the three-place reserved guard (execute, mi_call, assert/load).
