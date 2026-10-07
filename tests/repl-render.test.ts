@@ -120,6 +120,38 @@ describe('ReplRenderer', () => {
     }
   });
 
+  it('shows the full execute goal wrapped and indented on a blue panel', () => {
+    const width = 52;
+    const { lines, renderer } = capture('rich', true, width);
+    const goal = 'what_is_in("images", "*.png", File, Text), output(File), output(Text)';
+    renderer.render({ type: 'tool_call', toolName: 'execute', toolState: 'starting', toolArgs: { goal } } as DMLEvent);
+    renderer.render({ type: 'tool_call', toolName: 'execute', toolState: 'running', toolArgs: { goal } } as DMLEvent);
+    renderer.render({
+      type: 'tool_call', toolName: 'execute', toolState: 'completed', toolArgs: { goal }, toolSummary: '1 solution',
+    } as DMLEvent);
+
+    const rendered = lines.join('');
+    // Blue panel (truecolor or 256-colour fallback) — distinct from the green tools.
+    expect(rendered).toMatch(/\u001b\[48;2;34;44;62m|\u001b\[48;5;24m/);
+    expect(rendered).not.toMatch(/\u001b\[48;2;40;54;44m|\u001b\[48;5;22m/);
+    // The full goal is shown (wrapped, not truncated) and printed once.
+    expect(rendered).not.toContain('…');
+    expect(rendered.match(/what_is_in/g)).toHaveLength(1);
+    const ansi = /\u001b\[[0-9;]*m/g;
+    const visible = lines.map((line) => line.replace(ansi, '').replace(/\n$/, ''));
+    expect(visible[0]).toContain('⚙ execute');
+    for (const line of visible) {
+      expect(line.length).toBeLessThanOrEqual(width);
+    }
+    const goalLines = visible.slice(1).filter((line) => !line.includes('✔'));
+    expect(goalLines.length).toBeGreaterThan(1); // the goal wrapped
+    for (const line of goalLines) {
+      expect(line.startsWith('    ')).toBe(true);
+    }
+    const joined = goalLines.map((line) => line.trim()).join(' ');
+    expect(joined).toContain('what_is_in("images", "*.png", File, Text), output(File), output(Text)');
+  });
+
   it('colours output and answer differently (rich mode)', () => {
     const { lines, renderer } = capture('rich', true, 100);
     renderer.render({ type: 'output', content: 'intermediate' } as DMLEvent);

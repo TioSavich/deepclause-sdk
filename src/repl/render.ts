@@ -100,10 +100,33 @@ const TRUECOLOR = /^(truecolor|24bit)$/i.test(process.env.COLORTERM ?? '');
  * (truecolor when available, else a 256-colour fallback). Kept light so it
  * reads as a faint wash over the terminal background rather than a solid fill.
  */
-const TOOL_PANEL_BG = TRUECOLOR ? '\u001b[48;2;40;54;44m' : '\u001b[48;5;22m';
+const TOOL_PANEL_GREEN_BG = TRUECOLOR ? '\u001b[48;2;40;54;44m' : '\u001b[48;5;22m';
+/** Blue tint for `execute` (a goal, not a shell command). */
+const TOOL_PANEL_BLUE_BG = TRUECOLOR ? '\u001b[48;2;34;44;62m' : '\u001b[48;5;24m';
 const TOOL_PANEL_FG = '\u001b[38;5;252m';
 const TOOL_PANEL_ERROR_BG = TRUECOLOR ? '\u001b[48;2;58;36;36m' : '\u001b[48;5;52m';
 const TOOL_PANEL_ERROR_FG = '\u001b[38;5;224m';
+
+type ToolTone = 'green' | 'blue' | 'error';
+
+/**
+ * Tools whose main argument is a long literal worth showing in full (wrapped
+ * and indented under the header), with the panel colour for that tool.
+ */
+const TOOL_DETAIL: Record<string, { arg: string; tone: ToolTone }> = {
+  bash: { arg: 'command', tone: 'green' },
+  execute: { arg: 'goal', tone: 'blue' },
+};
+
+/** A copy of `args` without `key` (for the compact header of a detail tool). */
+function omitKey(args: Record<string, unknown> | undefined, key: string): Record<string, unknown> | undefined {
+  if (!args) return undefined;
+  const rest: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(args)) {
+    if (k !== key) rest[k] = v;
+  }
+  return rest;
+}
 
 /** Spinner frames for the live model-call indicator. */
 const SPINNER_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'] as const;
@@ -133,8 +156,8 @@ export class ReplRenderer {
   /** Frame key of the currently open streamed-text region, or null. */
   private lastStreamFrame: string | null = null;
   private atLineStart = true;
-  /** Last bash command printed for a running call (dedupes start/running). */
-  private lastBashCommand?: string;
+  /** Last detail body printed for a running call (dedupes start/running). */
+  private lastToolDetail?: string;
   /** Live model-call indicator state. */
   private spinnerTimer?: ReturnType<typeof setInterval>;
   private spinnerFrame = 0;
@@ -272,44 +295,47 @@ export class ReplRenderer {
   private renderToolCall(event: DMLEvent, prefix: string): void {
     const name = event.toolName ?? 'tool';
     const state = event.toolState;
-    // Show the full shell script for `bash` (not the truncated inline args).
-    const command = name === 'bash' && typeof event.toolArgs?.command === 'string'
-      ? String(event.toolArgs.command)
-      : undefined;
-    const args = command === undefined ? formatArgs(event.toolArgs) : '';
+    // Some tools have a long literal argument (a shell script, a DML goal) that
+    // is shown in full, wrapped and indented, rather than truncated inline.
+    const spec = TOOL_DETAIL[name];
+    const rawDetail = spec ? event.toolArgs?.[spec.arg] : undefined;
+    const detail = typeof rawDetail === 'string' ? rawDetail : undefined;
+    const tone: ToolTone = spec?.tone ?? 'green';
+    const args = detail === undefined ? formatArgs(event.toolArgs) : '';
 
     if (state === 'completed') {
       const summary = event.toolSummary ? ` — ${truncate(event.toolSummary, 80)}` : '';
-      this.lastBashCommand = undefined;
-      this.writeLine(this.toolPanel(`${prefix}  ✔ ${name}${args}${summary}`, 'normal'));
+      this.lastToolDetail = undefined;
+      this.writeLine(this.toolPanel(`${prefix}  ✔ ${name}${args}${summary}`, tone));
       return;
     }
     if (state === 'failed') {
       const reason = event.toolError ?? event.toolSummary ?? 'failed';
-      this.lastBashCommand = undefined;
+      this.lastToolDetail = undefined;
       this.writeLine(this.toolPanel(`${prefix}  ✖ ${name}${args} — ${truncate(reason, 120)}`, 'error'));
       return;
     }
 
-    if (command !== undefined) {
-      // A call emits `starting` then `running`; print the script once.
-      if (command !== this.lastBashCommand) {
-        this.lastBashCommand = command;
-        this.writeLine(this.toolPanel(`${prefix}  ⚙ ${name}`, 'normal'));
-        // Print the script on panel lines, word-wrapped to the available width
-        // and indented under the header so wrapped scripts stay aligned.
+    if (detail !== undefined) {
+      // A call emits `starting` then `running`; print the body once.
+      if (detail !== this.lastToolDetail) {
+        this.lastToolDetail = detail;
+        const others = formatArgs(omitKey(event.toolArgs, spec!.arg));
+        this.writeLine(this.toolPanel(`${prefix}  ⚙ ${name}${others}`, tone));
+        // Print the body on panel lines, word-wrapped to the available width
+        // and indented under the header so wrapped bodies stay aligned.
         const indent = '    ';
         const avail = Math.max(20, this.width - stripAnsi(prefix).length - indent.length);
-        for (const rawLine of command.replace(/\r\n?/g, '\n').split('\n')) {
+        for (const rawLine of detail.replace(/\r\n?/g, '\n').split('\n')) {
           for (const segment of wrapLine(rawLine, avail)) {
-            this.writeLine(this.toolPanel(`${prefix}${indent}${segment}`, 'normal'));
+            this.writeLine(this.toolPanel(`${prefix}${indent}${segment}`, tone));
           }
         }
       }
       return;
     }
 
-    this.writeLine(this.toolPanel(`${prefix}  ⚙ ${name}${args}`, 'normal'));
+    this.writeLine(this.toolPanel(`${prefix}  ⚙ ${name}${args}`, tone));
   }
 
   /** Show/hide the live model-call indicator. */
@@ -360,11 +386,15 @@ export class ReplRenderer {
    * the bare text when colour is disabled. Existing ANSI in `text` is preserved
    * and the visible width (ignoring SGR) is padded out to the terminal width.
    */
-  private toolPanel(text: string, tone: 'normal' | 'error'): string {
+  private toolPanel(text: string, tone: ToolTone): string {
     if (!this.color) {
       return text;
     }
-    const bg = tone === 'error' ? TOOL_PANEL_ERROR_BG : TOOL_PANEL_BG;
+    const bg = tone === 'error'
+      ? TOOL_PANEL_ERROR_BG
+      : tone === 'blue'
+        ? TOOL_PANEL_BLUE_BG
+        : TOOL_PANEL_GREEN_BG;
     const fg = tone === 'error' ? TOOL_PANEL_ERROR_FG : TOOL_PANEL_FG;
     const width = this.width - stripAnsi(text).length;
     const pad = width > 0 ? ' '.repeat(width) : '';
