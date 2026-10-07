@@ -8,7 +8,7 @@ turn. You drive it from an interactive **REPL**. Using the REPL once can success
 DML runs on **SWI-Prolog compiled to WebAssembly** — the whole language runtime
 is in-process and portable, with no native Prolog to install.
 
-In most agent stacks these are separate moving parts: tools in one place,
+Most agent stacks contain a lot of separate moving parts: tools in one place,
 prompts in another, memory in a third, and the workflow as a graph or a chain
 somewhere else. DML folds them into one idea — a **predicate**. A skill is a
 clause, a tool is a clause, memory and state are clauses, control flow and
