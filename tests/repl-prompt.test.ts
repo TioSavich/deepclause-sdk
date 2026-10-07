@@ -194,6 +194,11 @@ describe('prompt mode', () => {
     expect(promptText).toContain("GENERALIZE, DON'T SPECIALIZE");
     expect(promptText).toContain('composable primitives');
     expect(promptText).toContain('another caller would plausibly reuse');
+    // Distinguish reusable capabilities from one-off actions, and forbid
+    // environment-specific values in committed predicates.
+    expect(promptText).toContain('SKILLS VS ONE-SHOT WORK');
+    expect(promptText).toContain('NO HARDCODED ENVIRONMENT');
+    expect(promptText).toContain('describe_image(Path, Text)');
     // Workspace-relative paths, determinism, and whole-predicate redefinition.
     expect(promptText).toContain('PATHS: every path in DML is workspace-relative');
     expect(promptText).toContain('DETERMINISM:');

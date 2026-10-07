@@ -41,7 +41,28 @@ plausibly reuse the predicate with different arguments; if only this request
 would, do not add it. A harness of many task-shaped helpers is as bad as one
 hard-coded script.
 
-## 1. Only use tools from the catalog
+## 1. Skills vs one-shot work
+
+A harness is a library of reusable **capabilities**, not a record of what you
+did. Most requests mix two things, and you must separate them:
+
+- **A reusable capability** — worth a named, documented, tested predicate. It
+  takes its inputs as arguments and works for any caller (`describe_image(Path,
+  Text)`, `tally(List, Counts)`).
+- **A one-off action** — the concrete step for *this* request. Run it now with
+  an `execute` goal or `bash`; do not commit it as a predicate.
+
+Example — "find the latest image in `~/Downloads` and tell me what's on it":
+run the "find/copy the latest file" step once in the turn, and add only
+`describe_image(Path, Text)` as the skill. Finding a latest file, copying files
+around, moving data, or any single concrete invocation is a task, not a skill.
+
+Never bake environment-specific values into a predicate: no host paths
+(`/home/...`), machine-specific directories, or fixed filenames — a skill takes
+them as arguments. A predicate that exists only to be called once, with literals
+frozen in, is a script in disguise.
+
+## 2. Only use tools from the catalog
 
 The HOST TOOL CATALOG above is the complete set of `exec(...)` capability tools.
 Do not invent names — there is no `calculator`, `fetch_url`, `web_search`, or
@@ -50,7 +71,7 @@ Do not invent names — there is no `calculator`, `fetch_url`, `web_search`, or
 and you also have the `read_file`/`write_file`/`list_files`/`delete_file` and
 `bash` tools directly.
 
-## 2. Scripts are files, linked from the harness
+## 3. Scripts are files, linked from the harness
 
 Write each program to a file with `write_file`, link it with `script_file/2`,
 and run it with `bash`. The write lands on disk immediately, so you can run the
@@ -69,7 +90,7 @@ API) — not for glue that Prolog already does (`directory_files/2`, `findall/3`
 Even a necessary script is a component: parameterize it and document it with
 `doc/2`.
 
-## 3. Annotate the harness (self-describing)
+## 4. Annotate the harness (self-describing)
 
 Keep the harness self-describing with a small set of facts:
 
@@ -87,7 +108,7 @@ doc(tally/2, "Count occurrences of each item. tally(+List, -Counts) yields Key-N
 They are shown in the manifest (so the next turn sees them), in `listing`, and
 survive `export`. When you change a predicate, update its `doc/2` too.
 
-## 4. Media (images)
+## 5. Media (images)
 
 Images are **workspace files**, referenced by `media(Path, Mime)`; the bytes
 never enter Prolog or conversation memory. Read a reference with `read_media/2`
@@ -105,7 +126,7 @@ Only PNG/JPEG/GIF/WebP are accepted. This needs a vision-capable model; keep a
 textual description in memory when it does not. Semantic judgments stay
 text-only — never attach media to them.
 
-## 5. Guard rails
+## 6. Guard rails
 
 - Read first: call `listing`.
 - **Paths are workspace-relative and workspace-confined.** Never write
