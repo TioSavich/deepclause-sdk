@@ -638,24 +638,37 @@ agent_main :-
     answer(Msg).
 ```
 
-### Constraint Logic Programming (CLP)
+### Constraint Logic Programming (CLP) — advanced, use sparingly
 
-DML supports Prolog's CLP libraries for solving optimization and logic problems without needing Python:
+Use CLP only for a **genuine constraint problem** (scheduling, assignment,
+puzzles, exact search). It is the wrong tool for ordinary arithmetic and
+transformations — prefer a `task/N`/`prompt/N` step when the numbers or the
+operation are open-ended (`DML_AUTHORING.md` §0). CLP also regresses easily: an
+under-specified model, or one that is simply **unsatisfiable**, can search
+essentially forever, so a buggy skill hangs the turn instead of failing fast.
+If you use it:
 
-- **CLP(FD)**: Finite domains (integers). Use `:- use_module(library(clpfd)).`
-- **CLP(Q)**: Rational numbers. Use `:- use_module(library(clpq)).`
-- **CLP(R)**: Real numbers. Use `:- use_module(library(clpr)).`
+- **Bound every domain first** (`X ins 0..100`). Unbounded or huge domains are
+  the usual cause of runaway search.
+- Call `label/1` only when you need concrete values, and wrap it in `once/1`
+  when a single witness is enough.
+- Add an explicit bound or timeout when the goal can be unsatisfiable — off the
+  shelf, an unsatisfiable constraint does not fail fast, it explores the space.
+- Keep the model small; a big model is a sign the step belongs in a `task/N`.
+
+- **CLP(FD)**: finite domains (integers). `:- use_module(library(clpfd)).`
+- **CLP(Q)**: rationals. `:- use_module(library(clpq)).`
+- **CLP(R)**: reals. `:- use_module(library(clpr)).`
 
 ```prolog
 :- use_module(library(clpfd)).
 
-agent_main(Total) :-
-    [X,Y] ins 0..100,
+% Small, fully bounded search; one witness.
+solve_sum_product(Total, X, Y) :-
+    [X, Y] ins 0..100,      % bound the domains; never leave them open
     X + Y #= Total,
     X * Y #= 2400,
-    label([X,Y]),
-    format(string(Msg), "X=~w, Y=~w", [X, Y]),
-    answer(Msg).
+    once(label([X, Y])).
 ```
 
 ### Dictionaries (SWI-Prolog)

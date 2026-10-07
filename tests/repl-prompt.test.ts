@@ -202,6 +202,9 @@ describe('prompt mode', () => {
     // Skills are orchestration, not hand-written Prolog algorithms.
     expect(promptText).toContain('KEEP SKILLS ABSTRACT');
     expect(promptText).toContain('orchestration layer over model calls, not a logic library');
+    // CLP is bounded and discouraged for ordinary arithmetic.
+    expect(promptText).toContain('bound every domain');
+    expect(promptText).toContain('no per-goal timeout');
     // Workspace-relative paths, determinism, and whole-predicate redefinition.
     expect(promptText).toContain('PATHS: every path in DML is workspace-relative');
     expect(promptText).toContain('DETERMINISM:');

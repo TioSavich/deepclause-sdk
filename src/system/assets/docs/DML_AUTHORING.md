@@ -156,8 +156,13 @@ text-only — never attach media to them.
 - Clause order matters: base case before a recursive rule; define a whole
   predicate with `assert_many` (clauses in the order written).
 - Verify after changing a predicate: `listing(Name/Arity)`.
-- Bounded iteration only: finite recursion, CLP(FD)/CLP(Q), or an explicit
-  bound. `execute` is gas-limited and the turn has a model-call budget.
+- Bounded iteration only: finite recursion or an explicit bound. `execute` is
+  gas-limited and the turn has a model-call budget, but a single builtin call
+  (e.g. an unbounded `label/1`) is not interrupted.
+- **CLP is advanced — use it only for a real constraint problem.** Bound every
+  domain (`X ins 0..N`) before `label/1`, prefer `once/1`, and keep the model
+  small: an under-specified or unsatisfiable model searches forever, and there
+  is no per-goal timeout. Never reach for CLP as a shortcut for arithmetic.
 - `bash` runs in a sandbox. Explore it (`python3 --version`, `pip list`,
   `which jq`) and install a dependency when a skill genuinely needs one;
   installs are sandbox/session-local and do not travel with an exported harness,
