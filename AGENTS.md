@@ -19,11 +19,16 @@ Three surfaces: **repl**, **run**, **SDK**.
 deepclause init                 # write .deepclause/config.json
 deepclause login                # sign in via pi, pick a default model
 deepclause repl                 # interactive living-module REPL
+deepclause repl --session last  # resume the most recent session
 deepclause run skill.dml "arg"  # run one entry of a DML file / .zip bundle
+deepclause visualize s.dml -g router/2 --presentation -o router.png
 ```
 
 `run` opens the file as a library, calls `agent_main/N` (arity = number of
-positional args) or an explicit `--goal`, and streams events.
+positional args) or an explicit `--goal`, and streams events. `visualize` draws a
+skill (`--presentation` or `--spec`) as a Mermaid diagram from its `listing` and
+docs. Other commands: `set-model`, `show-model`, `list-models`, `set-backend`,
+`logout`.
 
 ---
 
@@ -109,20 +114,25 @@ To reuse pi's model and credentials, pass an injected `LLMBackend`
 
 ## 5. Best practices
 
-1. **Prefer Prolog for data work.** Use `open/3`, `read_string/3`, `write/2`,
-   `findall/3`, `sort/4`, and DCGs before reaching for a script.
-2. **Type-safe tasks.** Always wrap `task/N` outputs (`integer(Count)`,
+1. **Orchestrate, don't algorithm.** A skill is a short sequence of `task/N` /
+   `prompt/N` calls with thin Prolog guards (`->`, `;`, `once/1`, `member/2`,
+   `format/2`). Let the model extract, classify, summarise, or decide.
+2. **Type-safe tasks.** Wrap `task/N` outputs (`integer(Count)`,
    `list(string(Tags))`) so the model returns valid data.
-3. **Backtracking for retries.** Multiple clauses / `;` give fallbacks for free.
-4. **Context hygiene.** Use `prompt/N` (or `push_context/1`) to keep sub-tasks
-   isolated from accumulated memory.
-5. **Keep the harness inspectable.** Add `doc(Name/Arity, Text)` facts so the
-   manifest and `listing` describe the module.
-6. **Scripts are files.** Put non-Prolog steps in a workspace script and link
-   them with `script_file/2`; the exporter bundles them.
-7. **Author, don't compile.** There is no compiler — write valid DML directly and
+3. **Determinism.** A skill that calls `task/N`, `exec/2`, `read_media/2`, or
+   writes a file must yield exactly one solution (`once/1`, `->`, `!`); otherwise
+   backtracking re-runs it.
+4. **Shell out for files.** Prefer `exec(bash(...))` and the host file tools over
+   the DML file predicates, which are for content you must reason over in Prolog.
+5. **Generalize; no environment.** Parameterize skills and never hardcode host
+   paths or one-off values; add or reuse a capability rather than a one-off action.
+6. **Keep the harness inspectable.** Add `doc(Name/Arity, Text)` facts (and a
+   `module_doc/1`) so the manifest, `listing`, and `visualize` describe it.
+7. **CLP is advanced.** Use it only for a genuine, bounded constraint problem;
+   bound every domain before `label/1` — an unsatisfiable model can search forever.
+8. **Author, don't compile.** There is no compiler — write valid DML directly and
    let the REPL's transaction/test/commit loop verify it.
 
-See `.pi/` / bundled docs for the full language reference and reviewed harness
-shapes: `DML_REFERENCE.md`, `DML_AUTHORING.md`, `HARNESS_EXAMPLES.md`,
-`PROLOG_SNIPPETS.md`.
+See `docs/STATUS.md` for what exists today, and the bundled docs for the language
+reference and reviewed shapes: `DML_REFERENCE.md`, `DML_AUTHORING.md`,
+`HARNESS_EXAMPLES.md`, `PROLOG_SNIPPETS.md`.

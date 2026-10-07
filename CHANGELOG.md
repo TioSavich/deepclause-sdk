@@ -25,6 +25,14 @@ and the **TypeScript SDK**.
   login`/`logout` port pi's OAuth/API-key flow. `env` remains an opt-in backend.
 - **`run` uses the REPL engine**: load a `.dml`/`.zip` harness, call
   `agent_main/N` or `--goal`, and stream through the REPL renderer.
+- **Media input** (`read_media/2` + `attach_media/1`): attach a workspace image
+  to the next `task/N`, reference-only (no bytes in clauses). See
+  [`docs/DML_MEDIA.md`](docs/DML_MEDIA.md).
+- **`deepclause visualize`**: draw a harness skill as a Mermaid diagram
+  (`--presentation` or `--spec`) from its `listing` + docs, rendering a PNG via
+  `@mermaid-js/mermaid-cli` when available.
+- **Tool-call rendering**: full bash scripts and `execute` goals (wrapped,
+  colour-coded panels), a live model-call spinner, and a short bash output preview.
 - `--no-stream` / `--no-events` REPL and run flags; harness auto-save on exit.
 
 ### Changed
@@ -32,7 +40,21 @@ and the **TypeScript SDK**.
 - **Host tools reduced to `bash`** (plus the human-in-the-loop channel).
   Built-in `web_search`, `vm_exec`, `url_fetch`, and `validate_dml` runtime
   tools are gone; non-Prolog steps go through `bash` or a linked `script_file/2`.
-- README rewritten around the REPL; docs updated.
+- README rewritten around the REPL; docs updated. Authoring guidance now favours
+  short `task/N`/`prompt/N` compositions with thin Prolog guards, the shell for
+  file I/O, and CLP only for bounded constraint problems.
+
+### Fixed
+
+- `once/1`, `ignore/1`, `call/2..4`, and `not/1` now route through the
+  meta-interpreter — previously a wrapped `task/N`/`prompt/N` ran in raw Prolog and
+  failed with `task_named/3` undefined.
+- Ctrl-C terminates a running `bash`: the turn's abort signal reaches
+  `tool.execute` (the shell managers already honoured a signal; nothing passed one).
+- `listing`/`export` show `task/N`/`prompt/N`; the internal `task_named/3` rewrite
+  and hoisted `format/3` are reversed for display (export round-trip is stable).
+- `deepclause run --trace <file>` enables the engine trace and writes the file (the
+  CLI previously printed “Trace saved” without writing anything).
 
 ### Removed
 

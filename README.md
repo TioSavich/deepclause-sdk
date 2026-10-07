@@ -250,6 +250,23 @@ writes the Mermaid source; a `.png`/`.svg` output renders it via
 `@mermaid-js/mermaid-cli` (fetched with `npx` on first use) and always writes the
 `.mmd` beside the image.
 
+## Media (images)
+
+Images are workspace files referenced by a `media(Path, Mime)` term; the bytes
+never enter Prolog or conversation memory. Read a reference and attach it, and the
+next `task/N` sends it to a vision-capable model:
+
+```prolog
+agent_main :-
+    read_media("photos/fox.png", Image),
+    attach_media(Image),
+    task("Describe the image in one sentence.", Description),
+    answer(Description).
+```
+
+Only PNG/JPEG/GIF/WebP are accepted, and judgments stay text-only. Image
+generation and video are not implemented — see [`docs/DML_MEDIA.md`](docs/DML_MEDIA.md).
+
 ## TypeScript SDK
 
 ```ts
@@ -337,7 +354,8 @@ npm test          # vitest
 npm run repl      # deepclause repl via tsx
 ```
 
-See [`docs/`](docs/): [`REPL.md`](docs/REPL.md),
+See [`docs/`](docs/): [`STATUS.md`](docs/STATUS.md) (current state),
+[`REPL.md`](docs/REPL.md),
 [`DML_REPL_PROPOSAL.md`](docs/DML_REPL_PROPOSAL.md),
 [`DML_REPL_SESSION_HISTORY.md`](docs/DML_REPL_SESSION_HISTORY.md),
 [`JUDGMENT_BACKENDS.md`](docs/JUDGMENT_BACKENDS.md).
