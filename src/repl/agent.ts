@@ -132,14 +132,19 @@ export class HarnessAgent {
     this.options = options;
     this.tools = options.tools;
     this.messages = options.knownMessages
-      ? options.knownMessages.map((message) => ({ role: message.role, content: message.content }))
+      ? options.knownMessages
+          // Defensively drop any older host nudge persisted as a user message.
+          .filter((message) => message.content.trim() !== 'Continue: call a tool, or call finish when done.')
+          .map((message) => ({ role: message.role, content: message.content }))
       : [];
   }
 
-  /** The persisted conversation (non-system messages only). */
+  /** The persisted conversation (real user/assistant turns only, no host nudges). */
   getMessages(): MemoryMessage[] {
     return this.messages
       .filter((message) => message.role === 'system' || message.role === 'user' || message.role === 'assistant')
+      // Drop assistant turns that only carry tool calls (empty text).
+      .filter((message) => message.role !== 'assistant' || (message.content ?? '').trim() !== '')
       .map((message) => ({ role: message.role as MemoryMessage['role'], content: message.content }));
   }
 
@@ -184,7 +189,6 @@ export class HarnessAgent {
     let lastText = '';
     let lastInputTokens: number | undefined;
     const maxIterations = 1000;
-    let iterationsWithoutTool = 0;
 
     while (!finished && calls < maxIterations) {
       if (options.signal?.aborted) break;
@@ -193,7 +197,6 @@ export class HarnessAgent {
         break;
       }
       calls += 1;
-      iterationsWithoutTool += 1;
 
       if (autoCompact && settings?.enabled && this.options.contextWindow) {
         const projected = toMemoryMessages(this.messages);
@@ -237,8 +240,13 @@ export class HarnessAgent {
           resolve();
         }
       };
+      const requestMessages: LLMBackendMessage[] = [
+        { role: 'system', content: systemPrompt },
+        ...this.messages,
+      ];
+
       const completion = llmBackend.complete({
-        messages: [{ role: 'system', content: systemPrompt }, ...this.messages],
+        messages: requestMessages,
         tools: backendTools,
         temperature: this.options.temperature,
         maxTokens: this.options.maxTokens,
@@ -284,12 +292,9 @@ export class HarnessAgent {
       });
 
       if (toolCalls.length === 0) {
-        // No tool call: the model is done (or answered directly).
-        if (iterationsWithoutTool > 2) break;
-        this.messages.push({ role: 'user', content: 'Continue: call a tool, or call finish when done.' });
-        continue;
+        // No tool call: the model answered directly or stopped; end the turn.
+        break;
       }
-      iterationsWithoutTool = 0;
 
       for (const call of toolCalls) {
         yield { type: 'tool_call', toolName: call.name, toolArgs: call.arguments, toolState: 'starting' };

@@ -148,4 +148,17 @@ describe('HarnessAgent', () => {
     const events = await collect(agent.run('hi'));
     expect(events.some((event) => event.type === 'tool_call' && event.toolState === 'failed')).toBe(true);
   });
+
+  it('never persists host nudges in the conversation history', async () => {
+    const { controller } = stubController();
+    const backend = new ScriptedBackend([
+      { text: 'answer one', finishReason: 'stop' },
+      { text: 'answer two', finishReason: 'stop' },
+    ]);
+    const agent = new HarnessAgent({ controller, tools: createHarnessTools(controller), llmBackend: backend, model: 'm', streaming: true });
+    await collect(agent.run('a direct question'));
+    const messages = agent.getMessages();
+    expect(messages.some((message) => message.content.includes('Continue: call a tool'))).toBe(false);
+    expect(messages.filter((message) => message.role === 'user')).toHaveLength(1);
+  });
 });
