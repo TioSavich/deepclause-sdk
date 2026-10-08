@@ -645,15 +645,15 @@ export class ReplRenderer {
     }
   }
 
-  /** `run │ ` for an object frame; nested (`execute` child) events are indented only. */
+  /** `run │ ` for an object frame; nested (`execute` child) events use indentation + `│`. */
   private frameLabel(event: DMLEvent): string {
     // `--no-events` also drops the frame label, so output/answer lines are plain.
     if (!this.showEvents || !event.frameKind) return '';
     const depth = event.depth ?? 0;
     // Nested (`execute` child) activity reads as belonging to the parent tool
-    // call through indentation alone — no `nested` label.
+    // call through indentation plus a hanging `│`, with no `nested` label.
     if (event.frameKind === 'nested') {
-      return '  '.repeat(depth + 1);
+      return `${'  '.repeat(depth + 1)}│ `;
     }
     const label = event.frameKind === 'object' ? 'run' : event.frameKind;
     const indent = '  '.repeat(depth);

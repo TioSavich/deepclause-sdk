@@ -390,10 +390,10 @@ describe('block spacing', () => {
     expect(lines.join('')).not.toMatch(/\n\n/);
   });
 
-  it('indents nested (execute child) frames one extra level with no label', () => {
+  it('indents nested (execute child) frames one extra level with a hanging bar', () => {
     const { lines, renderer } = capture('plain');
     renderer.render({ type: 'output', content: 'inside', frameKind: 'nested', depth: 1 } as DMLEvent);
-    expect(lines.join('')).toContain('    inside');
+    expect(lines.join('')).toContain('    │ inside');
     expect(lines.join('')).not.toContain('nested');
   });
 
