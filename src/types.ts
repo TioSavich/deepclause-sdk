@@ -245,6 +245,8 @@ export interface DMLEvent extends FrameEventMeta {
   toolBackend?: 'host' | 'sandbox';
   /** Tool exit code when available (only for 'tool_call' events) */
   toolExitCode?: number;
+  /** Wall-clock duration of the tool call in ms (only for completed/failed 'tool_call' events) */
+  toolDurationMs?: number;
   /** Tool summary message when available (only for 'tool_call' events) */
   toolSummary?: string;
   /** Tool failure message when available (only for 'tool_call' events) */

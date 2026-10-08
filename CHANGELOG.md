@@ -50,7 +50,9 @@
   `timeMs`, and `shell.idleTimeoutMs` overrides the idle timer. Applies to the
   host shell and the AgentVM sandbox.
 - **Execution timing.** The `execute` tool result now carries `elapsedMs`
-  (wall-clock), so the agent can see which goals are slow.
+  (wall-clock), so the agent can see which goals are slow, and completed/failed
+  tool-call lines in the transcript show a human-readable duration (` · 1.2s`) —
+  measured for every authoring tool call, and for `bash` from its `timeMs`.
 - **Harness patterns reference** (`HARNESS_PATTERNS.md`, `reference("patterns")`):
   how a harness typically looks for a coding assistant, a research agent, an SOP
   runner, and a tool collection (browser use), mapped to the Anthropic/OpenAI

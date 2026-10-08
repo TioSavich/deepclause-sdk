@@ -130,12 +130,13 @@ export function createShellToolEventBridge(options: {
   };
 }
 
-function inferToolLifecycleFields(toolResult: unknown): Pick<DMLEvent, 'toolState' | 'toolPid' | 'toolBackend' | 'toolExitCode' | 'toolSummary'> {
+function inferToolLifecycleFields(toolResult: unknown): Pick<DMLEvent, 'toolState' | 'toolPid' | 'toolBackend' | 'toolExitCode' | 'toolSummary' | 'toolDurationMs'> {
   let toolState: DMLEvent['toolState'] = 'completed';
   let toolPid: number | undefined;
   let toolBackend: 'host' | 'sandbox' | undefined;
   let toolExitCode: number | undefined;
   let toolSummary: string | undefined;
+  let toolDurationMs: number | undefined;
 
   if (toolResult && typeof toolResult === 'object') {
     const result = toolResult as Record<string, unknown>;
@@ -155,6 +156,9 @@ function inferToolLifecycleFields(toolResult: unknown): Pick<DMLEvent, 'toolStat
     if (typeof result.summary === 'string' && result.summary.trim()) {
       toolSummary = result.summary;
     }
+    if (typeof result.timeMs === 'number' && Number.isFinite(result.timeMs)) {
+      toolDurationMs = result.timeMs;
+    }
   }
 
   return {
@@ -163,6 +167,7 @@ function inferToolLifecycleFields(toolResult: unknown): Pick<DMLEvent, 'toolStat
     toolBackend,
     toolExitCode,
     toolSummary,
+    toolDurationMs,
   };
 }
 

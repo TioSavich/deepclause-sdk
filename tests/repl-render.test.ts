@@ -3,7 +3,7 @@
  */
 import { describe, expect, it, vi } from 'vitest';
 
-import { ReplRenderer, formatBindings } from '../src/repl/render.js';
+import { ReplRenderer, formatBindings, formatDuration } from '../src/repl/render.js';
 import type { DMLEvent } from '../src/types.js';
 
 function capture(mode: 'rich' | 'plain' | 'json', color = true, width = 100): { lines: string[]; renderer: ReplRenderer } {
@@ -280,6 +280,36 @@ describe('ReplRenderer', () => {
   it('formatBindings renders values, or true when there are none', () => {
     expect(formatBindings([])).toBe('true');
     expect(formatBindings([{ name: 'X', value: 'a' }, { name: 'Y', value: '2' }])).toBe('X = a\nY = 2');
+  });
+
+  it('formats durations and shows them on completed tool calls', () => {
+    expect(formatDuration(450)).toBe('450ms');
+    expect(formatDuration(1234)).toBe('1.2s');
+    expect(formatDuration(125_000)).toBe('2m05s');
+
+    const { lines, renderer } = capture('plain', false);
+    renderer.render({
+      type: 'tool_call',
+      toolName: 'execute',
+      toolState: 'completed',
+      toolSummary: '{"bindings":[]}',
+      toolDurationMs: 1234,
+    } as DMLEvent);
+    const out = lines.join('\n');
+    expect(out).toContain('execute');
+    expect(out).toContain('1.2s');
+  });
+
+  it('shows the duration on a failed tool call', () => {
+    const { lines, renderer } = capture('plain', false);
+    renderer.render({
+      type: 'tool_call',
+      toolName: 'define',
+      toolState: 'failed',
+      toolError: 'boom',
+      toolDurationMs: 250,
+    } as DMLEvent);
+    expect(lines.join('')).toContain('250ms');
   });
 
   it('plain mode emits no ANSI', () => {

@@ -112,6 +112,10 @@ describe('HarnessAgent', () => {
     const events = await collect(agent.run('add a fact'));
     expect(calls.map((call) => call.method)).toEqual(expect.arrayContaining(['define']));
     expect(events.some((event) => event.type === 'tool_call' && event.toolName === 'define')).toBe(true);
+    const completed = events.find((event) => (
+      event.type === 'tool_call' && event.toolName === 'define' && event.toolState === 'completed'
+    ));
+    expect(typeof completed?.toolDurationMs).toBe('number');
     expect(backend.calls).toHaveLength(2);
     expect(agent.getMessages().some((message) => message.role === 'user' && message.content === 'add a fact')).toBe(true);
   });

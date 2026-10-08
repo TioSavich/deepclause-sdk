@@ -373,6 +373,7 @@ export class HarnessAgent {
         const wakeTool = (): void => {
           if (toolWake) { const resolve = toolWake; toolWake = null; resolve(); }
         };
+        const toolStartedAt = Date.now();
         const toolPromise = tool.execute(call.arguments, {
           signal: options.signal,
           onEvent: (event) => { toolEvents.push(event); wakeTool(); },
@@ -393,9 +394,9 @@ export class HarnessAgent {
           : toolResultFailure(result);
         const text = stringifyToolResult(failureMessage ? { error: failureMessage } : result);
         if (failureMessage) {
-          yield { type: 'tool_call', toolName: call.name, toolArgs: call.arguments, toolState: 'failed', toolError: text.slice(0, 200) };
+          yield { type: 'tool_call', toolName: call.name, toolArgs: call.arguments, toolState: 'failed', toolError: text.slice(0, 200), toolDurationMs: Date.now() - toolStartedAt };
         } else {
-          yield { type: 'tool_call', toolName: call.name, toolArgs: call.arguments, toolState: 'completed', toolSummary: text.slice(0, 200) };
+          yield { type: 'tool_call', toolName: call.name, toolArgs: call.arguments, toolState: 'completed', toolSummary: text.slice(0, 200), toolDurationMs: Date.now() - toolStartedAt };
         }
         this.messages.push({ role: 'tool', content: text, toolCallId: call.id, toolName: call.name });
       }

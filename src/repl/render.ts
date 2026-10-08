@@ -122,6 +122,23 @@ function truncate(text: string, max: number): string {
   return singleLine.length > max ? `${singleLine.slice(0, max - 1)}…` : singleLine;
 }
 
+/** Human-readable wall-clock duration: `450ms`, `1.2s`, `2m05s`. */
+export function formatDuration(ms: number): string {
+  if (!Number.isFinite(ms) || ms < 0) {
+    return '';
+  }
+  if (ms < 1000) {
+    return `${Math.round(ms)}ms`;
+  }
+  const seconds = ms / 1000;
+  if (seconds < 60) {
+    return `${seconds.toFixed(seconds < 10 ? 1 : 0)}s`;
+  }
+  const minutes = Math.floor(seconds / 60);
+  const remainder = Math.round(seconds % 60);
+  return `${minutes}m${String(remainder).padStart(2, '0')}s`;
+}
+
 const ANSI = {
   reset: '\u001b[0m',
   bold: '\u001b[1m',
@@ -460,9 +477,10 @@ export class ReplRenderer {
     const args = detail === undefined ? formatArgs(event.toolArgs) : '';
 
     if (state === 'completed') {
+      const duration = typeof event.toolDurationMs === 'number' ? ` · ${formatDuration(event.toolDurationMs)}` : '';
       const summary = event.toolSummary ? ` — ${truncate(event.toolSummary, 80)}` : '';
       this.lastToolDetail = undefined;
-      this.writeLine(this.toolPanel(`${prefix}  ✔ ${name}${args}${summary}`, tone));
+      this.writeLine(this.toolPanel(`${prefix}  ✔ ${name}${args}${duration}${summary}`, tone));
       // A short tail of the captured output (bash). Full output is --verbose.
       if (!this.verbose) {
         for (const line of this.toolOutputLines(prefix, tone, event.toolResult)) {
@@ -472,9 +490,10 @@ export class ReplRenderer {
       return;
     }
     if (state === 'failed') {
+      const duration = typeof event.toolDurationMs === 'number' ? ` · ${formatDuration(event.toolDurationMs)}` : '';
       const reason = event.toolError ?? event.toolSummary ?? 'failed';
       this.lastToolDetail = undefined;
-      this.writeLine(this.toolPanel(`${prefix}  ✖ ${name}${args} — ${truncate(reason, 120)}`, 'error'));
+      this.writeLine(this.toolPanel(`${prefix}  ✖ ${name}${args}${duration} — ${truncate(reason, 120)}`, 'error'));
       return;
     }
 
