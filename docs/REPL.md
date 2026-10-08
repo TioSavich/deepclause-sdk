@@ -28,33 +28,45 @@ deepclause repl
 
 ## Two input modes
 
-The classifier is intentionally trivial and unambiguous:
+The classifier is intentionally trivial and unambiguous. **Slash commands** are
+the primary surface; the bare forms (`goal:`, `listing.`, …) remain for
+compatibility and for non-TTY/scripted use.
 
 | Input | Mode |
 |---|---|
-| `goal: member(X, [a,b,c]).` | **goal mode** — run the DML goal |
-| `goal: fact(5, F).` | goal mode |
+| `/goal member(X, [a,b,c])` (or `goal: member(X, [a,b,c]).`) | **goal mode** — run the DML goal |
 | `add a rule that computes factorial` | **prompt mode** — English → DML |
 | anything else | prompt mode |
 
-DML input always carries the explicit `goal:` marker. A `goal:` line whose
-payload fails to parse is reported as a syntax error — it is never silently
-treated as a prompt.
+DML input always carries the explicit goal marker. A goal line whose payload
+fails to parse is reported as a syntax error — it is never silently treated as
+a prompt.
 
-A small set of whole-line commands is matched before the classifier:
+Commands (slash form; the whole-line dotted form still works):
 
 | Command | Effect |
 |---|---|
-| `halt.` | exit |
-| `help.` | help |
-| `listing.` / `listing(Name/Arity).` | list the living module |
-| `reset.` | empty the harness (refused when frozen) |
-| `rollback.` | undo the last harness change (requires history) |
-| `model.` / `model <provider/id>.` | show / set the default model |
-| `export <file>.` | write a self-contained `.dml` harness |
-| `freeze.` / `unfreeze.` | read-only lock |
-| `trace.` / `notrace.` | toggle verbose logging |
-| `params.` | show session parameters |
+| `/halt` (or `halt.`, `/exit`, `/quit`) | exit |
+| `/help` | help |
+| `/listing [filter]` | list the living module (`all`, `Name/Arity`, `tools`, `scripts`) |
+| `/reset` | empty the harness (refused when frozen) |
+| `/rollback` | undo the last harness change (requires history) |
+| `/compact [notes]` | compact the authoring memory |
+| `/model [provider/id]` | show / set the default model |
+| `/export [file]` | write a self-contained `.dml` harness |
+| `/freeze` / `/unfreeze` | read-only lock |
+| `/trace` / `/notrace` | toggle verbose logging |
+| `/params` | show session parameters |
+
+An unknown `/command` prints `unknown command: /… — try /help.` instead of being
+treated as a prompt.
+
+### Iterating over solutions
+
+After each solution of a `goal:` the REPL pauses; in the TUI the editor border
+shows `? ; more · a all · . stop`, and you press `;` (Enter) for the next
+solution, `a` for all, or `.`/Enter to stop. Lines typed while the goal is still
+running are buffered and used for the next pager prompt instead of being lost.
 
 ## What a harness is
 

@@ -92,7 +92,8 @@ export type ReplInput =
   | { kind: 'notrace' }
   | { kind: 'params' }
   | { kind: 'goal'; goal: string }
-  | { kind: 'prompt'; prompt: string };
+  | { kind: 'prompt'; prompt: string }
+  | { kind: 'unknown-command'; name: string };
 
 const OUT_OF_BAND = new Set(['halt', 'help', 'reset', 'rollback', 'freeze', 'unfreeze', 'trace', 'notrace', 'params']);
 
@@ -110,6 +111,48 @@ export function classifyReplInput(line: string): ReplInput {
   }
   if (trimmed.startsWith('%')) {
     return { kind: 'comment' };
+  }
+
+  // Slash commands (the TUI-first surface): `/goal <dml>`, `/listing`, `/halt`, …
+  if (trimmed.startsWith('/')) {
+    const withoutSlash = trimmed.slice(1);
+    const spaceIndex = withoutSlash.search(/\s/);
+    const name = (spaceIndex === -1 ? withoutSlash : withoutSlash.slice(0, spaceIndex)).toLowerCase();
+    const arg = (spaceIndex === -1 ? '' : withoutSlash.slice(spaceIndex)).trim();
+    switch (name) {
+      case 'goal':
+        return arg ? { kind: 'goal', goal: arg } : { kind: 'unknown-command', name: 'goal (missing goal)' };
+      case 'listing':
+        return { kind: 'listing', filter: arg || undefined };
+      case 'halt':
+      case 'exit':
+      case 'quit':
+        return { kind: 'halt' };
+      case 'help':
+        return { kind: 'help' };
+      case 'reset':
+        return { kind: 'reset' };
+      case 'rollback':
+        return { kind: 'rollback' };
+      case 'compact':
+        return { kind: 'compact', instructions: arg || undefined };
+      case 'export':
+        return { kind: 'export', path: arg || undefined };
+      case 'model':
+        return { kind: 'model', model: arg || undefined };
+      case 'freeze':
+        return { kind: 'freeze' };
+      case 'unfreeze':
+        return { kind: 'unfreeze' };
+      case 'params':
+        return { kind: 'params' };
+      case 'trace':
+        return { kind: 'trace' };
+      case 'notrace':
+        return { kind: 'notrace' };
+      default:
+        return { kind: 'unknown-command', name };
+    }
   }
 
   // Out-of-band commands: whole line, optional trailing full stop.
@@ -248,6 +291,8 @@ export interface ReplRuntime {
   statusSnapshot(): ReplStatusSnapshot;
   /** Resolved interactive UI mode (`auto` unless overridden by config/flags). */
   tuiMode: 'auto' | 'on' | 'off';
+  /** Resolved authoring implementation (`agent` or `meta`). */
+  authoring: 'meta' | 'agent';
   /** Replace the input channel (the interactive loop uses its own readline). */
   setOnInput(handler: (prompt: string, choices?: string[]) => Promise<string | undefined>): void;
   /** Set when the env backend has no credentials for the selected provider. */
@@ -450,6 +495,7 @@ export async function createReplRuntime(options: ReplCliOptions): Promise<ReplRu
     historyEnabled: Boolean(historyOptions),
     statusSnapshot: () => statusTracker.snapshot(),
     tuiMode: options.tui ?? config.repl.tui ?? 'auto',
+    authoring: options.authoring ?? config.repl.authoring ?? 'agent',
     setOnInput: (handler) => repl.setOnInput(handler),
     missingCredential,
   };
@@ -501,25 +547,25 @@ async function printBanner(runtime: ReplRuntime, loaded: string[]): Promise<void
   if (runtime.repl.session.isEmpty()) {
     lines.push(
       '',
-      `  ${bold('Two modes.')} Plain English is the default; ${accent('goal:')} runs DML directly.`,
+      `  ${bold('Two modes.')} Plain English authors the harness; ${accent('/goal')} runs DML directly.`,
       '',
       `    ${accent('<plain English>')}   default. Ask for anything: add a new skill, add a tool,`,
       `                      change existing logic, run or test code in the living`,
       `                      module, or just ask a question about the harness. An authoring`,
-      `                      task writes the DML, tests it with ${dim('execute')}, and commits it.`,
-      `    ${accent('goal: <dml>.')}      run DML/Prolog directly against the current harness.`,
+      `                      agent writes the DML, tests it with ${dim('execute')}, and commits it.`,
+      `    ${accent('/goal <dml>')}        run DML/Prolog directly against the current harness.`,
       '',
       `  ${bold('Example')}`,
       `    ${dim('dml>')} add a research(Question, Answer) skill that answers with task/2`,
       `    ${dim('dml>')} run research on "why is the sky blue?"`,
       `    A = "…"`,
       '',
-      `    ...or run DML directly (${accent('goal:')} mode):`,
-      `    ${dim('dml>')} ${accent('goal:')} research("why is the sky blue?", A).`,
+      `    ...or run DML directly (${accent('/goal')}):`,
+      `    ${dim('dml>')} ${accent('/goal')} research("why is the sky blue?", A).`,
       `    A = "…"`,
       '',
       `  When you're ready, export the harness and re-use it whenever you need:`,
-      `    ${dim('dml>')} export research.dml.            save a portable harness`,
+      `    ${dim('dml>')} /export research.dml            save a portable harness`,
       `    ${dim('$')} deepclause repl -l research.dml    load it back any time`,
       `    ${dim('$')} deepclause repl --session last   resume the last session`,
     );
@@ -527,10 +573,10 @@ async function printBanner(runtime: ReplRuntime, loaded: string[]): Promise<void
 
   lines.push(
     '',
-    `  ${accent('goal:')} ${dim('<dml>.')}           run a DML goal, e.g. ${dim('goal: member(X, [1,2,3]).')}`,
-    `  ${accent('<plain English>')}        build the harness from a prompt`,
+    `  ${accent('/goal')} ${dim('<dml>')}            run a DML goal, e.g. ${dim('/goal member(X, [1,2,3])')}`,
+    `  ${accent('<plain English>')}        author the harness`,
     '',
-    `  ${accent('help.')}  ${accent('listing.')}  ${accent('export <file>.')}  ${accent('freeze.')}  ${accent('model.')}  ${accent('halt.')}`,
+    `  ${accent('/help')}  ${accent('/listing')}  ${accent('/export')}  ${accent('/freeze')}  ${accent('/model')}  ${accent('/halt')}`,
   );
   if (runtime.historyEnabled) {
     lines.push(`  ${dim('resume later:')} deepclause repl --session ${runtime.sessionId}`);
@@ -551,6 +597,9 @@ export async function dispatchReplInput(
   switch (input.kind) {
     case 'empty':
     case 'comment':
+      return true;
+    case 'unknown-command':
+      print(`unknown command: /${input.name} — try /help.`);
       return true;
     case 'halt':
       return false;
@@ -655,48 +704,32 @@ function helpText(runtime: ReplRuntime): string {
     'DeepClause REPL — a living DML harness you author by talking to it.',
     '',
     '  Modes',
-    '    <plain English>    default. Ask for anything:',
-    '                         • add a new skill (a predicate / entry point)',
-    '                         • add a tool (a bash / exec wrapper used by skills)',
-    '                         • change or extend existing logic',
-    '                         • run or test code in the living module',
-    '                         • ask a question about the harness',
-    '                       A meta task writes the DML, tests it with execute,',
-    '                       and commits it (replace-by-predicate).',
-    '    goal: <dml>.       run DML/Prolog directly against the current harness.',
-    '',
-    '  Examples (plain mode first, then goal mode)',
-    '    dml> add a research(Question, Answer) skill that answers with task/2',
-    '    dml> change research to also cite its sources',
-    '    dml> what skills does this harness have?',
-    '',
-    '    dml> goal: research("why is the sky blue?", A).',
-    '',
-    '  Pure Prolog works too — no model needed:',
-    '    dml> add a tally(List, Counts) skill, plus a demo',
-    '    dml> goal: tally([a,b,a,c,a], C).',
-    '    C = [a-3, b-1, c-1]',
-    '',
-    '  Skills compose',
-    '    task/N              LLM calls          exec/2           host tools (bash, …)',
-    '    choose/rate/verify  judgments          CLP(FD)/CLP(Q)   constraints',
-    '    script_file/2       link a script file (bundled on export)',
-    '',
-    "  When you're ready, export the harness and re-use it whenever you need:",
-    '    export research.dml.                 save a portable harness',
-    '    deepclause repl -l research.dml      load it back any time',
-    '    deepclause repl --session last       resume the last session',
+    '    /goal <dml>          run DML/Prolog directly against the harness.',
+    '    <plain English>      author: ask for a skill, change existing logic, or ask a',
+    '                         question. An agent writes, tests, and commits the DML.',
     '',
     '  Commands',
-    '    listing. / listing(Name/Arity).   inspect the harness',
-    '    reset.                            empty it',
-    '    rollback.                         undo the last change',
-    '    export <file>.                    save (use .zip to bundle linked files)',
-    '    model. / model <provider/id>.     show / set the model',
-    '    freeze. / unfreeze.               read-only lock',
-    '    params.                           show session parameters',
-    '    trace. / notrace.                 toggle verbose logging',
-    '    help.  halt.',
+    '    /listing [filter]    inspect the harness (all | Name/Arity | tools | scripts)',
+    '    /help                this help',
+    '    /reset               empty the harness',
+    '    /rollback            undo the last change',
+    '    /compact [notes]     compact the authoring memory',
+    '    /export [file]       save the harness (use .zip to bundle linked files)',
+    '    /model [provider/id] show / set the model',
+    '    /freeze  /unfreeze   read-only lock',
+    '    /params              show session parameters',
+    '    /trace   /notrace    toggle verbose logging',
+    '    /halt                exit',
+    '',
+    '  Examples',
+    '    dml> /goal member(X, [a,b,c]).',
+    '    dml> /listing all',
+    '    dml> add a tally(List, Counts) skill, plus a demo',
+    '    dml> what skills does this harness have?',
+    '',
+    '  Skills compose: task/N (LLM calls), exec/2 (host tools), judgments, CLP(FD)/',
+    '  CLP(Q), and script_file/2 (bundled on export).',
+    '',
     `  prompt: ${runtime.promptPrefix}`,
   ].join('\n');
 }
@@ -928,7 +961,9 @@ export async function runTui(
   const tui = new TuiMainScreen(terminal);
   const transcript = new TranscriptComponent();
   const sink = new LineSink(transcript);
-  const runState = { running: false };
+  const runState = { running: false, steerable: false };
+  /** Lines typed during a goal query, consumed by the solution pager. */
+  const bufferedInput: string[] = [];
   const statusBar = new StatusBarComponent({
     getSnapshot: () => runtime.statusSnapshot(),
     workspace: runtime.workspace,
@@ -988,10 +1023,16 @@ export async function runTui(
         return;
       }
 
-      // No pending ask means a turn is running: steer it (pi-style).
+      // No pending ask means a turn is running.
       if (text.trim()) {
-        transcript.append(formatSteer(text));
-        runtime.repl.steer(text);
+        if (runState.steerable) {
+          transcript.append(formatSteer(text));
+          runtime.repl.steer(text);
+        } else {
+          // A goal query is running: queue the line for the solution pager.
+          bufferedInput.push(text);
+          transcript.append(formatSteer(text));
+        }
       }
       installEditor();
       tui.requestRender();
@@ -1006,16 +1047,28 @@ export async function runTui(
    * Wait for one submitted line. When `isInput` is set the question is shown in
    * the editor's top border (orange) to signal that the runtime needs input.
    */
-  const ask = (label: string, isInput = false): Promise<string | null> => new Promise((resolve) => {
+  const ask = (label: string, isInput = false): Promise<string | null> => {
     activePrompt = label;
     pendingIsInput = isInput;
-    if (editor) {
-      editor.setPrompt(isInput ? label : null);
-      tui.setFocus(editor);
+    // The solution pager consumes a line typed while the goal was running.
+    if (label === ' ;') {
+      const buffered = bufferedInput.shift();
+      if (buffered !== undefined) return Promise.resolve(buffered);
     }
-    tui.requestRender();
-    pendingResolve = resolve;
-  });
+    return new Promise((resolve) => {
+      if (editor) {
+        const hint = isInput
+          ? label
+          : label === ' ;'
+            ? '; more · a all · . stop'
+            : null;
+        editor.setPrompt(hint);
+        tui.setFocus(editor);
+      }
+      tui.requestRender();
+      pendingResolve = resolve;
+    });
+  };
 
   // Route ask_user / input/2 through the editor prompt instead of the transcript.
   runtime.setOnInput(async (prompt, choices) => {
@@ -1073,6 +1126,8 @@ export async function runTui(
       const controller = new AbortController();
       holder.turn = controller;
       runState.running = true;
+      runState.steerable = input.kind === 'prompt' && runtime.authoring === 'agent';
+      bufferedInput.length = 0;
       tui.requestRender();
       try {
         if (input.kind === 'goal') {

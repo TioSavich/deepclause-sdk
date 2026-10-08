@@ -67,6 +67,20 @@ describe('classifyReplInput', () => {
     expect(classifyReplInput('   ').kind).toBe('empty');
     expect(classifyReplInput('% a comment').kind).toBe('comment');
   });
+
+  it('classifies slash commands', () => {
+    expect(classifyReplInput('/goal member(X, [a,b,c])')).toEqual({ kind: 'goal', goal: 'member(X, [a,b,c])' });
+    expect(classifyReplInput('/goal')).toEqual({ kind: 'unknown-command', name: 'goal (missing goal)' });
+    expect(classifyReplInput('/listing')).toEqual({ kind: 'listing' });
+    expect(classifyReplInput('/listing fact/2')).toEqual({ kind: 'listing', filter: 'fact/2' });
+    expect(classifyReplInput('/halt')).toEqual({ kind: 'halt' });
+    expect(classifyReplInput('/exit')).toEqual({ kind: 'halt' });
+    expect(classifyReplInput('/help')).toEqual({ kind: 'help' });
+    expect(classifyReplInput('/reset')).toEqual({ kind: 'reset' });
+    expect(classifyReplInput('/compact focus on X')).toEqual({ kind: 'compact', instructions: 'focus on X' });
+    expect(classifyReplInput('/model anthropic/claude')).toEqual({ kind: 'model', model: 'anthropic/claude' });
+    expect(classifyReplInput('/nope')).toEqual({ kind: 'unknown-command', name: 'nope' });
+  });
 });
 
 describe('runGoalWithRenderer', () => {
