@@ -8,6 +8,7 @@
  */
 
 import { readAgentPromptAsset } from '../system/assets/index.js';
+import { loadProjectContext } from './project-context.js';
 import type {
   DMLEvent,
   LLMBackend,
@@ -79,12 +80,19 @@ export async function buildAgentSystemPrompt(options: {
   } catch {
     template = 'You are the DeepClause REPL harness agent.';
   }
-  return template
+  let prompt = template
     .replace('{{CATALOG}}', options.hostToolsCatalog ?? '(no host capability tools registered)')
     .replace('{{TOOLS}}', describeTools(options.tools))
     .replace('{{MANIFEST}}', options.manifest || '(empty harness)')
     .replace('{{REFERENCE}}', options.reference?.trim() || '(call reference("language"))')
     .replace('{{AUTHORING}}', options.authoring?.trim() || '(call reference("authoring"))');
+
+  // Append a workspace `AGENTS.md` so repo-specific rules always apply.
+  const project = await loadProjectContext(options.workspacePath);
+  if (project) {
+    prompt += `\n\nPROJECT INSTRUCTIONS (AGENTS.md)\n${project.content}\n`;
+  }
+  return prompt;
 }
 
 /** Project the agent's message list onto `MemoryMessage[]` for compaction. */
@@ -136,6 +144,10 @@ export class HarnessAgent {
   readonly tools: Map<string, ToolDefinition>;
   private readonly options: HarnessAgentOptions;
   private messages: LLMBackendMessage[];
+  /** User messages delivered while a turn is running (pi-style steering). */
+  private readonly pendingSteers: string[] = [];
+  /** Aborts the in-flight model call when a steer arrives so it is seen now. */
+  private steerAbort?: AbortController;
 
   constructor(options: HarnessAgentOptions) {
     this.options = options;
@@ -155,6 +167,18 @@ export class HarnessAgent {
       // Drop assistant turns that only carry tool calls (empty text).
       .filter((message) => message.role !== 'assistant' || (message.content ?? '').trim() !== '')
       .map((message) => ({ role: message.role as MemoryMessage['role'], content: message.content }));
+  }
+
+  /**
+   * Deliver a message into the running turn (pi-style steering). It is queued
+   * and injected before the next model call; when a model call is in flight it
+   * is aborted so the steer is seen immediately.
+   */
+  steer(text: string): void {
+    const trimmed = text.trim();
+    if (!trimmed) return;
+    this.pendingSteers.push(trimmed);
+    this.steerAbort?.abort();
   }
 
   async *run(request: string, options: HarnessAgentRunOptions = {}): AsyncGenerator<DMLEvent> {
@@ -210,6 +234,11 @@ export class HarnessAgent {
       }
       calls += 1;
 
+      // Inject any steering messages submitted during the previous iteration.
+      while (this.pendingSteers.length > 0) {
+        this.messages.push({ role: 'user', content: this.pendingSteers.shift()! });
+      }
+
       if (autoCompact && settings?.enabled && this.options.contextWindow) {
         const projected = toMemoryMessages(this.messages);
         if (shouldCompact(lastInputTokens ?? 0, this.options.contextWindow, settings)) {
@@ -257,12 +286,17 @@ export class HarnessAgent {
         ...this.messages,
       ];
 
+      this.steerAbort = new AbortController();
+      const callSignal = options.signal
+        ? AbortSignal.any([options.signal, this.steerAbort.signal])
+        : this.steerAbort.signal;
+
       const completion = llmBackend.complete({
         messages: requestMessages,
         tools: backendTools,
         temperature: this.options.temperature,
         maxTokens: this.options.maxTokens,
-        signal: options.signal,
+        signal: callSignal,
         onText: streaming ? (chunk) => push({ type: 'stream', content: chunk }) : undefined,
         onReasoning: streaming ? (chunk) => push({ type: 'reasoning', content: chunk }) : undefined,
       }).then(
@@ -279,10 +313,17 @@ export class HarnessAgent {
       await completion;
 
       if (failure || !response) {
+        const steered = Boolean(this.steerAbort?.signal.aborted) && !options.signal?.aborted;
+        this.steerAbort = undefined;
+        if (steered && this.pendingSteers.length > 0) {
+          // A steer interrupted this call; re-run with the queued message.
+          continue;
+        }
         yield { type: 'model_call', modelCallState: 'failed', modelId: this.options.model };
         yield { type: 'error', content: failure instanceof Error ? failure.message : String(failure) };
         return;
       }
+      this.steerAbort = undefined;
       yield { type: 'model_call', modelCallState: 'completed', modelId: this.options.model };
 
       if (response.usage) {

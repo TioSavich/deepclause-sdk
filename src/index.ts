@@ -41,6 +41,8 @@ export { formatListing, highlightProlog, reflowListing } from './repl/highlight.
 export { HarnessAgent, buildAgentSystemPrompt, describeTools } from './repl/agent.js';
 export type { HarnessAgentOptions, HarnessAgentRunOptions } from './repl/agent.js';
 export { createHarnessTools } from './repl/harness-tools.js';
+export { loadProjectContext } from './repl/project-context.js';
+export type { ProjectContext } from './repl/project-context.js';
 export type {
   HarnessToolController,
   HarnessExecuteResult,

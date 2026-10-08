@@ -1006,6 +1006,14 @@ export class DMLSession {
     await this.persistSessionHarness(this.history?.currentVersion ?? 0);
   }
 
+  /**
+   * Deliver a steering message into the running authoring turn (agent mode).
+   * Ignored when no agent turn is active.
+   */
+  steer(text: string): void {
+    this.harnessAgent?.steer(text);
+  }
+
   private async getHarnessAgent(): Promise<HarnessAgent> {
     if (this.harnessAgent) return this.harnessAgent;
     const docs = this.agentDocs === 'embed'

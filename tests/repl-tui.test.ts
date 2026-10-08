@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest';
 
 import { LineSink, TranscriptComponent } from '../src/repl/tui/transcript.js';
 import { StatusBarComponent } from '../src/repl/tui/status-bar.js';
-import { dim, editorTheme, formatInputAnswer, promptBorder, promptLabel, renderUserLine } from '../src/repl/tui/theme.js';
+import { dim, editorTheme, formatInputAnswer, formatSteer, promptBorder, promptLabel, renderUserLine } from '../src/repl/tui/theme.js';
 import { PromptEditor } from '../src/repl/tui/editor.js';
 import { visibleWidth, type TUI } from '@earendil-works/pi-tui';
 import { ReplStatusTracker } from '../src/repl/status.js';
@@ -114,6 +114,11 @@ describe('TUI theme', () => {
     expect(promptLabel('? x')).toContain('\u001b[38;5;214m');
     expect(promptLabel('? x').replace(/\u001b\[[0-9;]*m/g, '')).toBe('? x');
   });
+
+  it('styles a steering message distinctly', () => {
+    expect(formatSteer('focus on X')).toContain('\u001b[35m');
+    expect(formatSteer('focus on X').replace(/\u001b\[[0-9;]*m/g, '')).toBe('» focus on X');
+  });
 });
 
 describe('PromptEditor', () => {
@@ -180,5 +185,17 @@ describe('StatusBarComponent', () => {
       isFrozen: () => true,
     });
     expect(bar.render(120)[0]).toContain('FROZEN');
+  });
+
+  it('shows a running/steering hint while a turn is active', () => {
+    const tracker = new ReplStatusTracker({ model: { id: 'x', provider: 'env' } });
+    const bar = new StatusBarComponent({
+      getSnapshot: () => tracker.snapshot(),
+      workspace: '/w',
+      sessionId: 's',
+      backend: 'env',
+      isRunning: () => true,
+    });
+    expect(bar.render(120)[0]).toContain('type to steer');
   });
 });

@@ -182,6 +182,22 @@ deepclause repl --authoring agent   # default
 deepclause repl --authoring meta    # legacy
 ```
 
+#### Steering a running turn
+
+While a turn is running you can keep typing. Submitting a line **steers** the
+running agent (pi-style): the message is injected before the next model call,
+and an in-flight model call is interrupted so the agent sees it immediately. The
+status bar shows `running (type to steer)`, and the message is echoed as a
+magenta `» …` line. (While an `ask_user`/`input/2` prompt is open, submitting
+answers that prompt instead.)
+
+#### Workspace `AGENTS.md`
+
+If the working directory contains an `AGENTS.md`, its contents are appended to
+the agent's system prompt under `PROJECT INSTRUCTIONS (AGENTS.md)`, so
+repo-specific rules apply automatically. The startup banner shows
+`project context AGENTS.md (N bytes)` when one is loaded.
+
 #### Customizing the system prompt
 
 The agent's system prompt is assembled from the bundled

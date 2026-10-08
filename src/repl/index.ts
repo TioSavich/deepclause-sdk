@@ -109,6 +109,8 @@ export interface HarnessRepl {
   rollback(): Promise<RollbackResult>;
   /** Compact the session (meta) memory (TypeScript, ported from pi). */
   compact(customInstructions?: string): Promise<{ applied: boolean; beforeTokens: number; afterTokens: number; error?: string }>;
+  /** Deliver a steering message into the running authoring turn. */
+  steer(text: string): void;
   dispose(): Promise<void>;
   /** The underlying session (used by the CLI for session id / frame kind). */
   readonly session: DMLSession;
@@ -171,6 +173,10 @@ class HarnessReplImpl implements HarnessRepl {
 
   compact(customInstructions?: string): Promise<{ applied: boolean; beforeTokens: number; afterTokens: number; error?: string }> {
     return this.session.compact(customInstructions);
+  }
+
+  steer(text: string): void {
+    this.session.steer(text);
   }
 
   dispose(): Promise<void> {

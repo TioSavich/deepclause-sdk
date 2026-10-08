@@ -13,6 +13,7 @@ const ANSI = {
   bold: '\u001b[1m',
   dim: '\u001b[2m',
   cyan: '\u001b[36m',
+  magenta: '\u001b[35m',
   yellow: '\u001b[33m',
   /** Blueish chrome for the input/status area border. */
   border: '\u001b[38;5;75m',
@@ -40,6 +41,11 @@ export function renderUserLine(text: string, width: number): string {
 /** An `ask_user` / `input/2` answer echo (distinct from a normal prompt). */
 export function formatInputAnswer(text: string): string {
   return paint(`> ${text}`, ANSI.yellow);
+}
+
+/** A steering message submitted while a turn is already running. */
+export function formatSteer(text: string): string {
+  return paint(`» ${text}`, `${ANSI.bold}${ANSI.magenta}`);
 }
 
 /** The border of the editing box while the runtime needs human input. */

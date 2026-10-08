@@ -21,8 +21,9 @@ import { ReplStatusTracker, type ReplStatusSnapshot } from '../repl/status.js';
 import { LineSink, TranscriptComponent } from '../repl/tui/transcript.js';
 import { StatusBarComponent } from '../repl/tui/status-bar.js';
 import { Container, ProcessTerminal, Spacer, TuiMainScreen, matchesKey } from '@earendil-works/pi-tui';
-import { editorTheme, formatInputAnswer } from '../repl/tui/theme.js';
+import { editorTheme, formatInputAnswer, formatSteer } from '../repl/tui/theme.js';
 import { PromptEditor } from '../repl/tui/editor.js';
+import { loadProjectContext } from '../repl/project-context.js';
 import { createPiBackend } from '../repl/backend.js';
 import { createReplToolset, type ReplToolset } from '../repl/toolset.js';
 import { parseModelId, type Provider } from '../system/config/model-slots.js';
@@ -466,7 +467,7 @@ export const PACKAGE_VERSION: string = (() => {
 })();
 
 /** Startup banner for the interactive REPL (proposal §2.1). */
-function printBanner(runtime: ReplRuntime, loaded: string[]): void {
+async function printBanner(runtime: ReplRuntime, loaded: string[]): Promise<void> {
   const rich = runtime.renderer.mode === 'rich';
   const paint = (text: string, code: string): string => (rich ? `\u001b[${code}m${text}\u001b[0m` : text);
   const dim = (text: string): string => paint(text, '2');
@@ -491,6 +492,11 @@ function printBanner(runtime: ReplRuntime, loaded: string[]): void {
       : `  ${dim('session')} ${runtime.sessionId}`,
   );
 
+  const project = await loadProjectContext(runtime.workspace);
+  if (project) {
+    lines.push(`  ${dim('project context')} AGENTS.md ${dim(`(${project.bytes} bytes)`)}`);
+  }
+
   // A short getting-started guide, shown on a fresh (blank) harness only.
   if (runtime.repl.session.isEmpty()) {
     lines.push(
@@ -499,7 +505,7 @@ function printBanner(runtime: ReplRuntime, loaded: string[]): void {
       '',
       `    ${accent('<plain English>')}   default. Ask for anything: add a new skill, add a tool,`,
       `                      change existing logic, run or test code in the living`,
-      `                      module, or just ask a question about the harness. A meta`,
+      `                      module, or just ask a question about the harness. An authoring`,
       `                      task writes the DML, tests it with ${dim('execute')}, and commits it.`,
       `    ${accent('goal: <dml>.')}      run DML/Prolog directly against the current harness.`,
       '',
@@ -922,12 +928,14 @@ export async function runTui(
   const tui = new TuiMainScreen(terminal);
   const transcript = new TranscriptComponent();
   const sink = new LineSink(transcript);
+  const runState = { running: false };
   const statusBar = new StatusBarComponent({
     getSnapshot: () => runtime.statusSnapshot(),
     workspace: runtime.workspace,
     sessionId: runtime.sessionId,
     backend: runtime.backend,
     isFrozen: () => runtime.repl.isFrozen(),
+    isRunning: () => runState.running,
   });
   transcript.onChange = () => tui.requestRender();
 
@@ -959,21 +967,34 @@ export async function runTui(
       const wasInput = pendingIsInput;
       pendingResolve = null;
       pendingIsInput = false;
-      if (text) {
-        if (wasInput) {
-          // A `ask_user` / `input/2` answer: keep a short record.
-          transcript.append(formatInputAnswer(text));
-        } else if (activePrompt === runtime.promptPrefix) {
-          // A user turn: separate it from the previous output and from the
-          // response that follows; render it as a pi-style blue block.
-          if (transcript.getLines().length > 0) transcript.append('');
-          transcript.append(text, 'user');
-          transcript.append('');
+
+      if (resolve) {
+        // A pending ask (the main prompt, or ask_user / input/2): resolve it.
+        if (text) {
+          if (wasInput) {
+            // A `ask_user` / `input/2` answer: keep a short record.
+            transcript.append(formatInputAnswer(text));
+          } else if (activePrompt === runtime.promptPrefix) {
+            // A user turn: separate it from the previous output and from the
+            // response that follows; render it as a pi-style blue block.
+            if (transcript.getLines().length > 0) transcript.append('');
+            transcript.append(text, 'user');
+            transcript.append('');
+          }
         }
+        installEditor(text);
+        tui.requestRender();
+        resolve(text);
+        return;
       }
-      installEditor(text);
+
+      // No pending ask means a turn is running: steer it (pi-style).
+      if (text.trim()) {
+        transcript.append(formatSteer(text));
+        runtime.repl.steer(text);
+      }
+      installEditor();
       tui.requestRender();
-      resolve?.(text);
     };
     editor = next;
     editorContainer.clear();
@@ -1039,7 +1060,7 @@ export async function runTui(
   tui.addChild(statusBar);
   tui.start();
 
-  printBanner(runtime, loaded);
+  await printBanner(runtime, loaded);
   tui.requestRender();
 
   try {
@@ -1051,6 +1072,8 @@ export async function runTui(
 
       const controller = new AbortController();
       holder.turn = controller;
+      runState.running = true;
+      tui.requestRender();
       try {
         if (input.kind === 'goal') {
           await runInteractiveGoal(runtime.repl, runtime.renderer, input.goal, options, ask, controller.signal);
@@ -1064,6 +1087,8 @@ export async function runTui(
         }
       } finally {
         holder.turn = null;
+        runState.running = false;
+        tui.requestRender();
       }
     }
   } finally {
@@ -1152,7 +1177,7 @@ export async function startRepl(options: ReplCliOptions): Promise<number> {
     if (wantTui) {
       return await runTui(runtime, options, saveHarnessOnExit, options.load ?? []);
     }
-    printBanner(runtime, options.load ?? []);
+    await printBanner(runtime, options.load ?? []);
     return await runInteractive(runtime, options, saveHarnessOnExit);
   } finally {
     await saveHarnessOnExit();

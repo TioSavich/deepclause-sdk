@@ -210,6 +210,50 @@ describe('HarnessAgent', () => {
     }
   });
 
+  it('appends a workspace AGENTS.md to the system prompt', async () => {
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'dc-agent-agents-'));
+    try {
+      await fs.writeFile(path.join(workspace, 'AGENTS.md'), '# House rules\nAlways cite sources.', 'utf8');
+      const prompt = await buildAgentSystemPrompt({
+        tools: createHarnessTools(stubController().controller),
+        manifest: 'M',
+        workspacePath: workspace,
+      });
+      expect(prompt).toContain('PROJECT INSTRUCTIONS (AGENTS.md)');
+      expect(prompt).toContain('Always cite sources.');
+    } finally {
+      await fs.rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  it('injects a steering message into the next model call', async () => {
+    const { controller } = stubController();
+    const calls: LLMBackendRequest[] = [];
+    let agentRef: HarnessAgent;
+    const backend: LLMBackend = {
+      complete: async (request) => {
+        calls.push(request);
+        if (calls.length === 1) {
+          agentRef.steer('actually, focus on X');
+          return {
+            text: 'working',
+            toolCalls: [{ id: '1', name: 'execute', arguments: { goal: 'x' } }],
+            finishReason: 'tool_use',
+          };
+        }
+        return {
+          text: 'done',
+          toolCalls: [{ id: '2', name: 'finish', arguments: { success: true } }],
+          finishReason: 'tool_use',
+        };
+      },
+    };
+    agentRef = new HarnessAgent({ controller, tools: createHarnessTools(controller), llmBackend: backend, model: 'm', streaming: false });
+    await collect(agentRef.run('do it'));
+    expect(calls.length).toBeGreaterThanOrEqual(2);
+    expect(calls[1].messages.some((message) => message.role === 'user' && message.content.includes('focus on X'))).toBe(true);
+  });
+
   it('embeds the DML reference and authoring guide when provided', async () => {
     const prompt = await buildAgentSystemPrompt({
       tools: createHarnessTools(stubController().controller),

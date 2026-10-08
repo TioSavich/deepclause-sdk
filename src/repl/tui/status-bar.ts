@@ -21,6 +21,8 @@ export interface StatusBarOptions {
   sessionId: string;
   backend: string;
   isFrozen?: () => boolean;
+  /** True while a turn is running (so the user knows they can steer). */
+  isRunning?: () => boolean;
 }
 
 /** Right-align `right` within `width`, truncating the left side if needed. */
@@ -46,8 +48,9 @@ export class StatusBarComponent implements Component {
   render(width: number): string[] {
     const snapshot = this.options.getSnapshot();
     const frozen = this.options.isFrozen?.() ? ' · FROZEN' : '';
+    const running = this.options.isRunning?.() ? ' · running (type to steer)' : '';
     const line1 = truncateToWidth(
-      `${this.options.workspace} · session ${this.options.sessionId} · backend ${this.options.backend}${frozen}`,
+      `${this.options.workspace} · session ${this.options.sessionId} · backend ${this.options.backend}${frozen}${running}`,
       width,
       '…',
     );
