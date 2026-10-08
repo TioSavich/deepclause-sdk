@@ -127,7 +127,7 @@ describe('TUI theme', () => {
     const line = renderSteerLine('focus on X', 40);
     expect(line).toContain('\u001b[48;5;94m');
     const visible = line.replace(/\u001b\[[0-9;]*m/g, '');
-    expect(visible.startsWith('Steering: focus on X')).toBe(true);
+    expect(visible.startsWith(' Steering: focus on X')).toBe(true);
     expect(visible).toHaveLength(40);
   });
 });

@@ -9,7 +9,7 @@
 
 import { visibleWidth, wrapTextWithAnsi, type Component } from '@earendil-works/pi-tui';
 
-import { renderSteerLine, renderUserLine } from './theme.js';
+import { renderSteerLine, renderUserLine, STEER_LABEL } from './theme.js';
 
 export type TranscriptLineStyle = 'user' | 'steer';
 
@@ -74,7 +74,7 @@ export class TranscriptComponent implements Component {
       const wrapWidth = entry.style === 'user'
         ? Math.max(1, width - 2)
         : entry.style === 'steer'
-          ? Math.max(1, width - 'Steering: '.length)
+          ? Math.max(1, width - STEER_LABEL.length)
           : width;
       const wrapped = visibleWidth(entry.text) <= wrapWidth
         ? [entry.text]

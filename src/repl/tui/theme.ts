@@ -50,11 +50,14 @@ export function formatInputAnswer(text: string): string {
  * Render one line of a steering message as a full-width amber block, prefixed
  * with `Steering: ` on the first line. Padded to the terminal width.
  */
+export const STEER_LABEL = ' Steering: ';
+const STEER_INDENT = ' '.repeat(STEER_LABEL.length);
+
 export function renderSteerLine(text: string, width: number, first = true): string {
-  const label = first ? 'Steering: ' : '          ';
+  const label = first ? STEER_LABEL : STEER_INDENT;
   const visible = label.length + visibleWidth(text);
   const padding = Math.max(0, width - visible);
-  const labelStyled = first ? `${ANSI.bold}Steering: ${ANSI.boldOff}` : label;
+  const labelStyled = first ? `${ANSI.bold}${STEER_LABEL}${ANSI.boldOff}` : label;
   return `${ANSI.steerBg}${ANSI.steerFg}${labelStyled}${text}${' '.repeat(padding)}${ANSI.reset}`;
 }
 
