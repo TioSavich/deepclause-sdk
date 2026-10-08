@@ -13,18 +13,28 @@ mode), and from browser-use (an action toolset over a browser driver).
 
 ## 0. The building blocks
 
+### A harness is a skill
+
+A DML file is a skill in the Agent Skills sense, and `module_doc/1` is its
+**description**: one line saying what the harness does and *when to use it* (not
+a title). It is the first line of the manifest, so the agent reads it at the start
+of a session and re-reads it whenever the harness changes. A file containing only
+`module_doc/1` is a valid, discoverable skill: it advertises a capability while
+its body is still empty.
+
 A harness is a **living library of DML skills**. Every pattern below is a
 composition of the same small set of constructs:
 
 | Concept | DML | Notes |
 |---|---|---|
+| The skill description | `module_doc/1` | What the file does and when to use it; first manifest line |
 | One model step | `task/N`, `prompt/N` | `task` sees the current memory; `prompt` is fresh |
 | One typed decision | `choose/4`, `rate/4`, `verify/3`, `probability/3`, `judge/2` | Constrained outputs, batched, memoized |
 | One constrained token | `sample_token/2,3` | Grammar/label frontier lives in the allowed list |
 | A host capability | `exec(Tool(Args), Result)` | Only the catalog tools; `bash` by default |
 | A capability the model can call | `tool(Head, "desc") :- Body.` | The nested agent calls these during `task/N` |
 | A reusable subroutine | a plain predicate | Named, documented, tested |
-| Knowledge | facts (`module_doc/1`, `doc/2`, data facts) | Data = code; small data lives in the module |
+| Knowledge | facts (data facts) | Data = code; small data lives in the module |
 | A note across steps | `system/1`, `user/1`, explicit variables | Nested `task/N` starts with **fresh** memory |
 | Progress / result | `output/1`, `log/1`, `answer/1` | `answer` commits; `output` is for the user |
 | An external program | a file + `script_file/2` | Ships with `export`; run it with `bash` |

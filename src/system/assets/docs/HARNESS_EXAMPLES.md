@@ -11,11 +11,14 @@ calls, not the logic library (`DML_AUTHORING.md` §0). For file work, shell out
 (`exec(bash(...))`) instead of reading files into DML (§2).
 
 Every skill carries a `doc(Name/Arity, Text)` annotation and the harness a
-`module_doc(Text)` line (`DML_AUTHORING.md` §3) — they appear in the manifest
-and `listing`, so the harness stays self-describing. Keep them terse.
+`module_doc(Text)` line (`DML_AUTHORING.md` §4). `module_doc/1` is the harness's
+**skill description** — what it does and when to use it; it is the first line of
+the manifest, which the agent reads at session start and whenever it changes. A
+file with only `module_doc/1` is still a valid skill (an advertised capability
+with an empty body). Keep both terse.
 
 ```prolog
-module_doc("Example harness: a few small skills used as patterns.").
+module_doc("Example harness: a few small skills used as patterns. Use when you need a copy-paste starting point.").
 ```
 
 ## 1. Wrap a workspace script as a tool

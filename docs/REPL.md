@@ -246,6 +246,10 @@ exist — by default just `bash`** — so the agent never invents
   DML language reference and the authoring guide (embedded in the prompt by
   default, or via `reference("language")`/`reference("authoring")`). Never write
   DML from memory.
+* **Read the skill description first** — `module_doc/1` is the harness's skill
+  description, surfaced as the first manifest line (`- skill: ...`). The agent is
+  told to read it at the start of the session and re-read it whenever the harness
+  changes. A file with only `module_doc/1` is still a valid skill.
 * **Read before writing** — call `listing` first.
 * **Clause order matters** — a base case must precede a recursive rule. Define a
   predicate with one `define`/`assert_many` call, which asserts the whole block in

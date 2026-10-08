@@ -1820,13 +1820,13 @@ repl_manifest(SessionId, Manifest) :-
     ),
     repl_history_summary(SessionId, HistorySummary),
     with_output_to(string(Manifest),
-        (   format("- predicates: ~w~n", [Preds]),
+        (   (   Summary == ""
+            ->  format("- skill: (none; add module_doc/1 so the harness describes itself and can be routed)~n")
+            ;   format("- skill: ~w~n", [Summary])
+            ),
+            format("- predicates: ~w~n", [Preds]),
             format("- tools: ~w~n", [Tools]),
             format("- directives: ~w~n", [Directives]),
-            (   Summary == ""
-            ->  true
-            ;   format("- harness: ~w~n", [Summary])
-            ),
             (   Docs0 == []
             ->  format("- docs: (none; add doc(Name/Arity, Text) facts)~n")
             ;   forall(member(PI-DocText, Docs0), format("- doc(~w): ~w~n", [PI, DocText]))

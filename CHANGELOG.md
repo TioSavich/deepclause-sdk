@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Changed
+
+- **`module_doc/1` is now the harness's skill description.** The manifest leads
+  with `- skill: <module_doc>` (previously a trailing `- harness:` line), and the
+  authoring prompt tells the agent to read it at the start of the session and
+  re-read it whenever the harness changes. A file with only `module_doc/1` and no
+  predicates is documented as a valid skill (an advertised capability with an
+  empty body).
+
 ### Added
 
 - **Harness patterns reference** (`HARNESS_PATTERNS.md`, `reference("patterns")`):

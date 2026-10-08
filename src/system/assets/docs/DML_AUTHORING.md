@@ -106,21 +106,29 @@ document it with `doc/2`.
 
 ## 4. Annotate the harness (self-describing)
 
-Keep the harness self-describing with a small set of facts:
+Keep the harness self-describing. `module_doc/1` is the harness's **skill
+description** — the one line that says what the harness does and when to use it,
+the same role a skill's `description` plays for routing. Write it like
+frontmatter, not like a title:
 
 ```prolog
-module_doc("Support triage: classify a message and route it to a team.").
+module_doc("Support triage: classify a customer message and route it to the right team. Use when a message needs a team.").
 
 doc(classify/2, "Route a support message to a team. classify(+Message, -Team). Example: goal: classify(\"I was charged twice\", T).").
 doc(tally/2, "Count occurrences of each item. tally(+List, -Counts) yields Key-N pairs. Example: tally([a,b,a], C).").
 ```
 
+- `module_doc(Text)` — the skill description. It is the **first line of the
+  manifest** (`- skill: ...`), so **read it at the start of the session and
+  re-read it whenever the harness changes**. A file with only `module_doc/1` and
+  no predicates is still a valid skill: it advertises the capability while the
+  body is empty.
 - `doc(Name/Arity, Text)` — one fact per skill, helper, or tool; terse, with
   arguments (`+in` / `-out`) and an example goal.
-- `module_doc(Text)` — one fact summarising the whole harness.
 
 They are shown in the manifest (so the next turn sees them), in `listing`, and
-survive `export`. When you change a predicate, update its `doc/2` too.
+survive `export`. When you change a predicate, update its `doc/2`; when the
+harness's purpose changes, update `module_doc/1`.
 
 ## 5. Media (images)
 
