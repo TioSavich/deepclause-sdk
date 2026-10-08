@@ -238,6 +238,10 @@ catalog pairing rule is explicit: **only the `exec(...)` names in the catalog
 exist — by default just `bash`** — so the agent never invents
 `calculator`/`fetch_url`/`web_search`/`vm_exec`. The rules that matter most:
 
+* **Read the reference first** — before writing or changing DML, consult the
+  DML language reference and the authoring guide (embedded in the prompt by
+  default, or via `reference("language")`/`reference("authoring")`). Never write
+  DML from memory.
 * **Read before writing** — call `listing` first.
 * **Clause order matters** — a base case must precede a recursive rule. Define a
   predicate with one `define`/`assert_many` call, which asserts the whole block in
