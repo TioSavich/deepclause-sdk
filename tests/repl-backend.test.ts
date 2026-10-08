@@ -233,7 +233,8 @@ describe('reasoning levels', () => {
     });
     const info = createPiAdapter(registry, REASONING_MODEL, 8192, 'high');
     await info.backend.complete({ messages: [{ role: 'user', content: 'hi' }] });
-    expect(seen?.thinkingLevel).toBe('high');
+    expect(seen?.reasoning).toBe('high');
+    expect(seen?.thinkingLevel).toBeUndefined();
     expect(info.contextWindow).toBe(200_000);
     expect(info.reasoning).toBe(true);
     expect(info.thinkingLevel).toBe('high');
@@ -250,7 +251,7 @@ describe('reasoning levels', () => {
     });
     await createPiAdapter(registry, REASONING_MODEL, 8192, 'off').backend.complete({ messages: [{ role: 'user', content: 'hi' }] });
     await createPiAdapter(registry, MODEL, 8192, 'high').backend.complete({ messages: [{ role: 'user', content: 'hi' }] });
-    expect(calls[0].thinkingLevel).toBeUndefined();
-    expect(calls[1].thinkingLevel).toBeUndefined();
+    expect(calls[0].reasoning).toBeUndefined();
+    expect(calls[1].reasoning).toBeUndefined();
   });
 });

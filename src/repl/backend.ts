@@ -277,7 +277,9 @@ export function createPiAdapter(
         cacheRetention: 'none',
       };
       if (model.reasoning && resolved.level && resolved.level !== 'off') {
-        options.thinkingLevel = resolved.level;
+        // pi's `SimpleStreamOptions` enables thinking with `reasoning` (a
+        // ThinkingLevel), not `thinkingLevel`.
+        options.reasoning = resolved.level;
       }
 
       let response: PiCompletionResult;

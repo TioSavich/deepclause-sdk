@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Fixed
+
+- **Reasoning now actually streams.** The pi adapter passed the thinking level
+  as `options.thinkingLevel`, but pi's `SimpleStreamOptions` enables thinking
+  with `options.reasoning` (`ThinkingLevel`). The key was ignored, so providers
+  never emitted thinking deltas; reasoning models now stream reasoning.
+
 ### Changed
 
 - **Markdown rendering and grey reasoning.** Assistant text is rendered as
