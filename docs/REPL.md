@@ -64,9 +64,10 @@ treated as a prompt.
 ### Iterating over solutions
 
 After each solution of a `goal:` the REPL pauses; in the TUI the editor border
-shows `? ; more · a all · . stop`, and you press `;` (Enter) for the next
-solution, `a` for all, or `.`/Enter to stop. Lines typed while the goal is still
+shows `? Enter/; more · a all · . stop`. Press **Enter** (or `;`) for the next
+solution, `a` for all, and `.`/`q` to stop. Lines typed while the goal is still
 running are buffered and used for the next pager prompt instead of being lost.
+Up/down recall earlier inputs from the session.
 
 ## What a harness is
 

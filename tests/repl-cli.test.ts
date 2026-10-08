@@ -3,7 +3,7 @@
  */
 import { describe, expect, it } from 'vitest';
 
-import { classifyReplInput, runGoalWithRenderer } from '../src/cli/repl.js';
+import { classifyReplInput, runGoalWithRenderer, runInteractiveGoal } from '../src/cli/repl.js';
 import { ReplRenderer } from '../src/repl/render.js';
 import type { DMLEvent } from '../src/types.js';
 import type { HarnessRepl } from '../src/repl/index.js';
@@ -115,5 +115,30 @@ describe('runGoalWithRenderer', () => {
     const renderer = new ReplRenderer({ mode: 'plain', sink: (text) => lines.push(text) });
     const code = await runGoalWithRenderer(fakeRepl([{ type: 'error', content: 'boom' }]), 'bad', { renderer });
     expect(code).toBe(1);
+  });
+});
+
+describe('runInteractiveGoal pager', () => {
+  const events: DMLEvent[] = [
+    { type: 'solution', solution: { bindings: [{ name: 'X', value: 'a' }], deterministic: false } },
+    { type: 'solution', solution: { bindings: [{ name: 'X', value: 'b' }], deterministic: false } },
+  ];
+
+  it('continues on Enter and stops on "."', async () => {
+    const lines: string[] = [];
+    const renderer = new ReplRenderer({ mode: 'plain', sink: (text) => lines.push(text) });
+    const keys = ['', '.'];
+    let index = 0;
+    await runInteractiveGoal(fakeRepl(events), renderer, 'member(X,[a,b])', {} as never, async () => keys[index++] ?? '.');
+    expect(lines.join('')).toContain('X = a');
+    expect(lines.join('')).toContain('X = b');
+  });
+
+  it('stops immediately on "."', async () => {
+    const lines: string[] = [];
+    const renderer = new ReplRenderer({ mode: 'plain', sink: (text) => lines.push(text) });
+    await runInteractiveGoal(fakeRepl(events), renderer, 'member(X,[a,b])', {} as never, async () => '.');
+    expect(lines.join('')).toContain('X = a');
+    expect(lines.join('')).not.toContain('X = b');
   });
 });

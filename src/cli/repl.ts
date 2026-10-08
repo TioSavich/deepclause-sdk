@@ -915,17 +915,18 @@ export async function runInteractiveGoal(
           return;
         }
         if (!pageAll) {
-          // SWI-style pager: ';' continues, '.' or Enter stops, a/w/p print all.
+          // Pager: Enter or `;` pages the next solution, `a` prints all,
+          // `.`/`q` stops. (Enter is the common "next" gesture in the TUI.)
           const key = await ask(' ;');
-          const trimmed = (key ?? '').trim();
-          if (trimmed === '' || trimmed === '.' || trimmed === 'd') {
+          const trimmed = (key ?? '').trim().toLowerCase();
+          if (trimmed === 'a' || trimmed === 'w' || trimmed === 'p') {
+            pageAll = true;
+          } else if (trimmed === '.' || trimmed === 'q' || trimmed === 'd' || trimmed === 'stop') {
             renderer.writeLine('.');
             await iterator.return?.(undefined);
             return;
           }
-          if (trimmed === 'a' || trimmed === 'w' || trimmed === 'p') {
-            pageAll = true;
-          }
+          // Empty/Enter/`;`/anything else: fall through to the next solution.
         }
       } else if (value.type === 'error') {
         renderer.render(value);
@@ -993,54 +994,56 @@ export async function runTui(
   // duplicate `input_required` transcript line.
   runtime.renderer.setSuppressInputPrompt(true);
 
-  const installEditor = (value = '', prompt: string | null = null): void => {
-    const next = new PromptEditor(tui, editorTheme());
-    if (value) next.addToHistory(value);
-    if (prompt) next.setPrompt(prompt);
-    next.onSubmit = (text) => {
-      const resolve = pendingResolve;
-      const wasInput = pendingIsInput;
-      pendingResolve = null;
-      pendingIsInput = false;
+  // A single editor is reused for every prompt so up/down history persists for
+  // the whole session (recreating it reset the history).
+  const handleSubmit = (text: string): void => {
+    const resolve = pendingResolve;
+    const wasInput = pendingIsInput;
+    pendingResolve = null;
+    pendingIsInput = false;
 
-      if (resolve) {
-        // A pending ask (the main prompt, or ask_user / input/2): resolve it.
-        if (text) {
-          if (wasInput) {
-            // A `ask_user` / `input/2` answer: keep a short record.
-            transcript.append(formatInputAnswer(text));
-          } else if (activePrompt === runtime.promptPrefix) {
-            // A user turn: separate it from the previous output and from the
-            // response that follows; render it as a pi-style blue block.
-            if (transcript.getLines().length > 0) transcript.append('');
-            transcript.append(text, 'user');
-            transcript.append('');
-          }
+    if (resolve) {
+      // A pending ask (the main prompt, or ask_user / input/2): resolve it.
+      if (text) {
+        if (wasInput) {
+          // A `ask_user` / `input/2` answer: keep a short record.
+          transcript.append(formatInputAnswer(text));
+        } else if (activePrompt === runtime.promptPrefix) {
+          // A user turn: separate it from the previous output and from the
+          // response that follows; render it as a pi-style blue block.
+          if (transcript.getLines().length > 0) transcript.append('');
+          transcript.append(text, 'user');
+          transcript.append('');
         }
-        installEditor(text);
-        tui.requestRender();
-        resolve(text);
-        return;
       }
-
+    } else if (text.trim()) {
       // No pending ask means a turn is running.
-      if (text.trim()) {
-        if (runState.steerable) {
-          transcript.append(formatSteer(text));
-          runtime.repl.steer(text);
-        } else {
-          // A goal query is running: queue the line for the solution pager.
-          bufferedInput.push(text);
-          transcript.append(formatSteer(text));
-        }
+      if (runState.steerable) {
+        transcript.append(formatSteer(text));
+        runtime.repl.steer(text);
+      } else {
+        // A goal query is running: queue the line for the solution pager.
+        bufferedInput.push(text);
+        transcript.append(formatSteer(text));
       }
-      installEditor();
-      tui.requestRender();
-    };
-    editor = next;
+    }
+
+    if (editor) {
+      editor.setPrompt(null);
+      editor.setText('');
+      if (text) editor.addToHistory(text);
+      tui.setFocus(editor);
+    }
+    tui.requestRender();
+    resolve?.(text);
+  };
+
+  const createEditor = (): void => {
+    editor = new PromptEditor(tui, editorTheme());
+    editor.onSubmit = handleSubmit;
     editorContainer.clear();
-    editorContainer.addChild(next);
-    tui.setFocus(next);
+    editorContainer.addChild(editor);
+    tui.setFocus(editor);
   };
 
   /**
@@ -1060,7 +1063,7 @@ export async function runTui(
         const hint = isInput
           ? label
           : label === ' ;'
-            ? '; more · a all · . stop'
+            ? 'Enter/; more · a all · . stop'
             : null;
         editor.setPrompt(hint);
         tui.setFocus(editor);
@@ -1106,7 +1109,7 @@ export async function runTui(
   // Fallback for terminals/raw-mode setups that deliver SIGINT instead of \x03.
   process.on('SIGINT', cancelTurn);
 
-  installEditor();
+  createEditor();
   tui.addChild(transcript);
   tui.addChild(new Spacer(1));
   tui.addChild(editorContainer);
