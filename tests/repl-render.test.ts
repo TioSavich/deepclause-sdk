@@ -226,6 +226,39 @@ describe('ReplRenderer', () => {
     expect(lines[1]).toContain('second');
   });
 
+  it('truncates a long nested output line to the width', () => {
+    const { lines, renderer } = capture('plain', false, 80);
+    renderer.render({ type: 'output', content: 'x'.repeat(500), frameKind: 'nested', depth: 1 } as DMLEvent);
+    expect(lines[0]).toContain('nested');
+    expect(lines[0]).toContain('…');
+    // Prefix + content + ellipsis stays within the width (sink chunks keep \n).
+    expect(lines[0].replace(/\n$/, '').length).toBeLessThanOrEqual(80);
+    expect(lines.length).toBe(1);
+  });
+
+  it('truncates a long nested solution binding', () => {
+    const { lines, renderer } = capture('plain', false, 200);
+    renderer.render({
+      type: 'solution',
+      frameKind: 'nested',
+      depth: 1,
+      solution: { bindings: [{ name: 'R', value: `dict{stdout:"${'y'.repeat(400)}"}` }], deterministic: false },
+    } as DMLEvent);
+    const text = lines.join('\n');
+    expect(text).toContain('nested');
+    expect(text).toContain('R = ');
+    expect(text).toContain('…');
+    expect(text).not.toContain('y'.repeat(400));
+  });
+
+  it('wraps a long top-level output line to the width', () => {
+    const { lines, renderer } = capture('plain', false, 40);
+    renderer.render({ type: 'output', content: 'a'.repeat(95) } as DMLEvent);
+    // 95 chars at width 40 wraps into three lines, each within the width.
+    expect(lines.length).toBe(3);
+    for (const line of lines) expect(line.replace(/\n$/, '').length).toBeLessThanOrEqual(40);
+  });
+
   it('shows a live spinner while a model call is in progress (rich mode)', () => {
     vi.useFakeTimers();
     try {

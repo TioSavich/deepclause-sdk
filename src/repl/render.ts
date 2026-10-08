@@ -360,19 +360,29 @@ export class ReplRenderer {
 
     switch (event.type) {
       case 'solution':
-        this.solution(event.solution?.bindings ?? [], undefined, prefix);
+        this.solution(
+          event.solution?.bindings ?? [],
+          undefined,
+          prefix,
+          // Nested (`execute` child) bindings often carry a whole result term;
+          // keep the transcript readable by truncating them.
+          event.frameKind === 'nested' ? 160 : undefined,
+        );
         break;
       case 'output': {
-        // A single event can carry a large multi-line term (`write/1`); bound it
-        // and keep the frame prefix on every physical line.
-        const lines = this.verbose ? (event.content ?? '').split('\n') : boundOutput(event.content ?? '');
-        for (const line of lines) {
-          this.writeLine(`${prefix}${this.paint(line, ANSI.output)}`);
-        }
+        // A single event can carry a large multi-line term (`write/1` of an
+        // `exec(...)` result). Bound the line count, then fit each line to the
+        // terminal width so nothing wraps (which would desync the TUI). Nested
+        // activity is truncated to one line each; top-level output wraps.
+        const max = event.frameKind === 'nested' ? 6 : OUTPUT_LINES;
+        const bounded = this.verbose
+          ? (event.content ?? '')
+          : boundOutput(event.content ?? '', max).join('\n');
+        this.writeFrameText(prefix, bounded, ANSI.output, event.frameKind === 'nested');
         break;
       }
       case 'answer':
-        this.writeLine(`${prefix}${this.paint(event.content ?? '', ANSI.answer)}`);
+        this.writeFrameText(prefix, event.content ?? '', ANSI.answer, false);
         break;
       case 'model_call':
         this.renderModelCall(event, prefix);
@@ -573,6 +583,23 @@ export class ReplRenderer {
     return `${bg}${fg}${text}${pad}${ANSI.reset}`;
   }
 
+  /**
+   * Write `text` as frame-prefixed lines that each fit the terminal width:
+   * wrap by default, or truncate each physical line (nested activity).
+   */
+  private writeFrameText(prefix: string, text: string, code: string, truncate: boolean): void {
+    const avail = Math.max(20, this.width - stripAnsi(prefix).length);
+    const normalized = text.replace(/\r\n?/g, '\n').replace(/\t/g, '    ');
+    for (const rawLine of normalized.split('\n')) {
+      const segments = truncate
+        ? [rawLine.length > avail ? `${rawLine.slice(0, avail - 1)}…` : rawLine]
+        : wrapLine(rawLine, avail);
+      for (const segment of segments) {
+        this.writeLine(`${prefix}${this.paint(segment, code)}`);
+      }
+    }
+  }
+
   /** Write a streamed chunk, prefixing it with its frame label on first use. */
   private writeStream(event: DMLEvent, chunk: string, kind: 'text' | 'reasoning'): void {
     // Include the kind so switching reasoning <-> text starts a fresh region.
@@ -615,7 +642,7 @@ export class ReplRenderer {
    * Render one solution's bindings. `terminator` is appended after the last
    * binding line ('.' for the final answer, ' ' while more may follow).
    */
-  solution(bindings: DMLBinding[], terminator?: string, prefix = ''): void {
+  solution(bindings: DMLBinding[], terminator?: string, prefix = '', maxValue?: number): void {
     if (this.mode === 'json') {
       this.sink(`${JSON.stringify({ type: 'solution', solution: { bindings, deterministic: false } })}\n`);
       return;
@@ -626,8 +653,9 @@ export class ReplRenderer {
       return;
     }
     const lines = bindings.map((binding) => {
+      const value = maxValue !== undefined ? truncate(binding.value, maxValue) : binding.value;
       const name = this.paint(binding.name, ANSI.cyan);
-      return `${prefix}${name} = ${binding.value}`;
+      return `${prefix}${name} = ${value}`;
     });
     const last = lines.length - 1;
     lines.forEach((line, index) => {
