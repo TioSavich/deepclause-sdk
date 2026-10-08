@@ -287,6 +287,8 @@ export interface ReplRuntime {
   resumedSession?: string;
   /** True when persistent history is enabled (sessions can be resumed). */
   historyEnabled: boolean;
+  /** Previous session inputs, oldest first (for the editor's up/down history). */
+  inputHistory: string[];
   /** Current usage/context/model status for the status bar. */
   statusSnapshot(): ReplStatusSnapshot;
   /** Resolved interactive UI mode (`auto` unless overridden by config/flags). */
@@ -432,6 +434,18 @@ export async function createReplRuntime(options: ReplCliOptions): Promise<ReplRu
     resume = true;
   }
 
+  // Seed the editor's up/down history from the target session's recorded turns.
+  let inputHistory: string[] = [];
+  if (historyOptions) {
+    const store = new HistoryStore(workspace, '__session_lookup__', historyOptions);
+    const target = sessionId ?? await store.latestSessionId();
+    if (target) {
+      inputHistory = (await store.readTurns(target))
+        .map((turn) => turn.request)
+        .filter((request) => typeof request === 'string' && request.length > 0);
+    }
+  }
+
   const repl = await createHarnessRepl({
     sessionId,
     resume,
@@ -493,6 +507,7 @@ export async function createReplRuntime(options: ReplCliOptions): Promise<ReplRu
     sessionId: repl.session.getSessionId(),
     resumedSession: resume ? sessionId : undefined,
     historyEnabled: Boolean(historyOptions),
+    inputHistory,
     statusSnapshot: () => statusTracker.snapshot(),
     tuiMode: options.tui ?? config.repl.tui ?? 'auto',
     authoring: options.authoring ?? config.repl.authoring ?? 'agent',
@@ -1110,6 +1125,7 @@ export async function runTui(
   process.on('SIGINT', cancelTurn);
 
   createEditor();
+  for (const line of runtime.inputHistory) editor?.addToHistory(line);
   tui.addChild(transcript);
   tui.addChild(new Spacer(1));
   tui.addChild(editorContainer);

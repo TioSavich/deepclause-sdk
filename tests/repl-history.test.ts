@@ -268,4 +268,16 @@ describe('harness history', () => {
     expect(await second.sessionExists('nope')).toBe(false);
     expect(await second.latestSessionId()).toBe('sess_b');
   });
+
+  it('reads a session turn list for input history', async () => {
+    const store = new HistoryStore(workspace, 'sess_a', HISTORY);
+    await store.init();
+    await store.startSession({ model: 'm', backend: 'openai' });
+    await store.recordTurn({ turn: 1, mode: 'prompt', request: 'add a fact', outcome: 'committed', durationMs: 1, modelCalls: 1 });
+    await store.recordTurn({ turn: 2, mode: 'goal', request: 'member(X, [1,2])', outcome: 'query', durationMs: 1, modelCalls: 0 });
+
+    const turns = await store.readTurns('sess_a');
+    expect(turns.map((turn) => turn.request)).toEqual(['add a fact', 'member(X, [1,2])']);
+    expect(await store.readTurns('missing')).toEqual([]);
+  });
 });

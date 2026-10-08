@@ -220,6 +220,28 @@ export class HistoryStore {
     }
   }
 
+  /** The turns recorded for a session, oldest first (used for input history). */
+  async readTurns(sessionId: string = this.sessionId): Promise<HistoryTurnRecord[]> {
+    const file = path.join(this.sessionsDir(), sessionId, 'turns.jsonl');
+    let text: string;
+    try {
+      text = await fs.readFile(file, 'utf8');
+    } catch {
+      return [];
+    }
+    const turns: HistoryTurnRecord[] = [];
+    for (const line of text.split('\n')) {
+      if (!line.trim()) continue;
+      try {
+        const parsed = JSON.parse(line) as HistoryTurnRecord;
+        if (typeof parsed?.request === 'string') turns.push(parsed);
+      } catch {
+        // skip malformed lines
+      }
+    }
+    return turns;
+  }
+
   async startSession(
     info: { model: string; backend: string },
     options: { resume?: boolean } = {},
