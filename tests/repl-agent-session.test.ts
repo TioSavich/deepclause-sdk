@@ -275,4 +275,26 @@ describe('harness edit transactions', () => {
     expect(new Set(predicates).size).toBe(predicates.length);
     expect(predicates).toEqual(expect.arrayContaining(['a/1', 'b/1']));
   });
+
+  it('reverses the task/prompt rewrites inside wrappers in listing and export', async () => {
+    repl = await openSession();
+    const loaded = await repl.session.loadCode(
+      'patch(File, Issue, C) :- with_tools([x], (task("Fix {Issue} in {File}", C))).\n'
+      + 'tool(inline(Text, R), "Inline.") :- task("Do {Text}", R).\n',
+    );
+    expect(loaded.error).toBeUndefined();
+
+    // `listing(tools)` must show task/N, not the internal task_named/3.
+    const tools = await repl.list('tools');
+    expect(tools).not.toContain('task_named');
+    expect(tools).toContain('task("Do {A}",B)');
+
+    // Export must round-trip to task/N, including inside with_tools/2.
+    const out = await repl.export('out.dml');
+    const text = await fs.readFile(out.path, 'utf8');
+    expect(text).not.toContain('task_named');
+    expect(text).not.toContain('prompt_named');
+    expect(text).not.toContain('typed_var');
+    expect(text).toContain('with_tools([x],task("Fix {B} in {A}",C))');
+  });
 });

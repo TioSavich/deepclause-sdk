@@ -421,6 +421,40 @@ clean_atomic(\+(A), \+ CA) :-
 clean_atomic(not(A), not(CA)) :-
     !,
     clean_clause_body(A, CA).
+% Wrappers: recurse into their goal arguments so a task/prompt inside is also
+% reversed (the load-time rewrite descends into these via transform_task_calls).
+clean_atomic(with_tools(Tools, Goal), with_tools(Tools, CleanGoal)) :-
+    !,
+    clean_clause_body(Goal, CleanGoal).
+clean_atomic(without_tools(Tools, Goal), without_tools(Tools, CleanGoal)) :-
+    !,
+    clean_clause_body(Goal, CleanGoal).
+clean_atomic(with_judgment(Backend, Goal), with_judgment(Backend, CleanGoal)) :-
+    !,
+    clean_clause_body(Goal, CleanGoal).
+clean_atomic(require_judgment(Backend, Goal), require_judgment(Backend, CleanGoal)) :-
+    !,
+    clean_clause_body(Goal, CleanGoal).
+clean_atomic(once(Goal), once(CleanGoal)) :-
+    !,
+    clean_clause_body(Goal, CleanGoal).
+clean_atomic(ignore(Goal), ignore(CleanGoal)) :-
+    !,
+    clean_clause_body(Goal, CleanGoal).
+clean_atomic(catch(Goal, Catcher, Recovery), catch(CleanGoal, Catcher, CleanRecovery)) :-
+    !,
+    clean_clause_body(Goal, CleanGoal),
+    clean_clause_body(Recovery, CleanRecovery).
+clean_atomic(forall(Generator, Action), forall(CleanGenerator, CleanAction)) :-
+    !,
+    clean_clause_body(Generator, CleanGenerator),
+    clean_clause_body(Action, CleanAction).
+clean_atomic(findall(Template, Goal, List), findall(Template, CleanGoal, List)) :-
+    !,
+    clean_clause_body(Goal, CleanGoal).
+clean_atomic(Module:Goal, Module:CleanGoal) :-
+    !,
+    clean_clause_body(Goal, CleanGoal).
 clean_atomic(Goal, Goal).
 
 %% clean_task(+Functor, +Description, +Vars, +Infos, -Clean)
@@ -516,11 +550,9 @@ process_clause((tool(ToolHead, Description) :- Body), SessionId) :-
     extract_tool_schema(ToolHead, Description, ToolName, Schema),
     assertz(session_user_tools(SessionId, ToolName)),
     assertz(session_user_tool_schema(SessionId, ToolName, Schema)),
-    % Store the source code for the tool description. Normalize variables with
-    % numbervars/3 so export is deterministic across loads.
-    copy_term(ToolHead-Description-Body, NH-ND-NB),
-    numbervars(NH-ND-NB, 0, _),
-    format(string(SourceCode), "tool(~q, ~q) :-~n    ~q.", [NH, ND, NB]),
+    % Store the source code for the tool description. Reverses the load-time
+    % task/prompt rewrites and normalizes variables for deterministic export.
+    format_tool_source(ToolHead, Description, Body, SourceCode),
     assertz(SessionId:tool_source(ToolName, SourceCode)),
     % Assert the tool implementation (use just ToolHead for execution)
     assertz(SessionId:(tool(ToolHead) :- ExpandedBody)).
@@ -532,10 +564,8 @@ process_clause((tool(ToolHead) :- Body), SessionId) :-
     extract_tool_schema(ToolHead, none, ToolName, Schema),
     assertz(session_user_tools(SessionId, ToolName)),
     assertz(session_user_tool_schema(SessionId, ToolName, Schema)),
-    % Store the source code for the tool description (deterministic variables).
-    copy_term(ToolHead-Body, NH-NB),
-    numbervars(NH-NB, 0, _),
-    format(string(SourceCode), "tool(~q) :-~n    ~q.", [NH, NB]),
+    % Store the source code for the tool description (reverses task rewrites).
+    format_tool_source(ToolHead, none, Body, SourceCode),
     assertz(SessionId:tool_source(ToolName, SourceCode)),
     % Assert the tool implementation
     assertz(SessionId:(tool(ToolHead) :- ExpandedBody)).
@@ -1400,6 +1430,27 @@ export_stats(SessionId, Clauses, Tools, Scripts) :-
 export_clause(Head, Body) :-
     print_user_clause(Head, Body),
     nl.
+
+%% format_tool_source(+Head, +Description, +Body, -SourceCode)
+%% Source text for a tool, used by `listing(tools)` and export. Reverses the
+%% load-time task/prompt rewrites so readers see `task/N`, not `task_named/3`.
+format_tool_source(Head, none, Body, SourceCode) :-
+    !,
+    copy_term(Head-Body, NH-NB),
+    numbervars(NH-NB, 0, _),
+    clean_clause_body(NB, CleanBody),
+    (   CleanBody == true
+    ->  format(string(SourceCode), "tool(~q).", [NH])
+    ;   format(string(SourceCode), "tool(~q) :-~n    ~q.", [NH, CleanBody])
+    ).
+format_tool_source(Head, Description, Body, SourceCode) :-
+    copy_term(Head-Description-Body, NH-ND-NB),
+    numbervars(NH-ND-NB, 0, _),
+    clean_clause_body(NB, CleanBody),
+    (   CleanBody == true
+    ->  format(string(SourceCode), "tool(~q, ~q).", [NH, ND])
+    ;   format(string(SourceCode), "tool(~q, ~q) :-~n    ~q.", [NH, ND, CleanBody])
+    ).
 
 %% print_user_clause(+Head, +Body)
 %% Copy + numbervars for deterministic variable names, reverse the load-time
@@ -4138,7 +4189,7 @@ consult_process_term((tool(ToolHead, Description) :- Body), SessionId) :-
     extract_tool_schema(ToolHead, Description, ToolName, Schema),
     assertz(session_user_tools(SessionId, ToolName)),
     assertz(session_user_tool_schema(SessionId, ToolName, Schema)),
-    format(string(SourceCode), "tool(~w, ~q) :-~n    ~w.", [ToolHead, Description, Body]),
+    format_tool_source(ToolHead, Description, Body, SourceCode),
     assertz(SessionId:tool_source(ToolName, SourceCode)),
     assertz(SessionId:(tool(ToolHead) :- Body)).
 
@@ -4148,7 +4199,7 @@ consult_process_term((tool(ToolHead) :- Body), SessionId) :-
     extract_tool_schema(ToolHead, none, ToolName, Schema),
     assertz(session_user_tools(SessionId, ToolName)),
     assertz(session_user_tool_schema(SessionId, ToolName, Schema)),
-    format(string(SourceCode), "tool(~w) :-~n    ~w.", [ToolHead, Body]),
+    format_tool_source(ToolHead, none, Body, SourceCode),
     assertz(SessionId:tool_source(ToolName, SourceCode)),
     assertz(SessionId:(tool(ToolHead) :- Body)).
 
