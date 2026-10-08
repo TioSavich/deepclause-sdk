@@ -186,7 +186,7 @@ export function createMetaTools(ctx: MetaToolContext): Map<string, ToolDefinitio
   });
 
   tools.set('define', {
-    description: 'Replace a predicate: remove every clause of Name/Arity, then assert the given clauses in order. Prefer this over assert when changing a predicate — assert appends, so asserting twice duplicates it.',
+    description: 'Replace the predicate(s) defined by a clause block: remove every predicate the block defines (plus the head pattern), then assert the block in order. A block may define several predicates. Prefer this over assert when changing existing predicates.',
     parameters: {
       type: 'object',
       properties: {

@@ -129,3 +129,64 @@ describe('REPL authoring agent', () => {
     expect(listing.trim()).toBe('');
   });
 });
+
+describe('harness edit transactions', () => {
+  async function openSession(history = false): Promise<HarnessRepl> {
+    const backend: LLMBackend = { complete: async () => ({ text: '', finishReason: 'stop' }) };
+    return createHarnessRepl({
+      workspacePath: workspace,
+      model: 'test-model',
+      provider: 'openai',
+      streaming: true,
+      llmBackend: backend,
+      authoring: 'agent',
+      ...(history ? { history: { enabled: true, dir: '.deepclause/repl' } } : {}),
+    });
+  }
+
+  it('define replaces every predicate in a multi-predicate block', async () => {
+    repl = await openSession();
+    await repl.session.define('a(1)', 'a(1).\nb(2).\nc(3).');
+    await repl.session.define('a(9)', 'a(9).\nb(8).\nc(7).');
+
+    const listing = await repl.list('all');
+    for (const predicate of ['a/1', 'b/1', 'c/1']) {
+      expect(listing.split(predicate).length - 1).toBe(1);
+    }
+    const events = await collect(repl.query('a(X)'));
+    const values = events
+      .filter((event) => event.type === 'solution')
+      .map((event) => event.solution?.bindings[0]?.value);
+    expect(values).toEqual(['9']);
+  });
+
+  it('delete abolishes a predicate instead of leaving a phantom', async () => {
+    repl = await openSession();
+    await repl.session.define('temp(1)', 'temp(1).');
+    const result = await repl.session.deletePredicate('temp/1');
+    expect(result.ok).toBe(true);
+    expect(await repl.list('all')).not.toContain('temp/1');
+  });
+
+  it('define rejects a non-callable head and does not touch system functors', async () => {
+    repl = await openSession();
+    const result = await repl.session.define('fetch_page.sh', 'x(1).');
+    expect(result.ok).toBe(false);
+    const listing = await repl.list('all');
+    expect(listing).not.toContain('./2');
+  });
+
+  it('records each changed predicate once in history', async () => {
+    repl = await openSession(true);
+    await repl.session.beginTurn();
+    await repl.session.define('a(1)', 'a(1).\nb(2).');
+    await repl.session.endTurn();
+
+    const changesPath = path.join(workspace, '.deepclause', 'repl', 'harness', 'changes.jsonl');
+    const lines = (await fs.readFile(changesPath, 'utf8')).trim().split('\n');
+    const last = JSON.parse(lines[lines.length - 1]) as { changed: Array<{ predicate: string }> };
+    const predicates = last.changed.map((change) => change.predicate);
+    expect(new Set(predicates).size).toBe(predicates.length);
+    expect(predicates).toEqual(expect.arrayContaining(['a/1', 'b/1']));
+  });
+});

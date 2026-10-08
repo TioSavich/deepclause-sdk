@@ -107,12 +107,12 @@ export function createHarnessTools(controller: HarnessToolController): Map<strin
   });
 
   tools.set('define', {
-    description: 'Replace a predicate: remove every clause of Name/Arity, then assert the clauses in order. Prefer this over assert when changing a predicate.',
+    description: 'Replace the predicate(s) defined by a clause block: remove every predicate the block defines (plus the head pattern) and assert the block in order. Use this for any change to existing predicates — a block may define several.',
     parameters: {
       type: 'object',
       properties: {
-        head: stringProp('A head pattern for the predicate, e.g. "describe_image(Path, Text)".'),
-        clauses: stringProp('The complete clause block for the predicate, in order, each ending with a period.'),
+        head: stringProp('A head pattern naming the predicate, e.g. "describe_image(Path, Text)".'),
+        clauses: stringProp('The complete clause block, in order, each clause ending with a period.'),
       },
       required: ['head', 'clauses'],
     },
@@ -150,7 +150,7 @@ export function createHarnessTools(controller: HarnessToolController): Map<strin
   });
 
   tools.set('delete', {
-    description: 'Delete a predicate entirely, e.g. delete("describe_image/2").',
+    description: 'Delete a predicate entirely (abolishes all its clauses), e.g. delete("describe_image/2").',
     parameters: {
       type: 'object',
       properties: { predicate: stringProp('The predicate indicator to delete, e.g. "describe_image/2".') },

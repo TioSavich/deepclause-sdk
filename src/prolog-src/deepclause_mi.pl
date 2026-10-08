@@ -57,6 +57,10 @@
     repl_assert_many/3,
     repl_retract/3,
     repl_define/4,
+    repl_delete_predicate/4,
+    repl_edit_touched/2,
+    repl_edit_touched_text/2,
+    repl_edit_touched_clear/1,
     repl_set_dml_reference/2,
     repl_set_authoring_examples/2,
     repl_manifest/2,
@@ -121,6 +125,7 @@
 :- dynamic session_harness_examples/2. % session_harness_examples(SessionId, Text) - bundled HARNESS_EXAMPLES.md
 :- dynamic session_prolog_snippets/2. % session_prolog_snippets(SessionId, Text) - bundled PROLOG_SNIPPETS.md
 :- dynamic session_last_commit/2.    % session_last_commit(SessionId, [Name/Arity]) - predicates the last commit replaced
+:- dynamic session_edit_touched/2.   % session_edit_touched(SessionId, Name/Arity) - agent-mode edit transactions
 :- dynamic repl_snapshot/2.         % repl_snapshot(SessionId, Snapshot) - transactional edit snapshot
 :- dynamic session_params/2.       % session_params(SessionId, ParamsDict)
 :- dynamic session_user_tools/2.   % session_user_tools(SessionId, ToolName)
@@ -1568,6 +1573,35 @@ repl_set_prolog_snippets(SessionId, Text) :-
     retractall(session_prolog_snippets(SessionId, _)),
     assertz(session_prolog_snippets(SessionId, Text)).
 
+%% repl_parse_clauses(+SessionId, +ClausesText, -Terms)
+%% Parse and preprocess a block of DML clauses without asserting them.
+repl_parse_clauses(SessionId, ClausesText, Terms) :-
+    ensure_full_stop(ClausesText, Text1),
+    open_string(Text1, Stream),
+    repl_read_prepared_terms(Stream, SessionId, Terms),
+    close(Stream).
+
+repl_read_prepared_terms(Stream, SessionId, Terms) :-
+    read_term(Stream, Term, [module(SessionId), variable_names(Bindings)]),
+    (   Term == end_of_file
+    ->  Terms = []
+    ;   % Apply the same preprocessing as parse_dml_string/2 so scratch clauses
+        % match loaded ones (task/prompt rewrite, interpolation, expand_term).
+        preprocess_loaded_term(Term, Bindings, Prepared),
+        append(Prepared, Rest, Terms),
+        repl_read_prepared_terms(Stream, SessionId, Rest)
+    ).
+
+%% repl_commit_terms(+SessionId, +Terms)
+%% Assert already-preprocessed terms (the shared tail of assert_many/define).
+repl_commit_terms(SessionId, Terms) :-
+    forall(member(PreparedTerm, Terms),
+        (   repl_protected_clause(PreparedTerm)
+        ->  throw(error(permission_error(modify, reserved_name, PreparedTerm),
+                    context(repl_assert_many/3, 'cannot define a reserved predicate')))
+        ;   process_clause(PreparedTerm, SessionId)
+        )).
+
 %% repl_assert_many(+SessionId, +ClausesText, -Result)
 %% Parses a block of clauses and asserts them in the order written. Prefer this
 %% for defining a predicate: clause order matters for backtracking, so asserting
@@ -1575,31 +1609,63 @@ repl_set_prolog_snippets(SessionId, Text) :-
 repl_assert_many(SessionId, ClausesText, Result) :-
     catch(
         (   guard_not_frozen(SessionId),
-            ensure_full_stop(ClausesText, Text1),
-            open_string(Text1, Stream),
-            repl_assert_stream(Stream, SessionId),
-            close(Stream),
+            repl_parse_clauses(SessionId, ClausesText, Terms),
+            repl_commit_terms(SessionId, Terms),
+            repl_note_touched(SessionId, Terms),
             Result = ok
         ),
         AssertError,
         format(atom(Result), 'error(~w)', [AssertError])
     ).
 
-repl_assert_stream(Stream, SessionId) :-
-    read_term(Stream, Term, [module(SessionId), variable_names(Bindings)]),
-    (   Term == end_of_file
-    ->  true
-    ;   % Apply the same preprocessing as parse_dml_string/2 so scratch clauses
-        % match loaded ones (task/prompt rewrite, interpolation, expand_term).
-        preprocess_loaded_term(Term, Bindings, PreparedTerms),
-        forall(member(PreparedTerm, PreparedTerms),
-            (   repl_protected_clause(PreparedTerm)
-            ->  throw(error(permission_error(modify, reserved_name, PreparedTerm),
-                        context(repl_assert_many/3, 'cannot define a reserved predicate')))
-            ;   process_clause(PreparedTerm, SessionId)
-            )),
-        repl_assert_stream(Stream, SessionId)
-    ).
+%% repl_term_indicator(+Term, -Name/Arity)
+%% The plain predicate a parsed clause defines. Directives and tool/2 wrappers
+%% have no plain indicator here (process_clause owns them).
+repl_term_indicator((:- _), _) :- !, fail.
+repl_term_indicator((tool(_, _) :- _), _) :- !, fail.
+repl_term_indicator((tool(_) :- _), _) :- !, fail.
+repl_term_indicator(Term, Name/Arity) :-
+    repl_head_of(Term, Head),
+    callable(Head),
+    functor(Head, Name, Arity).
+
+%% repl_note_touched(+SessionId, +Terms)
+%% Record the predicate indicators a term list defines, for history recording.
+repl_note_touched(SessionId, Terms) :-
+    forall(( member(Term, Terms), repl_term_indicator(Term, Name/Arity) ),
+        (   session_edit_touched(SessionId, Name/Arity)
+        ->  true
+        ;   assertz(session_edit_touched(SessionId, Name/Arity))
+        )).
+
+%% repl_edit_touched(+SessionId, -Indicators)
+%% Predicates touched by edit tools since the last clear (sorted, unique).
+repl_edit_touched(SessionId, Indicators) :-
+    findall(Name/Arity, session_edit_touched(SessionId, Name/Arity), Raw),
+    sort(Raw, Indicators).
+
+%% repl_edit_touched_text(+SessionId, -Text)
+%% "Name/Arity, Name/Arity" of the predicates an agent turn touched.
+repl_edit_touched_text(SessionId, Text) :-
+    repl_edit_touched(SessionId, Indicators),
+    with_output_to(string(Text), print_pred_list(Indicators)).
+
+repl_edit_touched_clear(SessionId) :-
+    retractall(session_edit_touched(SessionId, _)).
+
+%% repl_callable_indicator(+Head, -Name, -Arity)
+%% Validate a predicate head: an ordinary (non-operator, non-system) functor.
+repl_callable_indicator(Head, Name, Arity) :-
+    callable(Head),
+    functor(Head, Name, Arity),
+    atom(Name),
+    Name \== '[]',
+    Name \== '{}',
+    \+ repl_system_functor(Name/Arity).
+
+%% Functors that are list/operator/system structure, never user predicates.
+repl_system_functor(Name/_) :-
+    member(Name, ['.', ',', ';', ':-', '->', ':', '|', '!', '\\+', '=', 'is']).
 
 %% repl_retract(+SessionId, +ClausePattern, -Result)
 %% Retracts matching user clauses. Reserved names are protected.
@@ -1608,12 +1674,12 @@ repl_retract(SessionId, ClauseText, Result) :-
         (   guard_not_frozen(SessionId),
             repl_read_clause(SessionId, ClauseText, Pattern),
             repl_head_of(Pattern, Clause),
+            repl_callable_indicator(Clause, Name, Arity),
             (   repl_protected_clause(Clause)
             ->  throw(error(permission_error(modify, reserved_name, Clause),
                         context(repl_retract/3, 'cannot retract a reserved predicate')))
             ;   true
             ),
-            functor(Clause, Name, Arity),
             functor(Head, Name, Arity),
             retractall(SessionId:Head),
             (   session_user_tools(SessionId, Name)
@@ -1622,24 +1688,76 @@ repl_retract(SessionId, ClauseText, Result) :-
                 retractall(SessionId:tool_source(Name, _))
             ;   true
             ),
+            (   session_edit_touched(SessionId, Name/Arity)
+            ->  true
+            ;   assertz(session_edit_touched(SessionId, Name/Arity))
+            ),
             Result = ok
         ),
         RetractError,
         format(atom(Result), 'error(~w)', [RetractError])
     ).
 
+%% repl_delete_predicate(+SessionId, +Name, +Arity, -Result)
+%% Fully remove a predicate. Unlike retract (which only removes matching
+%% clauses and can leave an empty predicate behind), this abolishes it.
+repl_delete_predicate(SessionId, Name, Arity, Result) :-
+    catch(
+        (   guard_not_frozen(SessionId),
+            atom(Name), integer(Arity), Arity >= 0,
+            (   repl_protected_name(Name)
+            ->  throw(error(permission_error(modify, reserved_name, Name/Arity),
+                        context(repl_delete_predicate/4, 'cannot delete a reserved predicate')))
+            ;   true
+            ),
+            catch(abolish(SessionId:Name/Arity), _, true),
+            (   session_user_tools(SessionId, Name)
+            ->  retractall(session_user_tools(SessionId, Name)),
+                retractall(session_user_tool_schema(SessionId, Name, _)),
+                retractall(SessionId:tool_source(Name, _))
+            ;   true
+            ),
+            (   session_edit_touched(SessionId, Name/Arity)
+            ->  true
+            ;   assertz(session_edit_touched(SessionId, Name/Arity))
+            ),
+            Result = ok
+        ),
+        DeleteError,
+        format(atom(Result), 'error(~w)', [DeleteError])
+    ).
+
 %% repl_define(+SessionId, +HeadPatternText, +ClausesText, -Result)
-%% Replaces a predicate atomically: clear every clause of Name/Arity, then
-%% assert the given clauses in order. `assert` appends, so asserting a clause
-%% twice duplicates the predicate; use this (or retract then assert_many)
-%% instead of patching a predicate one clause at a time.
+%% Replace every predicate the clause block defines. It parses the block,
+%% computes its indicators (plus the head pattern's), abolishes each, then
+%% asserts the block. This makes `define` safe no matter how many predicates a
+%% block spans, so a multi-predicate block cannot append duplicate clauses.
 repl_define(SessionId, HeadPatternText, ClausesText, Result) :-
     catch(
-        (   repl_retract(SessionId, HeadPatternText, ClearResult),
-            (   ClearResult == ok
-            ->  repl_assert_many(SessionId, ClausesText, Result)
-            ;   Result = ClearResult
-            )
+        (   guard_not_frozen(SessionId),
+            repl_read_clause(SessionId, HeadPatternText, Pattern),
+            repl_head_of(Pattern, HeadClause),
+            repl_callable_indicator(HeadClause, HeadName, HeadArity),
+            repl_parse_clauses(SessionId, ClausesText, Terms),
+            findall(Name/Arity,
+                ( member(Term, Terms), repl_term_indicator(Term, Name/Arity) ),
+                BlockIndicators0),
+            sort([HeadName/HeadArity|BlockIndicators0], Indicators),
+            forall(member(Name/Arity, Indicators),
+                (   repl_protected_name(Name)
+                ->  throw(error(permission_error(modify, reserved_name, Name/Arity),
+                            context(repl_define/4, 'cannot define a reserved predicate')))
+                ;   catch(abolish(SessionId:Name/Arity), _, true),
+                    (   session_user_tools(SessionId, Name)
+                    ->  retractall(session_user_tools(SessionId, Name)),
+                        retractall(session_user_tool_schema(SessionId, Name, _)),
+                        retractall(SessionId:tool_source(Name, _))
+                    ;   true
+                    )
+                )),
+            repl_commit_terms(SessionId, Terms),
+            repl_note_touched(SessionId, Terms),
+            Result = ok
         ),
         DefineError,
         format(atom(Result), 'error(~w)', [DefineError])

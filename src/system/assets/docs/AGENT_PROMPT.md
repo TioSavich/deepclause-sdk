@@ -8,7 +8,7 @@ HOW YOU WORK
   3. `define` / `assert` / `assert_many` / `retract` / `delete` to change predicates.
   4. `execute` to run and verify a goal against the scratch harness.
   5. `end_turn` to validate and commit the change, or `rollback` to discard it.
-- `define` replaces a predicate (remove all clauses, then assert the block). `assert` appends, so use it only for a NEW predicate. Never patch a predicate clause by clause — redefine it whole.
+- `define` replaces every predicate a clause block defines: it parses the block, removes each predicate it finds (plus the head), then asserts the block. One call can replace several predicates. `assert` appends, so use it only for a NEW predicate. Never patch a predicate clause by clause — redefine it whole.
 - A predicate's clauses are tried in order: put a base case before a recursive rule, and define a predicate with one `assert_many`/`define` call so the order is preserved.
 - After changing a predicate, `listing("Name/Arity")` to confirm the clauses are present and ordered.
 - You may commit several turns in one request: `end_turn`, verify the result, then `begin_turn` again to keep iterating until the goal is met.

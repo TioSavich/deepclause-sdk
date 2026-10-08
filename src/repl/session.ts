@@ -464,16 +464,15 @@ export class DMLSession {
   ): HistoryChangedPredicate[] {
     const beforeSet = new Set(before);
     const afterSet = new Set(after);
-    const changed: HistoryChangedPredicate[] = [];
+    const byPredicate = new Map<string, HistoryChangedPredicate>();
     for (const predicate of touched) {
       if (!afterSet.has(predicate)) continue;
-      changed.push({ predicate, action: beforeSet.has(predicate) ? 'replaced' : 'added' });
+      byPredicate.set(predicate, { predicate, action: beforeSet.has(predicate) ? 'replaced' : 'added' });
     }
     for (const predicate of before) {
-      if (!afterSet.has(predicate)) changed.push({ predicate, action: 'removed' });
+      if (!afterSet.has(predicate)) byPredicate.set(predicate, { predicate, action: 'removed' });
     }
-    changed.sort((a, b) => a.predicate.localeCompare(b.predicate));
-    return changed;
+    return [...byPredicate.values()].sort((a, b) => a.predicate.localeCompare(b.predicate));
   }
 
   private touchedPredicates(): string[] {
@@ -1032,6 +1031,7 @@ export class DMLSession {
 
   async beginTurn(): Promise<void> {
     this.prologQuery(`deepclause_mi:repl_snapshot_save('${this.sessionId}')`);
+    this.prologQuery(`deepclause_mi:repl_edit_touched_clear('${this.sessionId}')`);
     this.transactionBefore = this.predicateList();
     this.transactionDirty = false;
   }
@@ -1045,11 +1045,21 @@ export class DMLSession {
     const changed = this.simplePredicateDiff(before, after);
     this.transactionBefore = null;
     if (this.transactionDirty && this.history) {
-      await this.recordHistoryChange('commit', this.turnCounter, before, { touched: [...before, ...after] });
+      await this.recordHistoryChange('commit', this.turnCounter, before, { touched: this.editTouched() });
     }
     this.transactionDirty = false;
+    this.prologQuery(`deepclause_mi:repl_edit_touched_clear('${this.sessionId}')`);
     await this.persistSessionHarness(this.history?.currentVersion ?? 0);
     return { committed: true, changed };
+  }
+
+  /** Predicates touched by edit tools in the current transaction. */
+  private editTouched(): string[] {
+    const result = this.prologQuery(`deepclause_mi:repl_edit_touched_text('${this.sessionId}', Text)`);
+    return String(plainValue(result?.Text) ?? '')
+      .split(',')
+      .map((entry) => entry.trim())
+      .filter(Boolean);
   }
 
   async rollbackTurn(): Promise<void> {
@@ -1099,14 +1109,16 @@ export class DMLSession {
   }
 
   async deletePredicate(nameArity: string): Promise<{ ok: boolean; error?: string }> {
-    const match = /^([^\s/]+)\/(\d+)$/.exec(nameArity.trim());
+    const match = /^\s*([^\s/]+)\s*\/\s*(\d+)\s*$/.exec(nameArity);
     if (!match) {
       return { ok: false, error: `expected Name/Arity, got '${nameArity}'` };
     }
     const [, name, arityText] = match;
-    const arity = Number(arityText);
-    const pattern = arity === 0 ? name : `${name}(${Array.from({ length: arity }, () => '_').join(', ')})`;
-    return this.retractClause(pattern);
+    const atom = /^[a-z][A-Za-z0-9_]*$/.test(name) ? name : `'${name.replace(/'/g, "''")}'`;
+    const result = this.prologQuery(
+      `deepclause_mi:repl_delete_predicate('${this.sessionId}', ${atom}, ${Number(arityText)}, Result)`
+    );
+    return this.editResult(plainValue(result?.Result));
   }
 
   async readFile(path: string): Promise<string | null> {
