@@ -76,6 +76,22 @@ export function getAgentPromptAssetPath(): string {
   return join(DOCS_DIR, 'AGENT_PROMPT.md');
 }
 
+/**
+ * Read the authoring-agent system prompt, preferring a workspace override at
+ * `.deepclause/system/AGENT_PROMPT.md` over the bundled asset.
+ */
+export async function readAgentPromptAsset(options: SystemAssetLookupOptions = {}): Promise<string> {
+  const overridePath = findWorkspaceOverridePathSync('AGENT_PROMPT.md', options);
+  if (overridePath) {
+    try {
+      return await readFile(overridePath, 'utf8');
+    } catch {
+      // Fall through to the bundled asset.
+    }
+  }
+  return readFile(getAgentPromptAssetPath(), 'utf8');
+}
+
 function getWorkspaceOverridePath(workspaceRoot: string, fileName: string): string {
   return join(workspaceRoot, SYSTEM_OVERRIDE_DIR, fileName);
 }

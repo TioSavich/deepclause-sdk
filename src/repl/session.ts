@@ -1019,6 +1019,7 @@ export class DMLSession {
         ? { settings: this.compactionSettings, auto: this.compactionAuto }
         : undefined,
       hostToolsCatalog: this.hostToolsCatalog,
+      workspacePath: this.workspacePath,
       knownMessages: this.agentMessages,
     });
     return this.harnessAgent;

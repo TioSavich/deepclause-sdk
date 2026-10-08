@@ -163,6 +163,42 @@ and the error reports the path, e.g.
 `ERROR: the meta task returned no DML source or answer (current harness saved to /tmp/deepclause-repl-….zip)`.
 So a long debugging turn is never lost even when the turn itself fails.
 
+### Authoring agent (default)
+
+`repl.authoring` selects how plain-English requests are authored:
+
+* **`agent`** (default): a normal TypeScript agent with a system prompt and
+  harness tools. It edits the live harness through `listing` / `define` /
+  `assert` / `assert_many` / `retract` / `delete`, tests with `execute`, and
+  commits with `end_turn` (or discards with `rollback`). The host snapshots at
+  the start of each request and auto-commits if the run ends without an explicit
+  `end_turn`. It can run several committed turns in one request.
+* **`meta`** (legacy): the DML `task_named/3` meta frame described below.
+
+Set it in `.deepclause/config.json` under `repl` or with `--authoring <kind>`:
+
+```bash
+deepclause repl --authoring agent   # default
+deepclause repl --authoring meta    # legacy
+```
+
+#### Customizing the system prompt
+
+The agent's system prompt is assembled from the bundled
+`src/system/assets/docs/AGENT_PROMPT.md` plus three generated sections:
+`{{CATALOG}}` (the host tool catalog), `{{TOOLS}}` (the tool schemas), and
+`{{MANIFEST}}` (the live harness manifest).
+
+To override it **without rebuilding the SDK**, create
+`.deepclause/system/AGENT_PROMPT.md` in the workspace; the runtime prefers it
+over the bundled file. It is an opt-in override (it is never seeded), so
+upgrading the SDK keeps the bundled prompt current for everyone who has not
+created one. The override must contain the same `{{CATALOG}}`, `{{TOOLS}}`, and
+`{{MANIFEST}}` placeholders for those sections to appear.
+
+To change the built-in prompt itself, edit
+`src/system/assets/docs/AGENT_PROMPT.md` and run `npm run build`.
+
 ### Meta tools and guard rails
 
 The code-writing meta task is restricted to `listing`, `assert`, `assert_many`,

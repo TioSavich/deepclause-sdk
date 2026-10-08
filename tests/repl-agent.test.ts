@@ -2,8 +2,11 @@
  * The TS authoring agent: harness tools and the agent loop.
  */
 import { describe, expect, it, vi } from 'vitest';
+import * as fs from 'fs/promises';
+import * as os from 'os';
+import * as path from 'path';
 
-import { HarnessAgent } from '../src/repl/agent.js';
+import { HarnessAgent, buildAgentSystemPrompt } from '../src/repl/agent.js';
 import { createHarnessTools, type HarnessToolController } from '../src/repl/harness-tools.js';
 import type { DMLEvent, LLMBackend, LLMBackendRequest, LLMBackendResponse } from '../src/types.js';
 
@@ -160,5 +163,28 @@ describe('HarnessAgent', () => {
     const messages = agent.getMessages();
     expect(messages.some((message) => message.content.includes('Continue: call a tool'))).toBe(false);
     expect(messages.filter((message) => message.role === 'user')).toHaveLength(1);
+  });
+
+  it('allows a workspace override of the system prompt', async () => {
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'dc-agent-prompt-'));
+    try {
+      await fs.mkdir(path.join(workspace, '.deepclause', 'system'), { recursive: true });
+      await fs.writeFile(
+        path.join(workspace, '.deepclause', 'system', 'AGENT_PROMPT.md'),
+        'CUSTOM PROMPT\n{{TOOLS}}\n{{MANIFEST}}\n{{CATALOG}}',
+        'utf8',
+      );
+      const prompt = await buildAgentSystemPrompt({
+        tools: createHarnessTools(stubController().controller),
+        manifest: 'MANIFEST-HERE',
+        hostToolsCatalog: 'CATALOG-HERE',
+        workspacePath: workspace,
+      });
+      expect(prompt).toContain('CUSTOM PROMPT');
+      expect(prompt).toContain('MANIFEST-HERE');
+      expect(prompt).toContain('CATALOG-HERE');
+    } finally {
+      await fs.rm(workspace, { recursive: true, force: true });
+    }
   });
 });

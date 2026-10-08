@@ -7,9 +7,7 @@
  * DML-internal `task/N` calls.
  */
 
-import { readFile } from 'fs/promises';
-
-import { getAgentPromptAssetPath } from '../system/assets/index.js';
+import { readAgentPromptAsset } from '../system/assets/index.js';
 import type {
   DMLEvent,
   LLMBackend,
@@ -36,6 +34,8 @@ export interface HarnessAgentOptions {
   compaction?: { settings: CompactionSettings; auto: boolean };
   /** Host capability tool catalog text, injected into the system prompt. */
   hostToolsCatalog?: string;
+  /** Workspace root, so a `.deepclause/system/AGENT_PROMPT.md` override is used. */
+  workspacePath?: string;
   /** Pre-loaded documentation for the `reference` tool (handled by the controller). */
   knownMessages?: MemoryMessage[];
 }
@@ -65,10 +65,11 @@ export async function buildAgentSystemPrompt(options: {
   tools: Map<string, ToolDefinition>;
   hostToolsCatalog?: string;
   manifest: string;
+  workspacePath?: string;
 }): Promise<string> {
   let template = '';
   try {
-    template = await readFile(getAgentPromptAssetPath(), 'utf8');
+    template = await readAgentPromptAsset({ workspacePath: options.workspacePath });
   } catch {
     template = 'You are the DeepClause REPL harness agent.';
   }
@@ -165,6 +166,7 @@ export class HarnessAgent {
       tools,
       hostToolsCatalog: this.options.hostToolsCatalog,
       manifest,
+      workspacePath: this.options.workspacePath,
     });
 
     this.messages.push({ role: 'user', content: request });
