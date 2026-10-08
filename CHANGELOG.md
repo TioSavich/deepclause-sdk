@@ -1,5 +1,46 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **TypeScript authoring agent** (`repl.authoring: "agent"`, the default): the
+  REPL's main agent is now a normal LLM agent with a system prompt and harness
+  tools (`begin_turn`, `end_turn`, `rollback`, `listing`, `define`, `assert`,
+  `assert_many`, `retract`, `delete`, `execute`, the workspace file tools,
+  `ask_user`, `reference`). It can run several committed turns in one request;
+  `end_turn` validates and records a version, and it is asked to commit larger
+  changes incrementally. The DML `task_named/3` meta-frame path remains available
+  with `repl.authoring: "meta"`.
+- **pi-style TUI** (`repl.tui: auto|on|off`, on a TTY by default): a scrolling
+  transcript, a fixed status bar (tokens in/out, cache, context usage for the
+  active frame, model + thinking level), and a fixed editor.
+- **Steering**: submit while a turn is running to interrupt the in-flight model
+  call and inject the message, rendered as a full-width `Steering:` block.
+- **Slash commands**: `/goal`, `/listing`, `/help`, `/reset`, `/rollback`,
+  `/compact`, `/export`, `/model`, `/freeze`/`/unfreeze`, `/params`,
+  `/trace`/`/notrace`, `/halt` (the legacy `goal:`/`listing.` forms still work).
+- **Editor input history**: recalled for the session and seeded from the target
+  session on startup (goal turns re-prefixed with `/goal`).
+- **Reasoning levels**: `backend.thinkingLevel` (off|minimal|low|medium|high|
+  xhigh|max), selectable in `login`/`set-backend`/`set-model` and via `--thinking`.
+- **TypeScript compaction** ported from pi (session and loop), with a `compact.`
+  command; the DML compactor is no longer used on the CLI paths.
+- **Listing syntax highlighting** and reflow (doc merged onto the header,
+  predicates separated, long clause bodies split).
+- **Workspace `AGENTS.md`** appended to the authoring agent's prompt;
+  `repl.agentDocs: embed|tool` controls whether the DML reference and authoring
+  guide are embedded or left to the `reference` tool.
+- **`execute` child events** stream (model text, tool calls, `output/1`) under a
+  nested label.
+
+### Fixed
+
+- `define` now replaces every predicate in its clause block (it used to append
+  the non-head predicates, creating duplicates); `delete` abolishes the
+  predicate instead of leaving an empty phantom.
+- The REPL no longer writes host nudges into the authoring conversation.
+
 ## 0.1.0
 
 A ground-up simplification. The SDK is now three surfaces: **repl**, **run**,

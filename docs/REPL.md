@@ -74,7 +74,7 @@ from the last session (the one `--session last` would resume).
 
 A harness is a **living library of reusable DML skills** for the workspace, not
 a single program. A skill is a predicate; the ones a user should call are
-named descriptively and run with the meta task's `execute` tool or `goal:`. Skills compose:
+named descriptively and run with the authoring agent's `execute` tool or `/goal`. Skills compose:
 
 - **helper predicates** (plain Prolog/CLP),
 - **semantic judgments** (`choose`/`rate`/`verify`/`probability`),
@@ -84,7 +84,7 @@ named descriptively and run with the meta task's `execute` tool or `goal:`. Skil
 
 Because the module is a live Prolog program, **data = code**: small/medium
 structured data belongs in it as facts (`country(ch, "Switzerland").`),
-inspected and queried exactly like predicates via `listing`, `goal:`, and
+inspected and queried exactly like predicates via `listing`, `/goal`, and
 `execute`. Keep large datasets in a file or a linked script rather than bloating
 the module.
 
@@ -93,7 +93,7 @@ skill (for example `test_<name>`, or a small `check/2` runner). When a skill is
 changed, its test is updated or added and run, so the change is verified rather
 than assumed.
 
-The meta task therefore treats the module like a codebase: it **reuses and
+The authoring agent therefore treats the module like a codebase: it **reuses and
 composes** existing skills rather than duplicating them, and it **changes the
 harness only when the request asks for it**. On a fresh workspace it creates
 what was requested; on an existing harness it changes only what the request
@@ -103,17 +103,21 @@ that simply cannot be modified.
 ## Goal mode
 
 ```text
-dml> goal: member(X, [a, b, c]).
+dml> /goal member(X, [a, b, c]).
 X = a ;
 X = b ;
 X = c.
 ```
 
 Each solution is rendered as `Name = value`; unbound variables show as `_`.
-The pager accepts `;` (next), `.` (stop), and `a` (all). Use `--first` to print
-only the first solution.
+The pager accepts **Enter** or `;` (next), `a` (all), and `.`/`q` (stop). Use
+`--first` to print only the first solution.
 
 ## Prompt mode
+
+> The default authoring implementation is the TypeScript **agent** (see
+> [Authoring agent](#authoring-agent-default) below). This section describes the
+> legacy `repl.authoring: meta` path; both commit transactionally.
 
 ```text
 dml> add a rule that computes factorial and a tool that formats integers
@@ -128,8 +132,9 @@ committed fact/2, demo/0
 A prompt is an **edit transaction**:
 
 1. the living module, tool bookkeeping, and harness memory are snapshotted;
-2. a `task_named/3` **meta task** runs in a `meta` frame, restricted to exactly
-   the host meta tools (`listing`, `assert`, `retract`, `execute`, `ask_user`);
+2. (legacy) a `task_named/3` **meta task** runs in a `meta` frame, restricted to
+   exactly the host meta tools (`listing`, `assert`, `retract`, `execute`,
+   `ask_user`);
 3. the scratch edits are discarded (a failed prompt leaves the harness
    unchanged);
 4. the returned DML source is validated and committed **replace-by-predicate**
@@ -170,7 +175,7 @@ It is skipped when the harness has no predicates, when `--export <file>` was
 given, or with `--no-save-on-exit`. Reload a bundle with
 `deepclause repl -l <file>.zip`.
 
-A meta task that ends **without producing DML** — iteration cap, exhausted
+A turn that ends **without producing a change** — iteration cap, exhausted
 model-call budget, or a model error — is treated the same way: the transaction
 is discarded, the scratch module + linked scripts are written to a temp bundle,
 and the error reports the path, e.g.
@@ -239,7 +244,7 @@ created one. The override must contain the same `{{CATALOG}}`, `{{TOOLS}}`, and
 To change the built-in prompt itself, edit
 `src/system/assets/docs/AGENT_PROMPT.md` and run `npm run build`.
 
-### Meta tools and guard rails
+### Meta tools and guard rails (legacy `authoring: meta`)
 
 The code-writing meta task is restricted to `listing`, `assert`, `assert_many`,
 `retract`, `execute`, `read_file`, `write_file`, `list_files`, `delete_file`,
@@ -293,7 +298,7 @@ dml> listing.
 ### Entry points
 
 There is **no `agent_main` requirement** in the REPL. Name predicates
-descriptively and run any of them directly with `goal: <name>(…)`:
+descriptively and run any of them directly with `/goal <name>(…)`:
 
 ```prolog
 weekly_report :-
@@ -302,10 +307,10 @@ weekly_report :-
     answer(Summary).
 ```
 
-Running is the meta task's job: while authoring a turn it calls the `execute`
-tool to run and verify a goal; a commit only changes the module (nothing is
-auto-run). If the same file should also run with `deepclause run` / `/dc-run`,
-define `agent_main` in the harness.
+Running is the authoring agent's job: while authoring a turn it calls the
+`execute` tool to run and verify a goal; a commit only changes the module
+(nothing is auto-run). If the same file should also run with `deepclause run` /
+`/dc-run`, define `agent_main` in the harness.
 
 ### Self-containment and bundles
 
@@ -513,13 +518,20 @@ deepclause repl [options]
       --export <file>      export the harness on exit
       --first              with -g, print only the first solution
       --plain              no TUI formatting (auto when stdout is not a TTY)
+      --tui <mode>         interactive UI: auto|on|off
       --json               emit results as JSON lines
       --workspace <path>   workspace root (default ./)
       --backend <kind>     override the configured backend (env|pi)
+      --authoring <kind>   authoring implementation: agent (default) or meta
+      --agent-docs <mode>  agent docs: embed (default) or tool
       --judge <name>       default judgment backend (llm|jev)
       --model <model>      override the configured run model
       --provider <provider>
+      --thinking <level>   reasoning level (off|minimal|low|medium|high|xhigh|max)
       --temperature <n>
+      --no-stream          hide streamed model text/reasoning
+      --no-events          hide activity events
+      --no-save-on-exit    do not save the harness on exit
       --sandbox            run shell tools in AgentVM
       --tools <list>       capability host tools (default: bash)
       --no-tools           register no capability host tools

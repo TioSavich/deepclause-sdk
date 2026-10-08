@@ -4,8 +4,8 @@ A snapshot of what DeepClause SDK is today. Branch `feat/dml-repl` (not merged).
 
 ## Surfaces
 
-- **`deepclause repl`** — a living-module REPL: plain English authors DML, `goal:`
-  queries it.
+- **`deepclause repl`** — a living-module REPL: plain English authors DML via the
+  TypeScript authoring agent, `/goal <dml>` queries it, slash commands control it.
 - **`deepclause run <file>`** — one-shot execution of a `.dml`/`.zip` harness via
   `agent_main/N` or `--goal`.
 - **`deepclause visualize <file> -g P/A`** — a Mermaid diagram of a harness skill.
@@ -46,8 +46,10 @@ CLI commands: `init`, `login`, `logout`, `set-backend`, `set-model`, `show-model
   and turn numbering from the durable `sessions/<id>/harness.json`.
 - **Media**: `read_media/2` + `attach_media/1` attach a workspace image to the next
   `task/N` (reference-only; no bytes in clauses). Vision-capable models only.
-- **Commands**: `goal:`, `help.`, `listing.`, `reset.`, `rollback.`, `export`,
-  `freeze.`/`unfreeze.`, `model.`, `trace.`, `params.`, `halt.`
+- **Commands**: `/goal <dml>`, `/help`, `/listing [filter]`, `/reset`,
+  `/rollback`, `/compact [notes]`, `/export [file]`, `/model [id]`,
+  `/freeze`/`/unfreeze`, `/params`, `/trace`/`/notrace`, `/halt` (aliases
+  `/exit`, `/quit`; the legacy `goal:`/`listing.` forms still work).
 - **UI**: on a TTY the default is a pi-style TUI (`repl.tui`): a scrolling
 transcript, a fixed status bar, and a fixed editor. The status bar shows
 cumulative tokens in/out (plus cache and hit rate), context usage for the active
@@ -68,11 +70,30 @@ with the structured pi prompt through the active pi backend. Session (meta)
 memory compacts before a turn and in-loop memory compacts before a model call;
 `compact.` compacts on demand. `memory_compaction` events drive the status bar.
 - **Cancellation**: Ctrl-C aborts the current turn and terminates a running `bash`.
+- **Steering**: submitting while a turn runs interrupts the in-flight model call
+  and injects the message, rendered as a full-width `Steering: …` block. During a
+  `goal:` query the line is buffered for the solution pager instead (Enter/`;`
+  pages, `a` prints all, `.`/`q` stops).
+- **Input history**: the editor recalls every submitted line for the session;
+  on startup it is seeded from the target session (`--session` or the latest),
+  goal turns re-prefixed as `/goal …`.
+- **Listing**: `listing`/`/listing` output is reflowed (doc merged onto the
+  header, predicates separated, long clause bodies split) and syntax-highlighted.
+- **Project context**: a workspace `AGENTS.md` is appended to the agent's system
+  prompt and shown in the banner; `repl.agentDocs: embed|tool` chooses whether
+  the DML reference and authoring guide are embedded or left to the `reference`
+  tool.
+- **`execute` events**: a goal run by the agent's `execute` tool streams its
+  model text, tool calls, and `output/1` under an indented `nested │` label.
 
 ## Authoring model
 
-The bundled guides (`META_PROMPT.md`, `DML_AUTHORING.md`, `HARNESS_EXAMPLES.md`,
-`PROLOG_SNIPPETS.md`, `DML_REFERENCE.md`) encode the current philosophy:
+The authoring agent's prompt is the bundled `AGENT_PROMPT.md` (plus the embedded
+DML reference/authoring guide, the tool list, the live manifest, and any
+workspace `AGENTS.md`), and the shorter guides (`DML_AUTHORING.md`,
+`HARNESS_EXAMPLES.md`, `PROLOG_SNIPPETS.md`, `DML_REFERENCE.md`) are served by the
+`reference` tool. The legacy `META_PROMPT.md` is still used by
+`repl.authoring: meta`. The guides encode the current philosophy:
 
 - Skills are **short sequences of `task/N`/`prompt/N` calls** with thin Prolog
   guards; no hand-rolled algorithms, and CLP only for genuine constraint problems
@@ -84,12 +105,15 @@ The bundled guides (`META_PROMPT.md`, `DML_AUTHORING.md`, `HARNESS_EXAMPLES.md`,
   must be reasoned over inside Prolog.
 - **Determinism**: a skill that calls `task/N`, `exec/2`, `read_media/2`, or writes
   a file must be deterministic (`once/1`, `->`, `!`).
+- **Incremental commits**: for anything larger than a couple of predicates, the
+  agent is instructed to `execute`, `end_turn`, and `begin_turn` per working
+  piece rather than save one giant edit for the end.
 - `listing`/`export` show `task/N`/`prompt/N` (the internal `task_named/3` rewrite
   is reversed for display).
 
 ## Tests
 
-`npm test`: **353 passed / 25 skipped / 0 failed**. The skipped 25 are the
+`npm test`: **455 passed / 25 skipped / 0 failed**. The skipped 25 are the
 `llm-integration` suite, gated behind real provider API keys.
 
 ## Not implemented / known gaps

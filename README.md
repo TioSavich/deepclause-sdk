@@ -68,21 +68,21 @@ The REPL keeps a persistent DML module ("the harness"). You talk to it in two wa
 
 | Input | Mode |
 |---|---|
-| `<plain English>` (default) | **author** — a meta task writes, tests, and commits DML |
-| `goal: <dml>.` | **run** — query the current harness |
+| `<plain English>` (default) | **author** — the agent writes, tests, and commits DML |
+| `/goal <dml>` | **run** — query the current harness |
 
 ```text
 dml> add a research(Question, Answer) skill that answers with task/2 and cites sources
 dml> run research on "why is the sky blue?"
 A = "Rayleigh scattering scatters short wavelengths more strongly..."
 
-dml> goal: research("why is the sky blue?", A).   % the same skill, run directly
+dml> /goal research("why is the sky blue?", A).   % the same skill, run directly
 ```
 
-The default mode is the interesting one: describe what you want and the meta
-task edits the module for you. Ask for anything — add a skill, add a tool,
-change existing logic, run or test code in the living module, or just ask a
-question about the harness.
+The default mode is the interesting one: describe what you want and the
+authoring agent edits the module for you through tools, testing as it goes. Ask
+for anything — add a skill, add a tool, change existing logic, run or test code
+in the living module, or just ask a question about the harness.
 
 ### Saving and re-loading a harness
 
@@ -90,23 +90,23 @@ Once you are happy with what your harness can do, you can save it for later re-u
 
 ```text
 dml> add a tally(List, Counts) skill and a demo
-dml> goal: tally([a,b,a,c,a], C).
+dml> /goal tally([a,b,a,c,a], C).
 C = [a-3, b-1, c-1]
 
-dml> export tally.dml.
+dml> /export tally.dml
 exported 3 clauses, 0 tools, 0 scripts → tally.dml
 
-dml> halt.
+dml> /halt
 ```
 
 ```bash
 deepclause run tally.dml --goal 'tally([a,b,a], C)'   # run a goal from the file
 deepclause repl -l tally.dml                          # or re-open it and keep building
-dml> goal: tally([x,y,x], C).
+dml> /goal tally([x,y,x], C).
 C = [x-2, y-1]
 ```
 
-`export <file>.` writes a portable `.dml`; use a `.zip` target to bundle linked
+`/export <file>` writes a portable `.dml`; use a `.zip` target to bundle linked
 `script_file/2` scripts. `--export <file>` exports on exit, and exiting without
 an export auto-saves the harness to a temp `.zip` bundle.
 
@@ -142,12 +142,14 @@ edits. DML makes that literal:
 A prompt turn is an **edit transaction**:
 
 1. the living module is snapshotted;
-2. a meta task writes DML and tests it with `execute`;
-3. the returned source is committed **replace-by-predicate**;
-4. a failed turn leaves the harness unchanged.
+2. the authoring agent edits predicates with tools (`define`/`assert`/`assert_many`/
+   `retract`/`delete`) and tests them with `execute`;
+3. `end_turn` validates and commits the change, recording a version;
+4. `rollback` — or a failed turn — restores the harness unchanged.
 
-So the model can experiment aggressively and you never end up with a
-half-written predicate set.
+For anything larger than a couple of predicates the agent is instructed to commit
+working pieces as it goes (`execute` → `end_turn` → `begin_turn`), so a late
+failure does not lose earlier progress.
 
 ### Auditability
 
@@ -168,9 +170,10 @@ See [`docs/REPL.md`](docs/REPL.md) and
 
 ### Commands
 
-`goal:`, `help.`, `listing.`, `listing(Name/Arity).`, `reset.`, `rollback.`,
-`export <file>.`, `freeze.`/`unfreeze.`, `model.`/`model <provider/id>.`,
-`trace.`/`notrace.`, `params.`, `halt.`
+`/goal <dml>`, `/listing [filter]`, `/help`, `/reset`, `/rollback`,
+`/compact [notes]`, `/export [file]`, `/model [id]`, `/freeze`/`/unfreeze`,
+`/params`, `/trace`/`/notrace`, `/halt` (aliases `/exit`, `/quit`). The legacy
+`goal:`/`listing.` dotted forms still work.
 
 ## Install
 
@@ -194,11 +197,16 @@ deepclause run skill.dml "arg"  # one-shot
 uses the SDK's own provider/API keys.
 
 ```bash
-deepclause login [--provider <id>] [--api-key <key>|--oauth] [--model provider/model]
+deepclause login [--provider <id>] [--api-key <key>|--oauth] [--model provider/model] [--thinking <level>]
 deepclause logout [provider]
 deepclause set-backend status
 deepclause set-backend env       # switch to provider API keys
 ```
+
+For reasoning-capable models, `deepclause login`/`set-backend`/`set-model` prompt
+for a thinking level (`off|minimal|low|medium|high|xhigh|max`); pass `--thinking`
+to skip the picker. It is stored as `backend.thinkingLevel` and forwarded to pi
+only for models that support it.
 
 Credentials live in pi's agent dir (`~/.pi/agent`) unless `backend.agentDir`
 overrides it. Existing pi installations stay untouched.
@@ -337,7 +345,11 @@ const { valid, errors, warnings } = await validateWithProlog(dmlSource);
   "agentvm": { "network": false },
   "shell": { "wrapper": "auto", "strictIsolation": false },
   "repl": {
+    "tui": "auto",
+    "authoring": "agent",
+    "agentDocs": "embed",
     "maxModelCalls": 100,
+    "compaction": { "enabled": true, "auto": true },
     "history": { "enabled": true, "dir": ".deepclause/repl", "trace": "summary" }
   },
   "judgment": { "default": "llm", "jev": { "enabled": false } }
@@ -363,10 +375,10 @@ vendor/
 └── swipl-wasm/   # SWI-Prolog compiled to WebAssembly (the DML engine)
 ```
 
-Bundled prompt assets: `META_PROMPT.md` (the meta task contract),
-`DML_REFERENCE.md` (language), `DML_AUTHORING.md` (guide),
-`HARNESS_EXAMPLES.md` (idiomatic shapes), `PROLOG_SNIPPETS.md` (tested building
-blocks).
+Bundled prompt assets: `AGENT_PROMPT.md` (the authoring agent's contract),
+`META_PROMPT.md` (the legacy meta task contract), `DML_REFERENCE.md` (language),
+`DML_AUTHORING.md` (guide), `HARNESS_EXAMPLES.md` (idiomatic shapes),
+`PROLOG_SNIPPETS.md` (tested building blocks).
 
 ## Development
 
