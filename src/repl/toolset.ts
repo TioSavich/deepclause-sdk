@@ -70,11 +70,18 @@ export async function createReplToolset(options: ReplToolsetOptions): Promise<Re
         type: 'object',
         properties: {
           command: { type: 'string', description: 'Shell command to execute.' },
+          timeoutMs: {
+            type: 'integer',
+            description: 'Wall-clock timeout in milliseconds (optional; overrides DC_HOST_SHELL_TIMEOUT_MS).',
+          },
         },
         required: ['command'],
       },
       execute: async (args, context) => {
         const command = String(args.command ?? args.arg1 ?? '');
+        const timeoutMs = typeof args.timeoutMs === 'number' && Number.isFinite(args.timeoutMs) && args.timeoutMs > 0
+          ? args.timeoutMs
+          : undefined;
         // Prefer the per-turn signal the runner/agent loop passes so Ctrl-C
         // terminates the running command (fall back to a startup signal).
         return shellManager.exec(
@@ -82,9 +89,10 @@ export async function createReplToolset(options: ReplToolsetOptions): Promise<Re
           context?.signal ?? options.signal,
           createShellToolEventBridge({
             toolName: 'bash',
-            toolArgs: { command },
+            toolArgs: timeoutMs === undefined ? { command } : { command, timeoutMs },
             emit: options.onEvent,
           }),
+          { timeoutMs },
         );
       },
     });

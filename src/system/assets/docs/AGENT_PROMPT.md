@@ -36,6 +36,8 @@ Call `listing` at the start of a session and again after every change.
 
 - `execute(goal)` runs a DML goal against the module and returns its bindings
   and output. A goal is ordinary Prolog/DML, e.g. `count_words("report.txt", N)`.
+  The result also carries `elapsedMs`, the wall-clock duration, so you can see
+  what is slow.
 - It runs on a scratch copy: it does not commit anything. Use it to test.
 
 # Modify the module
@@ -92,14 +94,21 @@ decision-making; use Prolog to *route*, *sequence*, and *verify*.
   every domain before `label/1`.
 - For a one-off computation, run it with `execute` instead of committing it as a
   predicate. If it is not reusable, it is not a skill.
+- **Bound a call that may run away.** The interpreter has no wall-clock timeout
+  for a *single* builtin, so wrap a potentially unbounded call in
+  `call_with_inference_limit(Goal, Limit, Result)` (core SWI, available here) —
+  e.g. `call_with_inference_limit(findall(X, gen(X), Xs), 1000000, R)` or a
+  `label/1` over a large domain. `Result` is `inference_limit_exceeded` when the
+  limit is hit. The session `gas` budget does not stop a single builtin either.
 
 # Host access outside the REPL
 
 The host exposes exactly these capability tools, called from DML with
 `exec(Tool(Args), Result)`:
 
-- `bash(command)` — a shell in the workspace. `Result` is a dict with `stdout`,
-  `stderr`, `exitCode`, `success`, and `summary`.
+- `bash(command, timeoutMs?)` — a shell in the workspace. `Result` is a dict with
+  `stdout`, `stderr`, `exitCode`, `success`, `summary`, and `timeMs` (wall-clock
+  duration). Pass `timeoutMs` to bound a command that may hang.
 - `ask_user(prompt)` — ask the human. In DML use `input(Prompt, Answer)` (the
   module form) or `exec(ask_user(prompt: Prompt), Answer)`.
 
@@ -439,6 +448,22 @@ Or positional if the tool supports it:
 ```prolog
 exec(get_time, CurrentTime)
 ```
+
+The `bash` tool accepts an optional wall-clock `timeoutMs` and always returns the
+wall-clock duration as `timeMs`:
+
+```prolog
+exec(bash(command: "sleep 30", timeoutMs: 5000), R),
+get_dict(timeMs, R, Took),
+(   get_dict(exitCode, R, 124)
+->  format(string(Msg), "timed out after ~w ms", [Took])
+;   format(string(Msg), "finished in ~w ms", [Took])
+).
+```
+
+A command is also killed when it produces no output for `DC_HOST_SHELL_IDLE_TIMEOUT_MS`
+(default 180 000 ms); `DC_HOST_SHELL_TIMEOUT_MS` sets a default wall-clock cap
+(0 = disabled). Exit code `124` means a timeout.
 
 ---
 
@@ -887,6 +912,28 @@ agent_main :-
     format(string(Msg), "Colors: ~w", [Colors]),
     answer(Msg).
 ```
+
+### Bounding a goal (inference limit)
+
+The interpreter has **no wall-clock timeout for a single builtin call** — the
+session `gas` budget counts meta-interpreter steps, and a runaway `findall/3`,
+`aggregate_all/3`, or `label/1` runs inside one step. Wrap such a call in
+`call_with_inference_limit/3` (core SWI-Prolog; available in this runtime, which
+has no threads) to bound it by inference count:
+
+```prolog
+bounded_findall(Goal, Xs) :-
+    call_with_inference_limit(findall(X, call(Goal, X), Xs), 1000000, Result),
+    (   Result == inference_limit_exceeded
+    ->  throw(error(inference_limit_exceeded, context(bounded_findall/2, Goal)))
+    ;   true
+    ).
+```
+
+`Result` is `inference_limit_exceeded` when the limit is hit (otherwise the
+normal call result). Use it for `findall/3`, `aggregate_all/3`, and CLP
+`label/1` over a large or under-specified domain. For shell commands, pass
+`exec(bash(command: Cmd, timeoutMs: N), R)` instead.
 
 ### Assert/Retract (within session)
 ```prolog

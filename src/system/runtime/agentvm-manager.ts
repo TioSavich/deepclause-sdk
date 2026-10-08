@@ -1,4 +1,5 @@
 import type { AgentVM } from 'deepclause-agentvm';
+import { resolveShellTimeoutMs } from './shell-limits.js';
 
 let AgentVMClass: (new (options?: { network?: boolean; mounts?: Record<string, string> }) => AgentVM) | null = null;
 
@@ -11,6 +12,13 @@ export interface ShellExecResult {
   pid?: number;
   backend: 'host' | 'sandbox';
   backendLabel?: string;
+  /** Wall-clock duration of the command, in milliseconds. */
+  timeMs: number;
+}
+
+export interface ShellExecOptions {
+  /** Wall-clock timeout in ms; overrides `DC_HOST_SHELL_TIMEOUT_MS`. 0 disables. */
+  timeoutMs?: number;
 }
 
 export interface ShellExecStartEvent {
@@ -52,68 +60,86 @@ export class AgentVMManager {
   constructor(
     private readonly workspacePath: string,
     private readonly network: boolean,
+    private readonly defaultTimeoutMs?: number,
   ) {}
 
   async exec(
     command: string,
     signal?: AbortSignal,
     observer?: ShellExecObserver,
+    options?: ShellExecOptions,
   ): Promise<ShellExecResult> {
     if (signal?.aborted) {
       throw abortError(signal.reason);
     }
 
+    const startedAt = Date.now();
+    const timeoutMs = resolveShellTimeoutMs(options?.timeoutMs ?? this.defaultTimeoutMs);
     const vm = await this.getVM();
     observer?.onStart?.({ command, backend: this.kind, backendLabel: 'sandbox[agentvm]' });
-    const result = signal
-      ? await new Promise<Awaited<ReturnType<AgentVM['exec']>>>((resolve, reject) => {
-          let settled = false;
-          const finishResolve = (value: Awaited<ReturnType<AgentVM['exec']>>) => {
-            if (settled) {
-              return;
-            }
-            settled = true;
-            cleanup();
-            resolve(value);
-          };
-          const finishReject = (error: unknown) => {
-            if (settled) {
-              return;
-            }
-            settled = true;
-            cleanup();
-            reject(error);
-          };
-          const cleanup = () => {
-            signal.removeEventListener('abort', onAbort);
-          };
-          const onAbort = () => {
-            void this.dispose().catch(() => {});
-            finishReject(abortError(signal.reason));
-          };
 
-          signal.addEventListener('abort', onAbort, { once: true });
-          void vm.exec(command)
-            .then((value) => {
-              if (signal.aborted) {
-                finishReject(abortError(signal.reason));
-                return;
-              }
-              finishResolve(value);
-            })
-            .catch((error) => {
-              if (signal.aborted) {
-                finishReject(abortError(signal.reason));
-                return;
-              }
-              finishReject(error);
-            });
+    let timedOut = false;
+    const result = await new Promise<Awaited<ReturnType<AgentVM['exec']>>>((resolve, reject) => {
+      let settled = false;
+      let timer: ReturnType<typeof setTimeout> | null = null;
+      const cleanup = () => {
+        signal?.removeEventListener('abort', onAbort);
+        if (timer) {
+          clearTimeout(timer);
+          timer = null;
+        }
+      };
+      const finishResolve = (value: Awaited<ReturnType<AgentVM['exec']>>) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        resolve(value);
+      };
+      const finishReject = (error: unknown) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        reject(error);
+      };
+      const onAbort = () => {
+        void this.dispose().catch(() => {});
+        finishReject(abortError(signal?.reason));
+      };
+
+      signal?.addEventListener('abort', onAbort, { once: true });
+      if (timeoutMs > 0) {
+        timer = setTimeout(() => {
+          if (settled || signal?.aborted) return;
+          timedOut = true;
+          void this.dispose().catch(() => {});
+          finishResolve({
+            stdout: '',
+            stderr: `Command timed out after ${timeoutMs}ms`,
+            exitCode: 124,
+          } as unknown as Awaited<ReturnType<AgentVM['exec']>>);
+        }, timeoutMs);
+        timer.unref?.();
+      }
+      void vm.exec(command)
+        .then((value) => {
+          if (signal?.aborted) {
+            finishReject(abortError(signal.reason));
+            return;
+          }
+          finishResolve(value);
         })
-      : await vm.exec(command);
+        .catch((error) => {
+          if (signal?.aborted) {
+            finishReject(abortError(signal.reason));
+            return;
+          }
+          finishReject(error);
+        });
+    });
 
     const stdout = result.stdout ?? '';
     const stderr = result.stderr ?? '';
-    const exitCode = result.exitCode ?? 0;
+    const exitCode = timedOut ? 124 : (result.exitCode ?? 0);
     const execResult: ShellExecResult = {
       success: exitCode === 0,
       stdout,
@@ -121,7 +147,12 @@ export class AgentVMManager {
       exitCode,
       backend: this.kind,
       backendLabel: 'sandbox[agentvm]',
-      summary: exitCode === 0 ? 'Command completed successfully' : (stderr || `Command failed with exit code ${exitCode}`),
+      summary: timedOut
+        ? `Command timed out after ${timeoutMs}ms`
+        : exitCode === 0
+          ? 'Command completed successfully'
+          : (stderr || `Command failed with exit code ${exitCode}`),
+      timeMs: Date.now() - startedAt,
     };
 
     if (stdout) {

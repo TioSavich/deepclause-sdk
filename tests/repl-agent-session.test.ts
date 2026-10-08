@@ -297,4 +297,14 @@ describe('harness edit transactions', () => {
     expect(text).not.toContain('typed_var');
     expect(text).toContain('with_tools([x],task("Fix {B} in {A}",C))');
   });
+
+  it('reports the wall-clock duration of an execute goal', async () => {
+    repl = await openSession();
+    await repl.session.beginTurn();
+    await repl.session.define('greet_person(Name, Msg)', 'greet_person(Name, Msg) :- format(atom(Msg), "hi ~w", [Name]).');
+    const result = await repl.session.execute('greet_person(bob, M)');
+    expect(typeof result.elapsedMs).toBe('number');
+    expect(result.elapsedMs).toBeGreaterThanOrEqual(0);
+    expect(result.bindings[0]?.value).toContain('hi bob');
+  });
 });

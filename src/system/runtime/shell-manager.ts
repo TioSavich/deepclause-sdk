@@ -5,12 +5,13 @@ import { join } from 'path';
 import {
   AgentVMManager,
   type ShellExecObserver,
+  type ShellExecOptions,
   type ShellExecResult,
 } from './agentvm-manager.js';
+import { getHostShellIdleTimeoutMs, resolveShellTimeoutMs } from './shell-limits.js';
 
 const ABORT_FORCE_KILL_MS = 500;
 const EXIT_STDIO_GRACE_MS = 25;
-const DEFAULT_HOST_SHELL_IDLE_TIMEOUT_MS = 180_000;
 const HOST_SHELL_WRAPPER_OVERRIDE_ENV = 'DC_HOST_SHELL_WRAPPER';
 const HOST_SHELL_DEBUG_ENV = 'DC_HOST_SHELL_DEBUG';
 const DEFAULT_HOST_EXECUTABLE_LOOKUP_DIRS = process.platform === 'darwin'
@@ -37,6 +38,10 @@ export type HostShellBwrapExecWrapperMode = 'direct' | 'setpriv-no-new-privs';
 export interface HostShellConfig {
   wrapper?: HostShellWrapperPreference;
   strictIsolation?: boolean;
+  /** Wall-clock timeout for a command, in ms; overrides the env default. */
+  timeoutMs?: number;
+  /** Idle (no output) timeout for a command, in ms; overrides the env default. */
+  idleTimeoutMs?: number;
 }
 
 export interface ResolvedHostShellStrategy {
@@ -63,7 +68,7 @@ interface HostShellLaunchPlan {
 
 export interface ShellManager {
   readonly kind: 'host' | 'sandbox';
-  exec(command: string, signal?: AbortSignal, observer?: ShellExecObserver): Promise<ShellExecResult>;
+  exec(command: string, signal?: AbortSignal, observer?: ShellExecObserver, options?: ShellExecOptions): Promise<ShellExecResult>;
   dispose(): Promise<void>;
 }
 
@@ -80,7 +85,7 @@ export class HostShellManager implements ShellManager {
 
   constructor(
     private readonly workspacePath: string,
-    hostConfig: HostShellConfig = {},
+    private readonly hostConfig: HostShellConfig = {},
   ) {
     this.strategy = resolveHostShellStrategy({ hostConfig });
   }
@@ -89,13 +94,22 @@ export class HostShellManager implements ShellManager {
     command: string,
     signal?: AbortSignal,
     observer?: ShellExecObserver,
+    options?: ShellExecOptions,
   ): Promise<ShellExecResult> {
     if (signal?.aborted) {
       throw abortError(signal.reason);
     }
 
     return new Promise((resolve, reject) => {
-      const idleTimeoutMs = getHostShellIdleTimeoutMs();
+      const startedAt = Date.now();
+      const idleTimeoutMs = typeof this.hostConfig.idleTimeoutMs === 'number' && this.hostConfig.idleTimeoutMs >= 0
+        ? this.hostConfig.idleTimeoutMs
+        : getHostShellIdleTimeoutMs();
+      const wallTimeoutMs = typeof options?.timeoutMs === 'number' && options.timeoutMs >= 0
+        ? options.timeoutMs
+        : (typeof this.hostConfig.timeoutMs === 'number' && this.hostConfig.timeoutMs >= 0
+          ? this.hostConfig.timeoutMs
+          : resolveShellTimeoutMs());
       const launchPlan = buildHostShellLaunchPlan(this.strategy, command, this.workspacePath);
       const child = spawn(launchPlan.executable, launchPlan.args, {
         cwd: this.workspacePath,
@@ -115,7 +129,33 @@ export class HostShellManager implements ShellManager {
       let exitCode: number | null = null;
       let exitSignal: NodeJS.Signals | null = null;
       let timedOut = false;
+      let timeoutKind: 'idle' | 'wall' | null = null;
       let idleTimer: ReturnType<typeof setTimeout> | null = null;
+      let wallTimer: ReturnType<typeof setTimeout> | null = null;
+
+      /** Shared kill path for the idle and wall-clock timers. */
+      const fireTimeout = (kind: 'idle' | 'wall'): void => {
+        if (settled || signal?.aborted || timedOut) {
+          return;
+        }
+        timedOut = true;
+        timeoutKind = kind;
+        exitCode = 124;
+        const message = kind === 'idle'
+          ? `Command timed out after ${idleTimeoutMs}ms without output`
+          : `Command timed out after ${wallTimeoutMs}ms`;
+        stderr = stderr ? `${stderr}${stderr.endsWith('\n') ? '' : '\n'}${message}` : message;
+
+        terminateChildProcessTree(child, 'SIGTERM');
+        if (!forceKillTimer) {
+          forceKillTimer = setTimeout(() => {
+            if (child.exitCode === null && child.signalCode === null) {
+              terminateChildProcessTree(child, 'SIGKILL');
+            }
+          }, ABORT_FORCE_KILL_MS);
+          forceKillTimer.unref?.();
+        }
+      };
 
       const resetIdleTimer = () => {
         if (idleTimeoutMs <= 0 || settled || timedOut) {
@@ -124,27 +164,7 @@ export class HostShellManager implements ShellManager {
         if (idleTimer) {
           clearTimeout(idleTimer);
         }
-        idleTimer = setTimeout(() => {
-          if (settled || signal?.aborted) {
-            return;
-          }
-
-          timedOut = true;
-          exitCode = 124;
-          stderr = stderr
-            ? `${stderr}${stderr.endsWith('\n') ? '' : '\n'}Command timed out after ${idleTimeoutMs}ms without output`
-            : `Command timed out after ${idleTimeoutMs}ms without output`;
-
-          terminateChildProcessTree(child, 'SIGTERM');
-          if (!forceKillTimer) {
-            forceKillTimer = setTimeout(() => {
-              if (child.exitCode === null && child.signalCode === null) {
-                terminateChildProcessTree(child, 'SIGKILL');
-              }
-            }, ABORT_FORCE_KILL_MS);
-            forceKillTimer.unref?.();
-          }
-        }, idleTimeoutMs);
+        idleTimer = setTimeout(() => fireTimeout('idle'), idleTimeoutMs);
         idleTimer.unref?.();
       };
 
@@ -181,9 +201,9 @@ export class HostShellManager implements ShellManager {
         child.stderr.destroy?.();
       };
       const buildResult = (): ShellExecResult => {
-        const resolvedExitCode = typeof exitCode === 'number'
-          ? exitCode
-          : (timedOut ? 124 : 1);
+        const resolvedExitCode = timedOut
+          ? 124
+          : (typeof exitCode === 'number' ? exitCode : 1);
         const signalSuffix = exitSignal ? ` (signal ${exitSignal})` : '';
         return {
           success: resolvedExitCode === 0,
@@ -196,10 +216,15 @@ export class HostShellManager implements ShellManager {
           summary: resolvedExitCode === 0
             ? `Command completed successfully via ${launchPlan.strategy.backendLabel}`
             : (timedOut
-              ? `Command timed out after ${idleTimeoutMs}ms without output via ${launchPlan.strategy.backendLabel}`
+              ? `${
+                timeoutKind === 'idle'
+                  ? `Command timed out after ${idleTimeoutMs}ms without output`
+                  : `Command timed out after ${wallTimeoutMs}ms`
+              } via ${launchPlan.strategy.backendLabel}`
               : (stderr
                 ? `Command failed via ${launchPlan.strategy.backendLabel}: ${stderr}`
                 : `Command failed via ${launchPlan.strategy.backendLabel} with exit code ${resolvedExitCode}${signalSuffix}`)),
+          timeMs: Date.now() - startedAt,
         };
       };
       const finalizeExit = (detachStreams = false) => {
@@ -256,6 +281,10 @@ export class HostShellManager implements ShellManager {
           clearTimeout(idleTimer);
           idleTimer = null;
         }
+        if (wallTimer) {
+          clearTimeout(wallTimer);
+          wallTimer = null;
+        }
         if (forceKillTimer) {
           clearTimeout(forceKillTimer);
           forceKillTimer = null;
@@ -267,6 +296,10 @@ export class HostShellManager implements ShellManager {
       };
       signal?.addEventListener('abort', onAbort, { once: true });
       resetIdleTimer();
+      if (wallTimeoutMs > 0) {
+        wallTimer = setTimeout(() => fireTimeout('wall'), wallTimeoutMs);
+        wallTimer.unref?.();
+      }
 
       child.once('error', (error) => {
         if (signal?.aborted) {
@@ -276,7 +309,7 @@ export class HostShellManager implements ShellManager {
         finalizeReject(error);
       });
       child.once('exit', (code, closeSignal) => {
-        exitCode = typeof code === 'number' ? code : 1;
+        exitCode = timedOut ? 124 : (typeof code === 'number' ? code : 1);
         exitSignal = closeSignal;
 
         if (signal?.aborted || settled) {
@@ -291,7 +324,7 @@ export class HostShellManager implements ShellManager {
         exitGraceTimer.unref?.();
       });
       child.once('close', (code, closeSignal) => {
-        exitCode = typeof code === 'number' ? code : (exitCode ?? 1);
+        exitCode = timedOut ? 124 : (typeof code === 'number' ? code : (exitCode ?? 1));
         exitSignal = closeSignal ?? exitSignal;
         if (signal?.aborted) {
           finalizeReject(abortError(signal.reason));
@@ -309,7 +342,7 @@ export class HostShellManager implements ShellManager {
 
 export function createShellManager(options: CreateShellManagerOptions): ShellManager {
   if (options.sandbox) {
-    return new AgentVMManager(options.workspacePath, options.network ?? false);
+    return new AgentVMManager(options.workspacePath, options.network ?? false, options.hostConfig?.timeoutMs);
   }
 
   return new HostShellManager(options.workspacePath, options.hostConfig);
@@ -841,17 +874,6 @@ function getDefaultHostPathValue(): string {
   return process.platform === 'darwin'
     ? '/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:/opt/homebrew/bin'
     : '/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin';
-}
-
-function getHostShellIdleTimeoutMs(): number {
-  const raw = process.env.DC_HOST_SHELL_IDLE_TIMEOUT_MS;
-  if (raw != null) {
-    const parsed = Number.parseInt(raw, 10);
-    if (Number.isFinite(parsed) && parsed >= 0) {
-      return parsed;
-    }
-  }
-  return DEFAULT_HOST_SHELL_IDLE_TIMEOUT_MS;
 }
 
 function isHostShellDebugEnabled(): boolean {

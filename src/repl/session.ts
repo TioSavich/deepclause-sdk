@@ -890,6 +890,8 @@ export class DMLSession {
     onEvent?: (event: DMLEvent) => void,
     signal?: AbortSignal,
   ): Promise<HarnessExecuteResult> {
+    const startedAt = Date.now();
+    const elapsed = (): number => Date.now() - startedAt;
     const childDepth = this.frameDepth + 1;
     if (childDepth > this.maxDepth) {
       return {
@@ -897,6 +899,7 @@ export class DMLSession {
         solutions: [],
         output: '',
         error: `maximum frame depth (${this.maxDepth}) exceeded`,
+        elapsedMs: elapsed(),
       };
     }
 
@@ -905,10 +908,10 @@ export class DMLSession {
     );
     const error = plainValue(start?.Error);
     if (error === undefined || error === null) {
-      return { bindings: [], solutions: [], output: '', error: 'Failed to start execute frame' };
+      return { bindings: [], solutions: [], output: '', error: 'Failed to start execute frame', elapsedMs: elapsed() };
     }
     if (error !== 'none') {
-      return { bindings: [], solutions: [], output: '', error: String(error) };
+      return { bindings: [], solutions: [], output: '', error: String(error), elapsedMs: elapsed() };
     }
 
     const frameId = String(plainValue(start?.FrameId));
@@ -942,6 +945,7 @@ export class DMLSession {
       solutions,
       output: output.slice(0, 4000),
       error: runError,
+      elapsedMs: elapsed(),
     };
   }
 

@@ -58,10 +58,27 @@ describe('capability toolset', () => {
       success: boolean;
       stdout: string;
       exitCode: number;
+      timeMs: number;
     };
     expect(result.success).toBe(true);
     expect(result.stdout).toContain('hello-from-bash');
+    expect(result.timeMs).toBeGreaterThanOrEqual(0);
   });
+
+  it('honors a per-command timeoutMs and reports the elapsed time', async () => {
+    toolset = await createReplToolset({ workspacePath: workspace });
+    const started = Date.now();
+    const result = await toolset.tools.get('bash')!.execute({ command: 'sleep 5', timeoutMs: 300 }) as {
+      success: boolean;
+      exitCode: number;
+      timeMs: number;
+      summary: string;
+    };
+    expect(result.exitCode).toBe(124);
+    expect(result.summary).toContain('timed out after 300ms');
+    expect(result.timeMs).toBeGreaterThanOrEqual(250);
+    expect(Date.now() - started).toBeLessThan(3000);
+  }, 15000);
 
   it('buildToolCatalog describes each tool and its parameters', () => {
     const catalog = buildToolCatalog(new Map([['bash', {

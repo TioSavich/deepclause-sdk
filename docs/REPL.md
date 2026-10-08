@@ -284,6 +284,16 @@ dml> listing.
 % (empty harness)
 ```
 
+### Shell timeouts and timing
+
+`bash` runs out-of-process, so it can be bounded by wall clock:
+`exec(bash(command: Cmd, timeoutMs: N), R)` kills the command after `N` ms
+(SIGTERM, then SIGKILL) and returns exit code `124`. `DC_HOST_SHELL_TIMEOUT_MS`
+or `shell.timeoutMs` sets the default (0 = disabled); `DC_HOST_SHELL_IDLE_TIMEOUT_MS`
+or `shell.idleTimeoutMs` sets the no-output (idle) timeout (default 180 s). A
+shell result carries `timeMs` (its wall-clock duration), and the authoring
+agent's `execute` result carries `elapsedMs`.
+
 ### Entry points
 
 There is **no `agent_main` requirement** in the REPL. Name predicates

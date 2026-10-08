@@ -107,6 +107,7 @@ describe('HostShellManager cancellation', () => {
       backend: 'host',
       backendLabel: 'host[clean-room]',
       summary: 'Command completed successfully via host[clean-room]',
+      timeMs: expect.any(Number),
     });
 
     expect(onStart).toHaveBeenCalledWith({
@@ -164,6 +165,7 @@ describe('HostShellManager cancellation', () => {
       backend: 'host',
       backendLabel: 'host[clean-room]',
       summary: 'Command completed successfully via host[clean-room]',
+      timeMs: expect.any(Number),
     });
 
     expect(child.stdout.destroy).toHaveBeenCalledTimes(1);
@@ -236,6 +238,7 @@ describe('HostShellManager cancellation', () => {
       backend: 'host',
       backendLabel: 'host[clean-room]',
       summary: 'Command timed out after 1000ms without output via host[clean-room]',
+      timeMs: expect.any(Number),
     });
 
     expect(onExit).toHaveBeenCalledWith({

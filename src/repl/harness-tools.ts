@@ -13,6 +13,8 @@ export interface HarnessExecuteResult {
   solutions: Array<Array<{ name: string; value: string }>>;
   output: string;
   error?: string;
+  /** Wall-clock duration of the goal, in milliseconds. */
+  elapsedMs: number;
 }
 
 export interface HarnessCommitResult {

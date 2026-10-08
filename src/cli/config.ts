@@ -49,6 +49,10 @@ const AgentVMConfigSchema = z.object({
 const ShellConfigSchema = z.object({
   wrapper: z.enum(['auto', 'clean-room', 'bwrap', 'sandbox-exec']).optional().default('auto'),
   strictIsolation: z.boolean().optional().default(false),
+  /** Wall-clock timeout for a single shell command, in ms (0 = disabled). */
+  timeoutMs: z.number().int().nonnegative().optional(),
+  /** Kill a command that produces no output for this many ms (0 = disabled). */
+  idleTimeoutMs: z.number().int().nonnegative().optional(),
 }).optional().default({ wrapper: 'auto', strictIsolation: false });
 
 const ProviderConfigSchema = z.object({

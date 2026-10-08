@@ -217,6 +217,22 @@ Or positional if the tool supports it:
 exec(get_time, CurrentTime)
 ```
 
+The `bash` tool accepts an optional wall-clock `timeoutMs` and always returns the
+wall-clock duration as `timeMs`:
+
+```prolog
+exec(bash(command: "sleep 30", timeoutMs: 5000), R),
+get_dict(timeMs, R, Took),
+(   get_dict(exitCode, R, 124)
+->  format(string(Msg), "timed out after ~w ms", [Took])
+;   format(string(Msg), "finished in ~w ms", [Took])
+).
+```
+
+A command is also killed when it produces no output for `DC_HOST_SHELL_IDLE_TIMEOUT_MS`
+(default 180 000 ms); `DC_HOST_SHELL_TIMEOUT_MS` sets a default wall-clock cap
+(0 = disabled). Exit code `124` means a timeout.
+
 ---
 
 ### Tool Definitions
@@ -664,6 +680,28 @@ agent_main :-
     format(string(Msg), "Colors: ~w", [Colors]),
     answer(Msg).
 ```
+
+### Bounding a goal (inference limit)
+
+The interpreter has **no wall-clock timeout for a single builtin call** — the
+session `gas` budget counts meta-interpreter steps, and a runaway `findall/3`,
+`aggregate_all/3`, or `label/1` runs inside one step. Wrap such a call in
+`call_with_inference_limit/3` (core SWI-Prolog; available in this runtime, which
+has no threads) to bound it by inference count:
+
+```prolog
+bounded_findall(Goal, Xs) :-
+    call_with_inference_limit(findall(X, call(Goal, X), Xs), 1000000, Result),
+    (   Result == inference_limit_exceeded
+    ->  throw(error(inference_limit_exceeded, context(bounded_findall/2, Goal)))
+    ;   true
+    ).
+```
+
+`Result` is `inference_limit_exceeded` when the limit is hit (otherwise the
+normal call result). Use it for `findall/3`, `aggregate_all/3`, and CLP
+`label/1` over a large or under-specified domain. For shell commands, pass
+`exec(bash(command: Cmd, timeoutMs: N), R)` instead.
 
 ### Assert/Retract (within session)
 ```prolog
