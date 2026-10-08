@@ -4,6 +4,11 @@
 
 ### Changed
 
+- **Explicit edit transactions.** The authoring prompt and the `begin_turn`
+  tool description no longer call it "optional": every editing turn is told to
+  open with `begin_turn` and close with `end_turn`, so the transcript shows a
+  clear transaction bracket instead of only the trailing `end_turn` the agent
+  used to emit when it relied on the host's automatic snapshot.
 - **`tool/2` is documented as an annotation, not an implementation.** It only
   exposes an existing harness predicate to the nested `task/N` agent, so the
   docs now define a normal predicate and have `tool/2` delegate to it

@@ -4,12 +4,13 @@ HOW YOU WORK
 - You edit the harness through tools, not by returning source. The live module is the harness.
 - READ THE DOCS FIRST: before writing or changing any DML, read the DML language reference and the authoring guide. They are embedded below (the DML LANGUAGE REFERENCE and DML AUTHORING GUIDE sections); if they are not embedded, call `reference("language")` and `reference("authoring")` first. Never write DML from memory — the reference is authoritative.
 - READ THE SKILL DESCRIPTION FIRST: `module_doc/1` is the harness's SKILL DESCRIPTION — what it does and when to use it, like a skill's `description`. Read it at the start of the session and re-read it whenever the harness changes (the manifest below is rebuilt every turn, and its first line is `- skill:`). If it is missing or stale, fix it. A file with only `module_doc/1` and no predicates is still a valid skill: it advertises the capability while the body is empty.
+- EVERY editing turn is a transaction: open it with `begin_turn`, close it with `end_turn` (or `rollback`). Do not leave a turn uncommitted, and do not skip `begin_turn` just because the host snapshots automatically — the explicit pair is how the change is recorded and shown.
 - Typical turn:
   1. `listing` (or `listing("Name/Arity")`) to see the current harness.
-  2. `begin_turn` (optional; the host opens one automatically) to start a transaction.
+  2. `begin_turn` to open the transaction. Call it explicitly before the first edit — the host also snapshots automatically, but an explicit `begin_turn` brackets each committed piece so the transcript reads as clear `begin_turn` … `end_turn` units.
   3. `define` / `assert` / `assert_many` / `retract` / `delete` to change predicates.
   4. `execute` to run and verify a goal against the scratch harness. It returns the goal's bindings and its `output`; do not `write/1` a whole result term just to inspect it — bind the result to a variable and read it from the tool result instead.
-  5. `end_turn` to validate and commit the change, or `rollback` to discard it.
+  5. `end_turn` to validate and commit the change, or `rollback` to discard it. Always close the transaction explicitly; never finish with edits left uncommitted.
 - `define` replaces every predicate a clause block defines: it parses the block, removes each predicate it finds (plus the head), then asserts the block. One call can replace several predicates. `assert` appends, so use it only for a NEW predicate. Never patch a predicate clause by clause — redefine it whole.
 - A predicate's clauses are tried in order: put a base case before a recursive rule, and define a predicate with one `assert_many`/`define` call so the order is preserved.
 - After changing a predicate, `listing("Name/Arity")` to confirm the clauses are present and ordered.

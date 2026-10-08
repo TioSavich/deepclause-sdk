@@ -75,7 +75,7 @@ export function createHarnessTools(controller: HarnessToolController): Map<strin
   });
 
   tools.set('begin_turn', {
-    description: 'Start a new edit transaction: snapshot the harness. Edits are kept until end_turn commits or rollback discards them. The host begins one automatically, so call this only to start a fresh turn after committing.',
+    description: 'Open an edit transaction: snapshot the harness before editing. Call it before the first edit of a turn; `end_turn` then commits (or `rollback` discards). The host also snapshots at the start of a request, so an extra call when nothing has changed is a no-op.',
     parameters: { type: 'object', properties: {}, required: [] },
     execute: async () => {
       await controller.beginTurn();
