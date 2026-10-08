@@ -9,10 +9,8 @@ import { readFileSync } from 'fs';
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import {
-  getSystemCompactorAssetPath,
   getWorkspaceDocAssetPath,
 } from '../system/assets/index.js';
-import type { CompactionOptions } from '../types.js';
 import type { CompactionSettings } from '../repl/compaction.js';
 import {
   DEFAULT_MODEL_IDS,
@@ -64,34 +62,6 @@ const ProvidersSchema = z.object({
   google: ProviderConfigSchema.optional(),
   openrouter: ProviderConfigSchema.optional()
 }).optional().default({});
-
-const ToolPolicySchema = z.object({
-  mode: z.enum(['whitelist', 'blacklist']),
-  tools: z.array(z.string()).default([]),
-});
-
-const CompactorDefinitionSchema = z.object({
-  source: z.string().min(1, 'DML compactor source is required'),
-  sourceType: z.enum(['inline', 'file', 'auto']).optional(),
-  timeoutMs: z.number().int().nonnegative().optional(),
-  gasLimit: z.number().int().positive().optional(),
-  model: z.string().min(1).optional(),
-  provider: z.enum(['openai', 'anthropic', 'google', 'openrouter']).optional(),
-  inheritTools: z.boolean().optional(),
-  toolPolicy: ToolPolicySchema.nullish(),
-});
-
-const CompactorBindingSchema = z.object({
-  name: z.string().min(1).optional(),
-  scope: z.enum(['session', 'loop', 'run']),
-  trigger: z.enum(['before_user_message', 'before_model_call', 'before_task', 'after_task']),
-  compactor: CompactorDefinitionSchema,
-});
-
-const CompactionConfigSchema = z.object({
-  enabled: z.boolean().optional(),
-  bindings: z.array(CompactorBindingSchema).optional(),
-}).optional();
 
 const ModelsSchema = z.object({
   gateway: z.string().min(1).default(DEFAULT_MODEL_IDS.gateway),
@@ -205,7 +175,6 @@ export const ConfigSchema = z.object({
   mcp: MCPConfigSchema.optional().default({ servers: {} }),
   agentvm: AgentVMConfigSchema,
   shell: ShellConfigSchema,
-  compaction: CompactionConfigSchema,
   repl: ReplConfigSchema,
   judgment: JudgmentConfigSchema,
   dmlBase: z.string().optional().default('.deepclause/tools'),
@@ -230,33 +199,6 @@ const DEFAULT_CONFIG: Config = {
   mcp: { servers: {} },
   agentvm: { network: false },
   shell: { wrapper: 'auto', strictIsolation: false },
-  compaction: {
-    enabled: true,
-    bindings: [
-      {
-        name: 'default-session',
-        scope: 'session',
-        trigger: 'before_user_message',
-        compactor: {
-          source: '.deepclause/system/default-session-compactor.dml',
-          sourceType: 'file',
-          timeoutMs: 15_000,
-          inheritTools: false,
-        },
-      },
-      {
-        name: 'default-loop',
-        scope: 'loop',
-        trigger: 'before_model_call',
-        compactor: {
-          source: '.deepclause/system/default-loop-compactor.dml',
-          sourceType: 'file',
-          timeoutMs: 15_000,
-          inheritTools: false,
-        },
-      },
-    ],
-  },
   repl: {
     exportOnExit: false,
     exportPath: 'harness.dml',
@@ -383,43 +325,7 @@ export async function initConfig(
 `;
   await fs.writeFile(gitignorePath, gitignoreContent);
 
-  await ensureSystemOverrideSeeds(workspaceRoot, { overwrite: true });
   await ensureWorkspaceDocSeeds(workspaceRoot, { overwrite: true });
-}
-
-export async function ensureSystemOverrideSeeds(
-  workspaceRoot: string,
-  options: { overwrite?: boolean } = {},
-): Promise<void> {
-  const systemDir = getSystemDir(workspaceRoot);
-  await fs.mkdir(systemDir, { recursive: true });
-  await copySystemOverrideSeeds(systemDir, options.overwrite ?? false);
-}
-
-async function copySystemOverrideSeeds(systemDir: string, overwrite: boolean): Promise<void> {
-  const packagedAssets = [
-    {
-      fileName: 'default-session-compactor.dml',
-      content: readFileSync(getSystemCompactorAssetPath('default-session-compactor'), 'utf8'),
-    },
-    {
-      fileName: 'default-loop-compactor.dml',
-      content: readFileSync(getSystemCompactorAssetPath('default-loop-compactor'), 'utf8'),
-    },
-  ];
-
-  await Promise.all(packagedAssets.map(async ({ fileName, content }) => {
-    const filePath = path.join(systemDir, fileName);
-    if (!overwrite) {
-      try {
-        await fs.access(filePath);
-        return;
-      } catch {
-        // Seed the packaged system file when it is missing.
-      }
-    }
-    await fs.writeFile(filePath, content, 'utf8');
-  }));
 }
 
 export async function ensureWorkspaceDocSeeds(
@@ -482,7 +388,6 @@ export async function loadConfig(workspaceRoot: string): Promise<Config> {
 
   // Validate
   const config = validateConfig(migratedConfig);
-  await ensureSystemOverrideSeeds(workspaceRoot);
   await ensureWorkspaceDocSeeds(workspaceRoot);
   return config;
 }
@@ -630,17 +535,6 @@ export function getDefaultConfig(): Config {
       ...DEFAULT_CONFIG.repl,
       compaction: { ...DEFAULT_CONFIG.repl.compaction },
     },
-    compaction: DEFAULT_CONFIG.compaction
-      ? {
-        ...DEFAULT_CONFIG.compaction,
-        bindings: DEFAULT_CONFIG.compaction.bindings
-          ? DEFAULT_CONFIG.compaction.bindings.map((binding) => ({
-            ...binding,
-            compactor: { ...binding.compactor },
-          }))
-          : undefined,
-      }
-      : undefined,
   };
 }
 
@@ -661,13 +555,6 @@ export async function updateConfig(
     mcp: updates.mcp ? { ...config.mcp, ...updates.mcp } : config.mcp,
     agentvm: updates.agentvm ? { ...config.agentvm, ...updates.agentvm } : config.agentvm,
     shell: updates.shell ? { ...config.shell, ...updates.shell } : config.shell,
-    compaction: updates.compaction
-      ? {
-        ...config.compaction,
-        ...updates.compaction,
-        bindings: updates.compaction.bindings ?? config.compaction?.bindings,
-      }
-      : config.compaction,
   };
   
   // Re-validate
@@ -783,31 +670,6 @@ function coerceTemperature(value: unknown, fallback: number): number {
 function serializeConfig(config: Config): string {
   const { model, provider, ...rest } = config;
   return JSON.stringify(rest, null, 2) + '\n';
-}
-
-export function resolveCompactionConfig(
-  config: Config,
-  workspaceRoot: string,
-): CompactionOptions | undefined {
-  const compaction = config.compaction;
-  if (!compaction) {
-    return undefined;
-  }
-
-  const bindings = compaction.bindings?.map((binding) => ({
-    ...binding,
-    compactor: {
-      ...binding.compactor,
-      source: binding.compactor.sourceType === 'file' && !path.isAbsolute(binding.compactor.source)
-        ? path.resolve(workspaceRoot, binding.compactor.source)
-        : binding.compactor.source,
-    },
-  }));
-
-  return {
-    ...compaction,
-    bindings,
-  };
 }
 
 export interface ReplCompactionConfig extends CompactionSettings {

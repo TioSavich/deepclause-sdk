@@ -119,7 +119,6 @@ export async function createDeepClause(options: CreateOptions): Promise<DeepClau
     streaming: options.streaming ?? false,
     debug: options.debug ?? false,
     providerOptions: options.providerOptions,
-    compaction: options.compaction,
     reasoningType: options.reasoningType,
     reasoningBudgetMap: options.reasoningBudgetMap,
     contextWindow: options.contextWindow,
@@ -150,7 +149,6 @@ export async function createDeepClause(options: CreateOptions): Promise<DeepClau
       // Run with tool policy and custom tools
       yield* runner.run(code, {
         ...runOptions,
-        compaction: runOptions?.compaction,
         tools,
         toolPolicy,
         gasLimit: runOptions?.gasLimit,

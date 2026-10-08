@@ -74,7 +74,7 @@ describe('Config Module', () => {
     expect(vol.existsSync(`${WS}/.deepclause/tools`)).toBe(true);
     expect(vol.existsSync(`${WS}/.deepclause/docs/DML_REFERENCE.md`)).toBe(true);
     expect(vol.existsSync(`${WS}/.deepclause/docs/DML_AUTHORING.md`)).toBe(true);
-    expect(vol.existsSync(`${WS}/.deepclause/system/default-loop-compactor.dml`)).toBe(true);
+    expect(vol.existsSync(`${WS}/.deepclause/system`)).toBe(true);
   });
 
   it('initConfig refuses to clobber an existing config without force', async () => {

@@ -46,8 +46,6 @@ export interface CreateOptions {
   /** Provider-specific options passed to the AI SDK (e.g. Google thinkingConfig, OpenAI reasoningEffort) */
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   providerOptions?: Record<string, Record<string, any>>;
-  /** Optional memory compaction settings for task()/prompt() execution */
-  compaction?: CompactionOptions;
   /** Reasoning effort type (auto-resolved from model database) */
   reasoningType?: import('./system/config/model-database.js').ReasoningType;
   /** Reasoning budget map for token-based reasoning control */
@@ -129,47 +127,9 @@ export interface LLMBackend {
   complete(request: LLMBackendRequest): Promise<LLMBackendResponse>;
 }
 
-export type CompactorSourceType = 'inline' | 'file' | 'auto';
 export type CompactionScope = 'session' | 'loop' | 'run';
 export type CompactionTrigger = 'before_user_message' | 'before_model_call' | 'before_task' | 'after_task';
 export type CompactionAction = 'running' | 'applied' | 'skipped' | 'failed';
-
-export interface CompactorDefinition {
-  /** Inline DML source or a path to a DML file */
-  source: string;
-  /** How to interpret the source field. Defaults to 'auto'. */
-  sourceType?: CompactorSourceType;
-  /** Timeout for the DML compactor run in milliseconds. */
-  timeoutMs?: number;
-  /** Optional gas limit for the compactor DML run. */
-  gasLimit?: number;
-  /** Optional model override for compactor task()/prompt() calls. */
-  model?: string;
-  /** Optional provider override for the compactor model. */
-  provider?: 'openai' | 'anthropic' | 'google' | 'openrouter';
-  /** Whether the compactor may access the caller's registered exec() tools. Defaults to false. */
-  inheritTools?: boolean;
-  /** Optional tool policy applied to the compactor run. */
-  toolPolicy?: ToolPolicy | null;
-}
-
-export interface CompactorBinding {
-  /** Optional binding label used in logs and events. */
-  name?: string;
-  /** Runtime scope to which this compactor is attached. */
-  scope: CompactionScope;
-  /** Trigger point within the scope. */
-  trigger: CompactionTrigger;
-  /** The DML compactor to run when this binding is evaluated. */
-  compactor: CompactorDefinition;
-}
-
-export interface CompactionOptions {
-  /** Enables compactor evaluation. Defaults to false. */
-  enabled?: boolean;
-  /** Compactor bindings evaluated at specific runtime hook points. */
-  bindings?: CompactorBinding[];
-}
 
 /**
  * Options for running DML code
@@ -192,8 +152,6 @@ export interface RunOptions {
   /** Initial conversation messages seeded into memory before DML execution.
     *  These appear as proper memory messages, not in the synthesized system prompt. */
     initialMessages?: MemoryMessage[];
-  /** Per-run override for SDK compaction settings. */
-  compaction?: CompactionOptions;
 }
 
 /**
@@ -299,8 +257,6 @@ export interface DMLEvent extends FrameEventMeta {
   compactionTrigger?: CompactionTrigger;
   /** Compaction action outcome (only for 'memory_compaction' events) */
   compactionAction?: CompactionAction;
-  /** Binding label used for the compaction event when available */
-  compactionBindingName?: string;
   /** Estimated tokens before compaction (only for 'memory_compaction' events) */
   beforeTokens?: number;
   /** Estimated tokens after compaction (only for 'memory_compaction' events) */

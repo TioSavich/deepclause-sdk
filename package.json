@@ -27,7 +27,7 @@
     "build": "tsc && npm run copy:prolog && npm run copy:assets && npm run chmod:bins",
     "chmod:bins": "chmod +x dist/cli/index.js dist/cli/repl-bin.js",
     "copy:prolog": "mkdir -p dist/prolog-src && cp src/prolog-src/*.pl dist/prolog-src/",
-    "copy:assets": "mkdir -p dist/system/assets/compactors dist/system/assets/docs && cp src/system/assets/compactors/*.dml dist/system/assets/compactors/ && cp src/system/assets/docs/*.md dist/system/assets/docs/ && cp src/system/assets/model-database.json dist/system/assets/",
+    "copy:assets": "mkdir -p dist/system/assets/docs && cp src/system/assets/docs/*.md dist/system/assets/docs/ && cp src/system/assets/model-database.json dist/system/assets/",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",

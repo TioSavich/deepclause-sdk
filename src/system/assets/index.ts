@@ -4,7 +4,6 @@ import { dirname, join, resolve } from 'path';
 import { fileURLToPath } from 'url';
 
 export type SystemPromptAssetName = 'task';
-export type SystemCompactorAssetName = 'default-session-compactor' | 'default-loop-compactor';
 export type WorkspaceDocAssetName =
   | 'dml-reference'
   | 'dml-authoring'
@@ -13,7 +12,6 @@ export type WorkspaceDocAssetName =
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
-const COMPACTORS_DIR = join(__dirname, 'compactors');
 const DOCS_DIR = join(__dirname, 'docs');
 const SYSTEM_OVERRIDE_DIR = '.deepclause/system';
 
@@ -29,22 +27,10 @@ function getSystemPromptFileName(name: SystemPromptAssetName): string {
   }
 }
 
-function getSystemCompactorFileName(name: SystemCompactorAssetName): string {
-  switch (name) {
-    case 'default-session-compactor':
-      return 'default-session-compactor.dml';
-    case 'default-loop-compactor':
-      return 'default-loop-compactor.dml';
-  }
-}
-
 export function getSystemPromptAssetPath(name: SystemPromptAssetName): string {
   return join(DOCS_DIR, getSystemPromptFileName(name));
 }
 
-export function getSystemCompactorAssetPath(name: SystemCompactorAssetName): string {
-  return join(COMPACTORS_DIR, getSystemCompactorFileName(name));
-}
 
 function getWorkspaceDocFileName(name: WorkspaceDocAssetName): string {
   switch (name) {

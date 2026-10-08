@@ -2,11 +2,8 @@
  * DML Runner - Executes DML code using SWI-Prolog WASM
  */
 
-import * as fs from 'fs/promises';
-import * as path from 'path';
 import type { SWIPLModule } from './prolog/loader.js';
 import type {
-  CompactionOptions,
   DMLBinding,
   DMLEvent,
   FrameKind,
@@ -23,20 +20,12 @@ import { runAgentLoop } from './agent.js';
 import { judgeAnswersToValues, judgeCacheKey, normalizeJudgeState, parseJudgeQuestions, validateJudgeAnswers, valuesToPrologList } from './judge/marshal.js';
 import type { JudgeAnswer, JudgeCapabilities, JudgeSelection, JudgeUsage, JsonValue, JudgeQuestion } from './judge/types.js';
 import {
-  executeCompactor,
-  getCompactionBindings,
-  resolveCompactionOptions,
-  type CompactorExecutionRequest,
-  type CompactorExecutionResponse,
-} from './compaction.js';
-import {
   buildToolCompletionEvent,
   buildToolFailureEvent,
   buildToolStartEvent,
 } from './system/runtime/shell-tool-events.js';
 import { checkToolPolicy } from './tools.js';
 import { generateLlmReply, sampleSingleToken } from './prolog/bridge.js';
-import { recordTokenUsage } from './system/runtime/token-usage.js';
 import { buildReasoningProviderOptions, type ReasoningType } from './system/config/model-database.js';
 import { resolveMediaRefs } from './system/runtime/media.js';
 
@@ -94,52 +83,6 @@ export function toJsValue(value: unknown): unknown {
   return value;
 }
 
-function detectProvider(model: string): 'openai' | 'anthropic' | 'google' | 'openrouter' {
-  const lower = model.toLowerCase();
-  if (lower.includes('gpt') || lower.includes('o1') || lower.includes('o3')) {
-    return 'openai';
-  }
-  if (lower.includes('claude')) {
-    return 'anthropic';
-  }
-  if (lower.includes('gemini') || lower.includes('palm')) {
-    return 'google';
-  }
-  return 'openrouter';
-}
-
-function createChildAbortController(
-  parentSignal: AbortSignal | undefined,
-  timeoutMs: number,
-): { signal: AbortSignal; dispose: () => void } {
-  const controller = new AbortController();
-  const disposers: Array<() => void> = [];
-
-  if (parentSignal) {
-    if (parentSignal.aborted) {
-      controller.abort(parentSignal.reason);
-    } else {
-      const onAbort = () => controller.abort(parentSignal.reason);
-      parentSignal.addEventListener('abort', onAbort, { once: true });
-      disposers.push(() => parentSignal.removeEventListener('abort', onAbort));
-    }
-  }
-
-  let timeout: NodeJS.Timeout | undefined;
-  if (timeoutMs > 0) {
-    timeout = setTimeout(() => controller.abort(new Error(`Compactor timed out after ${timeoutMs}ms`)), timeoutMs);
-    disposers.push(() => clearTimeout(timeout));
-  }
-
-  return {
-    signal: controller.signal,
-    dispose: () => {
-      for (const dispose of disposers) {
-        dispose();
-      }
-    },
-  };
-}
 
 /**
  * Decode the `bindings` payload of a goal-mode `solution` event.
@@ -215,11 +158,9 @@ export interface RunnerOptions {
   debug?: boolean;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   providerOptions?: Record<string, Record<string, any>>;
-  compaction?: CompactionOptions;
   /**
-   * Host-provided TypeScript compaction (the REPL path). When set, it replaces
-   * the DML compactor bindings for the before-model-call hook. The callback may
-   * return a `memory_compaction` event to surface in the stream.
+   * Host-provided TypeScript compaction (the REPL path). The callback may return
+   * a `memory_compaction` event to surface in the stream.
    */
   compactMessages?: (
     messages: MemoryMessage[],
@@ -243,7 +184,6 @@ export interface InternalRunOptions {
   onInputRequired: (prompt: string) => Promise<string | undefined>;
   signal?: AbortSignal;
   initialMessages?: MemoryMessage[];
-  compaction?: CompactionOptions;
   /** Per-run default judgment backend name override. */
   judgeBackend?: string;
   /**
@@ -256,7 +196,6 @@ export interface InternalRunOptions {
 interface RunnerExecutionContext {
   workspacePath?: string;
   signal?: AbortSignal;
-  compaction?: CompactionOptions;
   toolPolicy?: ToolPolicy | null;
   onModelCall?: () => boolean | Promise<boolean>;
 }
@@ -998,7 +937,6 @@ export class DMLRunner {
           {
             workspacePath: options.workspacePath,
             signal: options.signal,
-            compaction: options.compaction,
             toolPolicy: options.toolPolicy,
             onModelCall: options.onModelCall,
           },
@@ -1073,22 +1011,7 @@ export class DMLRunner {
       },
       onBeforeModelCall: async (messages, lastInputTokens) => {
         const hostCompacted = await this.applyHostCompaction(messages, lastInputTokens, emitRunnerEvent);
-        if (hostCompacted) return hostCompacted;
-        return this.applyCompactionBindings({
-          messages,
-          lastInputTokens,
-          scope: 'loop',
-          trigger: 'before_model_call',
-          options,
-          executionContext: {
-            workspacePath: options.workspacePath,
-            signal: options.signal,
-            compaction: options.compaction,
-          },
-          registeredTools: options.tools,
-          toolPolicy: options.toolPolicy,
-          emitEvent: emitRunnerEvent,
-        });
+        return hostCompacted ?? messages;
       },
       onAskUser: options.onInputRequired,
       onModelCall: options.onModelCall,
@@ -2124,18 +2047,7 @@ export class DMLRunner {
                 onToolCall: onToolCall ?? (() => {}), // Forward tool call events to parent
                 onBeforeModelCall: async (messages, lastInputTokens) => {
                   const hostCompacted = await this.applyHostCompaction(messages, lastInputTokens, onToolEvent);
-                  if (hostCompacted) return hostCompacted;
-                  return this.applyCompactionBindings({
-                    messages,
-                    lastInputTokens,
-                    scope: 'loop',
-                    trigger: 'before_model_call',
-                    options: { compaction: runContext.compaction },
-                    executionContext: runContext,
-                    registeredTools,
-                    toolPolicy: runContext.toolPolicy ?? null,
-                    emitEvent: onToolEvent,
-                  });
+                  return hostCompacted ?? messages;
                 },
                 onAskUser: async () => { 
                   // Nested agent loops don't support ask_user directly
@@ -2227,144 +2139,6 @@ export class DMLRunner {
     return result.messages;
   }
 
-  private async applyCompactionBindings(params: {
-    messages: MemoryMessage[];
-    lastInputTokens?: number;
-    scope: 'loop' | 'session' | 'run';
-    trigger: 'before_model_call' | 'before_user_message' | 'before_task' | 'after_task';
-    options: { compaction?: CompactionOptions };
-    executionContext: RunnerExecutionContext;
-    registeredTools: Map<string, ToolDefinition>;
-    toolPolicy: ToolPolicy | null;
-    emitEvent?: (event: DMLEvent) => void;
-  }): Promise<MemoryMessage[]> {
-    const resolved = resolveCompactionOptions(this.options.compaction, params.options.compaction);
-    const bindings = getCompactionBindings(resolved, params.scope, params.trigger);
-    if (bindings.length === 0) {
-      return params.messages;
-    }
-
-    let messages = params.messages;
-    for (const binding of bindings) {
-      const result = await executeCompactor({
-        binding,
-        messages,
-        knownInputTokens: params.lastInputTokens,
-        maxContextTokens: this.options.contextWindow,
-        emitEvent: params.emitEvent,
-        execute: (request) => this.runBoundCompactor({
-          request,
-          executionContext: params.executionContext,
-          registeredTools: params.registeredTools,
-          toolPolicy: params.toolPolicy,
-        }),
-      });
-      params.emitEvent?.(result.event);
-      if (result.usageByModel) {
-        for (const totals of Object.values(result.usageByModel)) {
-          params.emitEvent?.({ type: 'usage', usage: {
-            inputTokens: totals.inputTokens,
-            outputTokens: totals.outputTokens,
-            totalTokens: totals.totalTokens,
-            cacheReadTokens: totals.cacheReadTokens || undefined,
-            cacheWriteTokens: totals.cacheWriteTokens || undefined,
-            reasoningTokens: totals.reasoningTokens || undefined,
-          } });
-        }
-      }
-      messages = result.messages;
-    }
-
-    return messages;
-  }
-
-  private async runBoundCompactor(params: {
-    request: CompactorExecutionRequest;
-    executionContext: RunnerExecutionContext;
-    registeredTools: Map<string, ToolDefinition>;
-    toolPolicy: ToolPolicy | null;
-  }): Promise<CompactorExecutionResponse> {
-    const { binding, params: compactorParams } = params.request;
-    const code = await this.resolveCompactorSource(
-      binding.compactor.source,
-      binding.compactor.sourceType,
-      params.executionContext.workspacePath,
-    );
-
-    const model = binding.compactor.model ?? this.options.model;
-    const provider = binding.compactor.provider
-      ?? (binding.compactor.model ? detectProvider(model) : this.options.provider);
-    const compactorRunner = new DMLRunner(this.swipl, {
-      ...this.options,
-      model,
-      provider,
-      streaming: false,
-      compaction: { enabled: false },
-    });
-    const { signal, dispose } = createChildAbortController(params.executionContext.signal, binding.compactor.timeoutMs);
-
-    try {
-      const tools = binding.compactor.inheritTools ? params.registeredTools : new Map<string, ToolDefinition>();
-      let answer = '';
-      let errorContent = '';
-      const usageByModel: Record<string, import('./system/runtime/token-usage.js').TokenUsageTotals> = {};
-      for await (const event of compactorRunner.run(code, {
-        workspacePath: params.executionContext.workspacePath,
-        gasLimit: binding.compactor.gasLimit,
-        params: compactorParams,
-        initialMessages: params.request.messages,
-        tools,
-        toolPolicy: binding.compactor.toolPolicy ?? (binding.compactor.inheritTools ? params.toolPolicy : null) ?? null,
-        onInputRequired: async (prompt) => {
-          throw new Error(`Compactor requested unexpected input: ${prompt}`);
-        },
-        signal,
-        compaction: { enabled: false },
-      })) {
-        if (event.type === 'answer' && event.content) {
-          answer = event.content;
-        } else if (event.type === 'error' && event.content) {
-          errorContent = event.content;
-        } else if (event.type === 'usage' && event.usage) {
-          recordTokenUsage(usageByModel, this.options.model, event.usage);
-        }
-      }
-
-      return {
-        answer,
-        error: errorContent || undefined,
-        usageByModel: Object.keys(usageByModel).length > 0 ? usageByModel : undefined,
-      };
-    } finally {
-      dispose();
-      await compactorRunner.dispose();
-    }
-  }
-
-  private async resolveCompactorSource(
-    source: string,
-    sourceType: 'inline' | 'file' | 'auto',
-    workspacePath?: string,
-  ): Promise<string> {
-    if (sourceType === 'inline') {
-      return source;
-    }
-
-    const basePath = workspacePath ?? process.cwd();
-    const candidatePath = path.isAbsolute(source) ? source : path.resolve(basePath, source);
-    try {
-      return await fs.readFile(candidatePath, 'utf8');
-    } catch (error) {
-      if (sourceType === 'file') {
-        throw error;
-      }
-      return source;
-    }
-  }
-
-  /**
-   * Extract memory from payload (now passed via state threading)
-   */
   private extractMessagesFromValue(rawMessages: unknown): MemoryMessage[] {
     const normalized = toJsValue(rawMessages);
     if (!Array.isArray(normalized)) {
