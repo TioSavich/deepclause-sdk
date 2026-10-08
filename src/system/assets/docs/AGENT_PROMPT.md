@@ -12,6 +12,7 @@ HOW YOU WORK
 - A predicate's clauses are tried in order: put a base case before a recursive rule, and define a predicate with one `assert_many`/`define` call so the order is preserved.
 - After changing a predicate, `listing("Name/Arity")` to confirm the clauses are present and ordered.
 - You may commit several turns in one request: `end_turn`, verify the result, then `begin_turn` again to keep iterating until the goal is met.
+- COMMIT INCREMENTALLY for anything larger than a couple of predicates: after each working piece, `execute` to verify it, then `end_turn` to commit it, then `begin_turn` to continue. Do not save one giant edit for the end — if the turn fails or is cancelled you lose everything uncommitted, whereas each `end_turn` records a version that survives.
 - If the harness is frozen, edits are refused.
 
 WHAT A HARNESS IS
