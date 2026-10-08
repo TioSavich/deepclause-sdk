@@ -21,6 +21,9 @@ import {
   toCompactionEvent,
   type CompactionSettings,
 } from './compaction.js';
+import { HarnessAgent } from './agent.js';
+import { createHarnessTools } from './harness-tools.js';
+import type { HarnessCommitResult, HarnessExecuteResult } from './harness-tools.js';
 import type {
   DMLEvent,
   FrameKind,
@@ -84,6 +87,8 @@ export interface DMLSessionOptions {
   compaction?: { settings: CompactionSettings; auto: boolean };
   /** Active model context window, used for compaction thresholds. */
   contextWindow?: number;
+  /** Authoring implementation: the DML `meta` frame (legacy) or the TS `agent`. */
+  authoring?: 'meta' | 'agent';
   /**
    * Resume an existing session (identified by `sessionId`): restore its saved
    * harness and conversation memory and continue its turn numbering. Requires
@@ -131,6 +136,15 @@ export class DMLSession {
   private compactionAuto = false;
   private contextWindow?: number;
   private llmBackend?: LLMBackend;
+  private temperature = 0.7;
+  private maxTokens = 65536;
+  private readonly authoring: 'meta' | 'agent';
+  /** Persisted authoring-agent conversation (agent mode). */
+  private agentMessages: MemoryMessage[] = [];
+  private harnessAgent?: HarnessAgent;
+  /** Open edit transaction (agent mode): predicate list at snapshot. */
+  private transactionBefore: string[] | null = null;
+  private transactionDirty = false;
 
   /** Current nested frame depth (used for the depth budget). */
   private frameDepth = 0;
@@ -176,6 +190,9 @@ export class DMLSession {
     this.compactionAuto = options.compaction?.auto ?? false;
     this.contextWindow = options.contextWindow;
     this.llmBackend = options.runnerOptions.llmBackend;
+    this.temperature = options.runnerOptions.temperature;
+    this.maxTokens = options.runnerOptions.maxTokens;
+    this.authoring = options.authoring ?? 'meta';
     this.runner = new DMLRunner(swipl, {
       ...options.runnerOptions,
       compactMessages: options.compaction
@@ -235,6 +252,9 @@ export class DMLSession {
     }
     await session.initHistory();
     if (snapshot) {
+      if (snapshot.memory?.agent) {
+        session.agentMessages = snapshot.memory.agent;
+      }
       await session.restoreHarnessFromHistory(snapshot);
     }
     return session;
@@ -369,6 +389,7 @@ export class DMLSession {
         memory: {
           harness: this.dumpMemoryTerm('harness'),
           meta: this.dumpMemoryTerm('meta'),
+          ...(this.agentMessages.length > 0 ? { agent: this.agentMessages } : {}),
         },
         module,
       });
@@ -464,15 +485,13 @@ export class DMLSession {
     kind: 'commit' | 'load' | 'reset',
     turn: number,
     before: string[],
+    overrides: { touched?: string[] } = {},
   ): Promise<number | undefined> {
     if (!this.history) return undefined;
     try {
       const after = this.predicateList();
-      const changed = this.diffPredicates(
-        before,
-        after,
-        kind === 'commit' ? this.touchedPredicates() : after,
-      );
+      const touched = overrides.touched ?? (kind === 'commit' ? this.touchedPredicates() : after);
+      const changed = this.diffPredicates(before, after, touched);
       const { facts, version } = await this.history.recordChange({
         kind,
         sessionId: this.sessionId,
@@ -937,6 +956,200 @@ export class DMLSession {
     };
   }
 
+  // ---- Authoring agent (TS) ----------------------------------------------
+
+  /**
+   * The TypeScript authoring agent: a normal `LLMBackend` agent with harness
+   * tools. It runs one or more committed turns in a loop until the model calls
+   * `finish`. This is the `authoring: 'agent'` path.
+   */
+  async *agentPrompt(request: string, options: DMLQueryOptions = {}): AsyncGenerator<DMLEvent> {
+    if (this.disposed) {
+      yield { type: 'error', content: 'Session has been disposed' };
+      return;
+    }
+    if (!this.llmBackend) {
+      yield { type: 'error', content: 'authoring agent requires an injected LLM backend' };
+      return;
+    }
+
+    this.turnCounter += 1;
+    const turn = this.turnCounter;
+    await this.beginTurn();
+
+    const agent = this.getHarnessAgent();
+    let failed = false;
+    try {
+      for await (const event of agent.run(request, { signal: options.signal })) {
+        if (event.type === 'error') failed = true;
+        this.recordHistoryEvent(turn, event);
+        yield event;
+      }
+    } catch (error) {
+      failed = true;
+      const message = error instanceof Error ? error.message : String(error);
+      this.recordHistoryEvent(turn, { type: 'error', content: message });
+      yield { type: 'error', content: message };
+    } finally {
+      this.agentMessages = agent.getMessages();
+    }
+
+    if (options.signal?.aborted || failed) {
+      await this.rollbackTurn();
+    } else if (this.transactionBefore !== null) {
+      // Reaching the end without an explicit end_turn commits the edits.
+      await this.endTurn();
+    }
+    await this.persistSessionHarness(this.history?.currentVersion ?? 0);
+  }
+
+  private getHarnessAgent(): HarnessAgent {
+    if (this.harnessAgent) return this.harnessAgent;
+    this.harnessAgent = new HarnessAgent({
+      controller: this,
+      tools: createHarnessTools(this),
+      llmBackend: this.llmBackend!,
+      model: this.model,
+      temperature: this.temperature,
+      maxTokens: this.maxTokens,
+      streaming: true,
+      maxModelCalls: this.maxModelCalls,
+      contextWindow: this.contextWindow,
+      compaction: this.compactionSettings
+        ? { settings: this.compactionSettings, auto: this.compactionAuto }
+        : undefined,
+      hostToolsCatalog: this.hostToolsCatalog,
+      knownMessages: this.agentMessages,
+    });
+    return this.harnessAgent;
+  }
+
+  /** Read the current harness manifest for the agent system prompt. */
+  async manifest(): Promise<string> {
+    return this.manifestText();
+  }
+
+  async beginTurn(): Promise<void> {
+    this.prologQuery(`deepclause_mi:repl_snapshot_save('${this.sessionId}')`);
+    this.transactionBefore = this.predicateList();
+    this.transactionDirty = false;
+  }
+
+  async endTurn(): Promise<HarnessCommitResult> {
+    if (this.transactionBefore === null) {
+      return { committed: false, changed: [], error: 'no open transaction' };
+    }
+    const before = this.transactionBefore;
+    const after = this.predicateList();
+    const changed = this.simplePredicateDiff(before, after);
+    this.transactionBefore = null;
+    if (this.transactionDirty && this.history) {
+      await this.recordHistoryChange('commit', this.turnCounter, before, { touched: [...before, ...after] });
+    }
+    this.transactionDirty = false;
+    await this.persistSessionHarness(this.history?.currentVersion ?? 0);
+    return { committed: true, changed };
+  }
+
+  async rollbackTurn(): Promise<void> {
+    if (this.transactionBefore === null) return;
+    this.prologQuery(`deepclause_mi:repl_snapshot_restore('${this.sessionId}')`);
+    this.transactionBefore = null;
+    this.transactionDirty = false;
+  }
+
+  private simplePredicateDiff(before: string[], after: string[]): string[] {
+    const beforeSet = new Set(before);
+    const afterSet = new Set(after);
+    const changed: string[] = [];
+    for (const predicate of after) if (!beforeSet.has(predicate)) changed.push(`+${predicate}`);
+    for (const predicate of before) if (!afterSet.has(predicate)) changed.push(`-${predicate}`);
+    return changed.sort();
+  }
+
+  private editResult(result: unknown): { ok: boolean; error?: string } {
+    if (result === 'ok') {
+      this.transactionDirty = true;
+      return { ok: true };
+    }
+    return { ok: false, error: String(result) };
+  }
+
+  async define(head: string, clauses: string): Promise<{ ok: boolean; error?: string }> {
+    const result = this.prologQuery(
+      `deepclause_mi:repl_define('${this.sessionId}', ${quoteString(head)}, ${quoteString(clauses)}, Result)`
+    );
+    return this.editResult(plainValue(result?.Result));
+  }
+
+  async assertClause(clause: string): Promise<{ ok: boolean; error?: string }> {
+    const result = this.prologQuery(`deepclause_mi:repl_assert('${this.sessionId}', ${quoteString(clause)}, Result)`);
+    return this.editResult(plainValue(result?.Result));
+  }
+
+  async assertMany(clauses: string): Promise<{ ok: boolean; error?: string }> {
+    const result = this.prologQuery(`deepclause_mi:repl_assert_many('${this.sessionId}', ${quoteString(clauses)}, Result)`);
+    return this.editResult(plainValue(result?.Result));
+  }
+
+  async retractClause(clause: string): Promise<{ ok: boolean; error?: string }> {
+    const result = this.prologQuery(`deepclause_mi:repl_retract('${this.sessionId}', ${quoteString(clause)}, Result)`);
+    return this.editResult(plainValue(result?.Result));
+  }
+
+  async deletePredicate(nameArity: string): Promise<{ ok: boolean; error?: string }> {
+    const match = /^([^\s/]+)\/(\d+)$/.exec(nameArity.trim());
+    if (!match) {
+      return { ok: false, error: `expected Name/Arity, got '${nameArity}'` };
+    }
+    const [, name, arityText] = match;
+    const arity = Number(arityText);
+    const pattern = arity === 0 ? name : `${name}(${Array.from({ length: arity }, () => '_').join(', ')})`;
+    return this.retractClause(pattern);
+  }
+
+  async readFile(path: string): Promise<string | null> {
+    return this.readWorkspaceFile(path);
+  }
+
+  async writeFile(path: string, content: string): Promise<void> {
+    await this.writeWorkspaceFile(path, content);
+  }
+
+  async listFiles(path = '.'): Promise<string[]> {
+    return this.listWorkspaceDir(path);
+  }
+
+  async deleteFile(path: string): Promise<void> {
+    await this.writeWorkspaceFile(path, null);
+  }
+
+  async askUser(prompt: string, choices?: string[]): Promise<string | undefined> {
+    return this.requireInput(prompt, choices);
+  }
+
+  async reference(topic: string): Promise<string> {
+    switch (topic.trim().toLowerCase()) {
+      case 'language':
+      case 'dml':
+        return this.loadDmlReference();
+      case 'authoring':
+        return this.loadDmlAuthoring();
+      case 'examples':
+        return this.loadDocAsset('harness-examples');
+      case 'snippets':
+        return this.loadDocAsset('prolog-snippets');
+      case 'tools':
+        return this.hostToolsCatalog ?? '(no host capability tools registered)';
+      default:
+        return `unknown reference topic '${topic}'. Topics: language, authoring, examples, snippets, tools.`;
+    }
+  }
+
+  async execute(goal: string, limit?: number, signal?: AbortSignal): Promise<HarnessExecuteResult> {
+    return this.executeGoal(goal, limit ?? 5, undefined, signal);
+  }
+
   /**
    * Prompt mode: English request -> meta task -> DML -> commit -> entry run.
    *
@@ -947,6 +1160,10 @@ export class DMLSession {
    * byte-identical.
    */
   async *prompt(request: string, options: DMLQueryOptions = {}): AsyncGenerator<DMLEvent> {
+    if (this.authoring === 'agent') {
+      yield* this.agentPrompt(request, options);
+      return;
+    }
     if (this.disposed) {
       yield { type: 'error', content: 'Session has been disposed' };
       return;

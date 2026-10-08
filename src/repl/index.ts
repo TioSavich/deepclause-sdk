@@ -72,6 +72,8 @@ export interface HarnessReplOptions {
   compaction?: { settings: CompactionSettings; auto: boolean };
   /** Active model context window, used for compaction thresholds. */
   contextWindow?: number;
+  /** Authoring implementation: the DML `meta` frame (legacy) or the TS `agent`. */
+  authoring?: 'meta' | 'agent';
 }
 
 export interface RollbackResult {
@@ -208,6 +210,7 @@ export async function createHarnessRepl(options: HarnessReplOptions): Promise<Ha
     history: options.history,
     compaction: options.compaction,
     contextWindow: options.contextWindow,
+    authoring: options.authoring,
     runnerOptions: {
       model: options.model,
       provider: options.provider,

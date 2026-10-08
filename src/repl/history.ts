@@ -90,7 +90,12 @@ export interface SessionHarnessSnapshot {
   savedAt: string;
   scripts: HistoryScriptRef[];
   /** Serialized conversation memory, when captured. */
-  memory?: { harness: string; meta: string };
+  memory?: {
+    harness: string;
+    meta: string;
+    /** Authoring-agent conversation (TS agent mode), for resume. */
+    agent?: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>;
+  };
   module: string;
 }
 

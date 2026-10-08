@@ -71,6 +71,11 @@ export function getMetaPromptAssetPath(): string {
   return getWorkspaceDocAssetPath('meta-prompt');
 }
 
+/** Bundled authoring-agent system prompt (`AGENT_PROMPT.md`). */
+export function getAgentPromptAssetPath(): string {
+  return join(DOCS_DIR, 'AGENT_PROMPT.md');
+}
+
 function getWorkspaceOverridePath(workspaceRoot: string, fileName: string): string {
   return join(workspaceRoot, SYSTEM_OVERRIDE_DIR, fileName);
 }

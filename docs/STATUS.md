@@ -30,7 +30,12 @@ CLI commands: `init`, `login`, `logout`, `set-backend`, `set-model`, `show-model
 
 ## REPL
 
-- **Author mode** (plain English): a meta task writes/tests/commits DML.
+- **Author mode** (plain English): a TypeScript authoring agent (`repl.authoring:
+  agent`, the default) writes/tests/commits DML through harness tools
+  (`begin_turn`/`end_turn`/`rollback`/`listing`/`define`/`assert`/`retract`/
+  `delete`/`execute`/file tools/`ask_user`), and can run several committed turns
+  in one request. The legacy DML meta frame is still available
+  (`repl.authoring: meta`).
 - **Transactions**: each turn snapshots the module and commits
   replace-by-predicate; a failed turn leaves the harness unchanged.
 - **Auditability**: `.deepclause/repl/` holds `history.dml` (append-only

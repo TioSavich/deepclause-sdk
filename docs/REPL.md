@@ -511,6 +511,7 @@ block.
   "repairRounds": 1,
   "promptPrefix": "dml> ",
   "tui": "auto",
+  "authoring": "agent",
   "render": "rich",
   "showReasoning": "summary",
   "showToolArgs": true,

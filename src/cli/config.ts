@@ -143,6 +143,8 @@ const ReplConfigSchema = z.object({
   promptPrefix: z.string().optional().default('dml> '),
   /** Interactive UI: auto (TUI on a TTY), on, or off (line mode). */
   tui: z.enum(['auto', 'on', 'off']).optional().default('auto'),
+  /** Authoring implementation: the TypeScript agent (default) or the DML meta frame. */
+  authoring: z.enum(['agent', 'meta']).optional().default('agent'),
   render: z.enum(['rich', 'plain', 'json']).optional(),
   showReasoning: z.enum(['off', 'summary', 'full']).optional().default('summary'),
   showToolArgs: z.boolean().optional().default(true),
@@ -268,6 +270,7 @@ const DEFAULT_CONFIG: Config = {
     repairRounds: 1,
     promptPrefix: 'dml> ',
     tui: 'auto' as const,
+    authoring: 'agent' as const,
     showReasoning: 'summary',
     showToolArgs: true,
     maxToolResultChars: 2000,

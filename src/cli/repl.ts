@@ -68,6 +68,8 @@ export interface ReplCliOptions {
   interactiveInput?: boolean;
   /** Interactive UI: auto (TUI on a TTY), on, or off. */
   tui?: 'auto' | 'on' | 'off';
+  /** Authoring implementation: `agent` (default) or `meta`. */
+  authoring?: 'meta' | 'agent';
 }
 
 export type ReplInput =
@@ -401,6 +403,7 @@ export async function createReplRuntime(options: ReplCliOptions): Promise<ReplRu
     history: historyOptions,
     compaction: { settings: replCompaction, auto: replCompaction.auto },
     contextWindow,
+    authoring: options.authoring ?? config.repl.authoring,
     onInput: buildCliOnInput(options),
   });
 
@@ -1208,6 +1211,12 @@ export function registerReplCommand(program: Command): void {
       }
       return value;
     })
+    .option('--authoring <kind>', 'authoring implementation: agent (default) or meta', (value: string) => {
+      if (value !== 'agent' && value !== 'meta') {
+        throw new Error(`invalid --authoring kind: ${value} (use agent or meta)`);
+      }
+      return value;
+    })
     .option('-P, --param <key=value>', 'session parameter (repeatable)', collectParams, {})
     .option('-f, --freeze', 'start with the harness frozen (read-only lock)')
     .option('--locked', 'like --freeze, but forbid unfreeze for this process')
@@ -1243,6 +1252,7 @@ export function registerReplCommand(program: Command): void {
         answer: options.answer,
         interactiveInput: options.interactiveInput,
         tui: options.tui,
+        authoring: options.authoring,
         param: options.param,
         verbose: Boolean(options.verbose || options.debug),
         color: options.color,
