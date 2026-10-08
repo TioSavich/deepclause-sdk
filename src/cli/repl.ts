@@ -69,9 +69,6 @@ export interface ReplCliOptions {
   interactiveInput?: boolean;
   /** Interactive UI: auto (TUI on a TTY), on, or off. */
   tui?: 'auto' | 'on' | 'off';
-  /** Authoring implementation: `agent` (default) or `meta`. */
-  /** Agent authoring docs: `embed` (default) or `tool`. */
-  agentDocs?: 'embed' | 'tool';
 }
 
 export type ReplInput =
@@ -297,7 +294,6 @@ export interface ReplRuntime {
   statusSnapshot(): ReplStatusSnapshot;
   /** Resolved interactive UI mode (`auto` unless overridden by config/flags). */
   tuiMode: 'auto' | 'on' | 'off';
-  /** Agent authoring docs: `embed` (default) or `tool`. */
   /** Replace the input channel (the interactive loop uses its own readline). */
   setOnInput(handler: (prompt: string, choices?: string[]) => Promise<string | undefined>): void;
   /** Set when the env backend has no credentials for the selected provider. */
@@ -474,7 +470,6 @@ export async function createReplRuntime(options: ReplCliOptions): Promise<ReplRu
     history: historyOptions,
     compaction: { settings: replCompaction, auto: replCompaction.auto },
     contextWindow,
-    agentDocs: options.agentDocs ?? config.repl.agentDocs,
     onInput: buildCliOnInput(options),
   });
 
@@ -1320,12 +1315,6 @@ export function registerReplCommand(program: Command): void {
       }
       return value;
     })
-    .option('--agent-docs <mode>', 'agent authoring docs: embed (default) or tool', (value: string) => {
-      if (value !== 'embed' && value !== 'tool') {
-        throw new Error(`invalid --agent-docs: ${value} (use embed or tool)`);
-      }
-      return value;
-    })
     .option('-P, --param <key=value>', 'session parameter (repeatable)', collectParams, {})
     .option('-f, --freeze', 'start with the harness frozen (read-only lock)')
     .option('--locked', 'like --freeze, but forbid unfreeze for this process')
@@ -1361,7 +1350,6 @@ export function registerReplCommand(program: Command): void {
         answer: options.answer,
         interactiveInput: options.interactiveInput,
         tui: options.tui,
-        agentDocs: options.agentDocs,
         param: options.param,
         verbose: Boolean(options.verbose || options.debug),
         color: options.color,

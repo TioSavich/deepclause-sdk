@@ -79,9 +79,9 @@ models. The bundled catalog marks `[reasoning]` models in every picker.
 - **Listing**: `listing`/`/listing` output is reflowed (doc merged onto the
   header, predicates separated, long clause bodies split) and syntax-highlighted.
 - **Project context**: a workspace `AGENTS.md` is appended to the agent's system
-  prompt and shown in the banner; `repl.agentDocs: embed|tool` chooses whether
-  the DML reference and authoring guide are embedded or left to the `reference`
-  tool.
+  prompt and shown in the banner. The prompt itself is one file
+  (`AGENT_PROMPT.md`); the full DML reference and pattern library are read on
+  demand via the `reference` tool.
 - **`execute` events**: a goal run by the agent's `execute` tool streams its
   model text, tool calls, and `output/1` under an indented `nested │` label.
 

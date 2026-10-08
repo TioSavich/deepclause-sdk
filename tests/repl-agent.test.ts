@@ -104,14 +104,13 @@ describe('HarnessAgent', () => {
       { text: 'done', toolCalls: [{ id: '2', name: 'finish', arguments: { success: true } }], finishReason: 'tool_use' },
     ]);
     const agent = new HarnessAgent({
-      controller,
       tools: createHarnessTools(controller),
       llmBackend: backend,
       model: 'test-model',
       streaming: true,
     });
     const events = await collect(agent.run('add a fact'));
-    expect(calls.map((call) => call.method)).toEqual(expect.arrayContaining(['define', 'manifest']));
+    expect(calls.map((call) => call.method)).toEqual(expect.arrayContaining(['define']));
     expect(events.some((event) => event.type === 'tool_call' && event.toolName === 'define')).toBe(true);
     expect(backend.calls).toHaveLength(2);
     expect(agent.getMessages().some((message) => message.role === 'user' && message.content === 'add a fact')).toBe(true);
@@ -131,7 +130,7 @@ describe('HarnessAgent', () => {
         };
       },
     };
-    const agent = new HarnessAgent({ controller, tools: createHarnessTools(controller), llmBackend: backend, model: 'm', streaming: true });
+    const agent = new HarnessAgent({ tools: createHarnessTools(controller), llmBackend: backend, model: 'm', streaming: true });
     const events = await collect(agent.run('hi'));
     expect(events.filter((event) => event.type === 'stream').map((event) => event.content)).toEqual(['hel', 'lo']);
     expect(events.some((event) => event.type === 'reasoning' && event.content === 'think')).toBe(true);
@@ -140,7 +139,7 @@ describe('HarnessAgent', () => {
   it('reports a backend error', async () => {
     const { controller } = stubController();
     const backend: LLMBackend = { complete: vi.fn(async () => { throw new Error('boom'); }) };
-    const agent = new HarnessAgent({ controller, tools: createHarnessTools(controller), llmBackend: backend, model: 'm', streaming: true });
+    const agent = new HarnessAgent({ tools: createHarnessTools(controller), llmBackend: backend, model: 'm', streaming: true });
     const events = await collect(agent.run('hi'));
     expect(events.some((event) => event.type === 'error' && (event.content ?? '').includes('boom'))).toBe(true);
   });
@@ -151,7 +150,7 @@ describe('HarnessAgent', () => {
       { text: '', toolCalls: [{ id: '1', name: 'nope', arguments: {} }], finishReason: 'tool_use' },
       { text: 'done', toolCalls: [{ id: '2', name: 'finish', arguments: { success: true } }], finishReason: 'tool_use' },
     ]);
-    const agent = new HarnessAgent({ controller, tools: createHarnessTools(controller), llmBackend: backend, model: 'm', streaming: true });
+    const agent = new HarnessAgent({ tools: createHarnessTools(controller), llmBackend: backend, model: 'm', streaming: true });
     const events = await collect(agent.run('hi'));
     expect(events.some((event) => event.type === 'tool_call' && event.toolState === 'failed')).toBe(true);
   });
@@ -162,7 +161,7 @@ describe('HarnessAgent', () => {
       { text: '', toolCalls: [{ id: '1', name: 'execute', arguments: { goal: 'x' } }], finishReason: 'tool_use' },
       { text: 'done', toolCalls: [{ id: '2', name: 'finish', arguments: { success: true } }], finishReason: 'tool_use' },
     ]);
-    const agent = new HarnessAgent({ controller, tools: createHarnessTools(controller), llmBackend: backend, model: 'm', streaming: true });
+    const agent = new HarnessAgent({ tools: createHarnessTools(controller), llmBackend: backend, model: 'm', streaming: true });
     const events = await collect(agent.run('run it'));
     const output = events.find((event) => event.type === 'output' && event.content === 'child-output');
     expect(output).toBeDefined();
@@ -175,31 +174,24 @@ describe('HarnessAgent', () => {
       { text: 'answer one', finishReason: 'stop' },
       { text: 'answer two', finishReason: 'stop' },
     ]);
-    const agent = new HarnessAgent({ controller, tools: createHarnessTools(controller), llmBackend: backend, model: 'm', streaming: true });
+    const agent = new HarnessAgent({ tools: createHarnessTools(controller), llmBackend: backend, model: 'm', streaming: true });
     await collect(agent.run('a direct question'));
     const messages = agent.getMessages();
     expect(messages.some((message) => message.content.includes('Continue: call a tool'))).toBe(false);
     expect(messages.filter((message) => message.role === 'user')).toHaveLength(1);
   });
 
-  it('allows a workspace override of the system prompt', async () => {
+  it('allows a workspace override of the system prompt (used verbatim)', async () => {
     const workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'dc-agent-prompt-'));
     try {
       await fs.mkdir(path.join(workspace, '.deepclause', 'system'), { recursive: true });
       await fs.writeFile(
         path.join(workspace, '.deepclause', 'system', 'AGENT_PROMPT.md'),
-        'CUSTOM PROMPT\n{{TOOLS}}\n{{MANIFEST}}\n{{CATALOG}}',
+        'CUSTOM PROMPT — no template substitution.',
         'utf8',
       );
-      const prompt = await buildAgentSystemPrompt({
-        tools: createHarnessTools(stubController().controller),
-        manifest: 'MANIFEST-HERE',
-        hostToolsCatalog: 'CATALOG-HERE',
-        workspacePath: workspace,
-      });
-      expect(prompt).toContain('CUSTOM PROMPT');
-      expect(prompt).toContain('MANIFEST-HERE');
-      expect(prompt).toContain('CATALOG-HERE');
+      const prompt = await buildAgentSystemPrompt({ workspacePath: workspace });
+      expect(prompt).toContain('CUSTOM PROMPT — no template substitution.');
     } finally {
       await fs.rm(workspace, { recursive: true, force: true });
     }
@@ -209,11 +201,7 @@ describe('HarnessAgent', () => {
     const workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'dc-agent-agents-'));
     try {
       await fs.writeFile(path.join(workspace, 'AGENTS.md'), '# House rules\nAlways cite sources.', 'utf8');
-      const prompt = await buildAgentSystemPrompt({
-        tools: createHarnessTools(stubController().controller),
-        manifest: 'M',
-        workspacePath: workspace,
-      });
+      const prompt = await buildAgentSystemPrompt({ workspacePath: workspace });
       expect(prompt).toContain('PROJECT INSTRUCTIONS (AGENTS.md)');
       expect(prompt).toContain('Always cite sources.');
     } finally {
@@ -243,20 +231,16 @@ describe('HarnessAgent', () => {
         };
       },
     };
-    agentRef = new HarnessAgent({ controller, tools: createHarnessTools(controller), llmBackend: backend, model: 'm', streaming: false });
+    agentRef = new HarnessAgent({ tools: createHarnessTools(controller), llmBackend: backend, model: 'm', streaming: false });
     await collect(agentRef.run('do it'));
     expect(calls.length).toBeGreaterThanOrEqual(2);
     expect(calls[1].messages.some((message) => message.role === 'user' && message.content.includes('focus on X'))).toBe(true);
   });
 
-  it('embeds the DML reference and authoring guide when provided', async () => {
-    const prompt = await buildAgentSystemPrompt({
-      tools: createHarnessTools(stubController().controller),
-      manifest: 'M',
-      reference: 'REF-BODY-HERE',
-      authoring: 'AUTH-BODY-HERE',
-    });
-    expect(prompt).toContain('REF-BODY-HERE');
-    expect(prompt).toContain('AUTH-BODY-HERE');
+  it('uses the single bundled prompt with no template placeholders', async () => {
+    const prompt = await buildAgentSystemPrompt();
+    expect(prompt).toContain('DML REPL');
+    expect(prompt).toContain('`tool/2`');
+    expect(prompt).not.toContain('{{');
   });
 });

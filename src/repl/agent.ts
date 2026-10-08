@@ -19,10 +19,8 @@ import type {
   ToolDefinition,
 } from '../types.js';
 import { compactMemory, shouldCompact, type CompactionSettings, type CompactMemoryResult } from './compaction.js';
-import type { HarnessToolController } from './harness-tools.js';
 
 export interface HarnessAgentOptions {
-  controller: HarnessToolController;
   tools: Map<string, ToolDefinition>;
   llmBackend: LLMBackend;
   model: string;
@@ -33,12 +31,8 @@ export interface HarnessAgentOptions {
   maxModelCalls?: number;
   contextWindow?: number;
   compaction?: { settings: CompactionSettings; auto: boolean };
-  /** Host capability tool catalog text, injected into the system prompt. */
-  hostToolsCatalog?: string;
   /** Workspace root, so a `.deepclause/system/AGENT_PROMPT.md` override is used. */
   workspacePath?: string;
-  /** Docs embedded in the system prompt (`agentDocs: 'embed'`). */
-  docs?: { reference?: string; authoring?: string };
   /** Pre-loaded documentation for the `reference` tool (handled by the controller). */
   knownMessages?: MemoryMessage[];
 }
@@ -63,29 +57,20 @@ export function describeTools(tools: Map<string, ToolDefinition>): string {
   return lines.join('\n');
 }
 
-/** Build the authoring agent's system prompt from the bundled template. */
+/**
+ * Build the authoring agent's system prompt from the single bundled prompt file
+ * (or a `.deepclause/system/AGENT_PROMPT.md` override). The file is used as-is —
+ * no template substitution — plus the workspace `AGENTS.md` when present.
+ */
 export async function buildAgentSystemPrompt(options: {
-  tools: Map<string, ToolDefinition>;
-  hostToolsCatalog?: string;
-  manifest: string;
   workspacePath?: string;
-  /** Embedded DML language reference (`{{REFERENCE}}`). */
-  reference?: string;
-  /** Embedded DML authoring guide (`{{AUTHORING}}`). */
-  authoring?: string;
-}): Promise<string> {
-  let template = '';
+} = {}): Promise<string> {
+  let prompt = '';
   try {
-    template = await readAgentPromptAsset({ workspacePath: options.workspacePath });
+    prompt = await readAgentPromptAsset({ workspacePath: options.workspacePath });
   } catch {
-    template = 'You are the DeepClause REPL harness agent.';
+    prompt = 'You are an agent with access to a DML REPL.';
   }
-  let prompt = template
-    .replace('{{CATALOG}}', options.hostToolsCatalog ?? '(no host capability tools registered)')
-    .replace('{{TOOLS}}', describeTools(options.tools))
-    .replace('{{MANIFEST}}', options.manifest || '(empty harness)')
-    .replace('{{REFERENCE}}', options.reference?.trim() || '(call reference("language"))')
-    .replace('{{AUTHORING}}', options.authoring?.trim() || '(call reference("authoring"))');
 
   // Append a workspace `AGENTS.md` so repo-specific rules always apply.
   const project = await loadProjectContext(options.workspacePath);
@@ -218,25 +203,14 @@ export class HarnessAgent {
   }
 
   async *run(request: string, options: HarnessAgentRunOptions = {}): AsyncGenerator<DMLEvent> {
-    const { controller, llmBackend, tools } = this.options;
+    const { llmBackend, tools } = this.options;
     const streaming = this.options.streaming ?? true;
     const maxModelCalls = this.options.maxModelCalls ?? 0;
     const settings = this.options.compaction?.settings;
     const autoCompact = this.options.compaction?.auto ?? false;
 
-    let manifest = '';
-    try {
-      manifest = await controller.manifest();
-    } catch {
-      // best effort: the agent can still call `listing`
-    }
     const systemPrompt = await buildAgentSystemPrompt({
-      tools,
-      hostToolsCatalog: this.options.hostToolsCatalog,
-      manifest,
       workspacePath: this.options.workspacePath,
-      reference: this.options.docs?.reference,
-      authoring: this.options.docs?.authoring,
     });
 
     this.messages.push({ role: 'user', content: request });

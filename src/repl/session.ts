@@ -83,8 +83,6 @@ export interface DMLSessionOptions {
   compaction?: { settings: CompactionSettings; auto: boolean };
   /** Active model context window, used for compaction thresholds. */
   contextWindow?: number;
-  /** Agent authoring docs: embed the DML reference/authoring guides, or use the tool. */
-  agentDocs?: 'embed' | 'tool';
   /**
    * Resume an existing session (identified by `sessionId`): restore its saved
    * harness and conversation memory and continue its turn numbering. Requires
@@ -133,7 +131,6 @@ export class DMLSession {
   private llmBackend?: LLMBackend;
   private temperature = 0.7;
   private maxTokens = 65536;
-  private readonly agentDocs: 'embed' | 'tool';
   /** Persisted authoring-agent conversation (agent mode). */
   private agentMessages: MemoryMessage[] = [];
   private harnessAgent?: HarnessAgent;
@@ -190,7 +187,6 @@ export class DMLSession {
     this.llmBackend = options.runnerOptions.llmBackend;
     this.temperature = options.runnerOptions.temperature;
     this.maxTokens = options.runnerOptions.maxTokens;
-    this.agentDocs = options.agentDocs ?? 'embed';
     this.runner = new DMLRunner(swipl, {
       ...options.runnerOptions,
       compactMessages: options.compaction
@@ -1054,11 +1050,7 @@ export class DMLSession {
 
   private async getHarnessAgent(): Promise<HarnessAgent> {
     if (this.harnessAgent) return this.harnessAgent;
-    const docs = this.agentDocs === 'embed'
-      ? { reference: await this.loadDmlReference(), authoring: await this.loadDmlAuthoring() }
-      : undefined;
     this.harnessAgent = new HarnessAgent({
-      controller: this,
       tools: createHarnessTools(this),
       llmBackend: this.llmBackend!,
       model: this.model,
@@ -1070,9 +1062,7 @@ export class DMLSession {
       compaction: this.compactionSettings
         ? { settings: this.compactionSettings, auto: this.compactionAuto }
         : undefined,
-      hostToolsCatalog: this.hostToolsCatalog,
       workspacePath: this.workspacePath,
-      docs,
       knownMessages: this.agentMessages,
     });
     return this.harnessAgent;

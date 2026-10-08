@@ -47,6 +47,13 @@ function manifest(module: SWIPLModule, session: string): string {
   return String(plain(result?.Text) ?? '');
 }
 
+function listing(module: SWIPLModule, session: string): string {
+  const result = module.prolog
+    .query(`deepclause_mi:repl_listing('${session}', all, Text)`)
+    .once() as Record<string, unknown> | null;
+  return String(plain(result?.Text) ?? '');
+}
+
 describe('module_doc as the skill description', () => {
   it('leads the manifest with the skill line', async () => {
     const module = await getSwipl();
@@ -78,5 +85,12 @@ describe('module_doc as the skill description', () => {
     const session = freshSession('sess_no_skill');
     expect(parse(module, session, 'answer_noop.\n')).toBe('none');
     expect(manifest(module, session)).toContain('- skill: (none;');
+  });
+
+  it('shows the skill description first in listing', async () => {
+    const module = await getSwipl();
+    const session = freshSession('sess_listing');
+    expect(parse(module, session, 'module_doc("Triage harness: route messages.").\nfoo(1).\n')).toBe('none');
+    expect(listing(module, session).split('\n')[0]).toBe('skill: Triage harness: route messages.');
   });
 });

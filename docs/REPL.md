@@ -209,30 +209,20 @@ repo-specific rules apply automatically. The startup banner shows
 
 #### Customizing the system prompt
 
-The agent's system prompt is assembled from the bundled
-`src/system/assets/docs/AGENT_PROMPT.md` plus generated sections:
-`{{CATALOG}}` (the host tool catalog), `{{TOOLS}}` (the tool schemas),
-`{{MANIFEST}}` (the live harness manifest), and — by default — `{{REFERENCE}}`
-and `{{AUTHORING}}` (the DML language reference and authoring guide).
+The agent's system prompt is **one file**: the bundled
+`src/system/assets/docs/AGENT_PROMPT.md`. It is used verbatim — there is no
+template substitution or separate embedded reference. It covers what DML is, the
+module/skill model, how to inspect/execute/edit a module, the host tools
+(`bash` via `exec`), the `tool/2` annotation, file I/O, a condensed DML
+reference, common patterns, and the editing rules. The full reference and the
+pattern library are available at runtime through the `reference(topic)` tool
+(`language`, `authoring`, `patterns`, `examples`, `snippets`, `tools`).
 
-`repl.agentDocs` controls the last two:
-
-* **`embed`** (default) injects the full DML reference and authoring guide into the
-  system prompt, so the agent always has them.
-* **`tool`** leaves them out and relies on the `reference(topic)` tool; the prompt
-  is much smaller but the agent only sees the docs if it asks for them.
-
-Set it with `--agent-docs embed|tool` or under `repl` in the config. The
-`reference(topic)` tool also serves `patterns` (harness patterns by use case —
-coding, research, SOP, tool collections), `examples`, `snippets`, and `tools`
-(the host tool catalog).
-
-To override the prompt itself **without rebuilding the SDK**, create
+To override the prompt **without rebuilding the SDK**, create
 `.deepclause/system/AGENT_PROMPT.md` in the workspace; the runtime prefers it
-over the bundled file. It is an opt-in override (it is never seeded), so
-upgrading the SDK keeps the bundled prompt current for everyone who has not
-created one. The override must contain the same `{{CATALOG}}`, `{{TOOLS}}`, and
-`{{MANIFEST}}` placeholders for those sections to appear.
+over the bundled file (used verbatim). It is an opt-in override (never seeded),
+so upgrading the SDK keeps the bundled prompt current for everyone who has not
+created one.
 
 To change the built-in prompt itself, edit
 `src/system/assets/docs/AGENT_PROMPT.md` and run `npm run build`.
@@ -243,10 +233,8 @@ The authoring agent is restricted to `listing`, `begin_turn`, `end_turn`,
 `rollback`, `define`, `assert`, `assert_many`, `retract`, `delete`, `execute`,
 `ask_user`, and `reference`. It has no file or shell tools: all file I/O goes
 through DML (`write_file/2`, `make_directory_path/1`, …) or `bash`. The
-system prompt embeds the bundled `DML_REFERENCE.md`, a curated set of **idiomatic
-harness patterns** (`HARNESS_EXAMPLES.md`, plus `HARNESS_PATTERNS.md` via
-`reference("patterns")`), the host tool catalog, and the current harness manifest. The
-catalog pairing rule is explicit: **only the `exec(...)` names in the catalog
+system prompt is the single bundled `AGENT_PROMPT.md` (see above). The catalog
+pairing rule is explicit: **only the `exec(...)` names in the catalog
 exist — by default just `bash`** — so the agent never invents
 `calculator`/`fetch_url`/`web_search`/`vm_exec`. The rules that matter most:
 
@@ -358,8 +346,8 @@ never contains authoring chatter.
 
 The agent's conversation is a clean `messages[]`: it appends `user: <your raw
 request>` and the assistant's replies, and is persisted in
-`sessions/<id>/harness.json` so `--session` resumes it. The assembled system
-prompt (authoring contract, reference, tool list, manifest) is **ephemeral**.
+`sessions/<id>/harness.json` so `--session` resumes it. The system prompt
+(`AGENT_PROMPT.md` plus the workspace `AGENTS.md`) is **ephemeral**.
 `execute` runs against a snapshot of harness memory and discards its writes, and
 a goal run is the only place harness memory advances.
 
@@ -524,8 +512,6 @@ deepclause repl [options]
       --json               emit results as JSON lines
       --workspace <path>   workspace root (default ./)
       --backend <kind>     override the configured backend (env|pi)
-      --authoring <kind>   authoring implementation: agent (default) or meta
-      --agent-docs <mode>  agent docs: embed (default) or tool
       --judge <name>       default judgment backend (llm|jev)
       --model <model>      override the configured run model
       --provider <provider>
@@ -601,8 +587,6 @@ block.
   "repairRounds": 1,
   "promptPrefix": "dml> ",
   "tui": "auto",
-  "authoring": "agent",
-  "agentDocs": "embed",
   "render": "rich",
   "showReasoning": "summary",
   "showToolArgs": true,

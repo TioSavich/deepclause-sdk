@@ -1129,7 +1129,12 @@ repl_listing_output(SessionId, Filter) :-
         )
     ;   Filter == history
     ->  repl_history_listing(SessionId)
-    ;   findall(Name/Arity,
+    ;   (   current_predicate(SessionId:module_doc/1),
+            SessionId:module_doc(Skill)
+        ->  format("skill: ~w~n~n", [Skill])
+        ;   true
+        ),
+        findall(Name/Arity,
             (   current_predicate(SessionId:Name/Arity),
                 repl_user_predicate(SessionId, Name, Arity)
             ),

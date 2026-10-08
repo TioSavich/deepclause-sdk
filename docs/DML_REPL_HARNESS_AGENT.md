@@ -111,7 +111,6 @@ the agent's own conversation is the history.
 - `src/repl/session.ts` — implement `HarnessToolController`; `agentMessages`;
   `agentPrompt`; history/persistence fields; `authoring` selection.
 - `src/repl/index.ts` — `HarnessReplOptions.authoring`.
-- `src/cli/config.ts` — `repl.agentDocs` (the agent is the only authoring mode).
 - `src/cli/repl.ts` — pass `authoring`; `--authoring` flag.
 - `src/repl/history.ts` — `SessionHarnessSnapshot.memory.agent`.
 - Tests: `tests/repl-agent-tools.test.ts`, `tests/repl-agent.test.ts`, plus a

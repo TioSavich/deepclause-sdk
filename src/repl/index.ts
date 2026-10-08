@@ -70,8 +70,6 @@ export interface HarnessReplOptions {
   compaction?: { settings: CompactionSettings; auto: boolean };
   /** Active model context window, used for compaction thresholds. */
   contextWindow?: number;
-  /** Agent authoring docs: embed the DML reference/authoring guides, or use the tool. */
-  agentDocs?: 'embed' | 'tool';
 }
 
 export interface RollbackResult {
@@ -213,7 +211,6 @@ export async function createHarnessRepl(options: HarnessReplOptions): Promise<Ha
     history: options.history,
     compaction: options.compaction,
     contextWindow: options.contextWindow,
-    agentDocs: options.agentDocs,
     runnerOptions: {
       model: options.model,
       provider: options.provider,
