@@ -202,8 +202,8 @@ While a turn is running you can keep typing. Submitting a line **steers** the
 running agent (pi-style): the message is injected before the next model call,
 and an in-flight model call is interrupted so the agent sees it immediately. The
 status bar shows `running (type to steer)`, and the message is echoed as a
-magenta `» …` line. (While an `ask_user`/`input/2` prompt is open, submitting
-answers that prompt instead.)
+full-width `Steering: …` block. (While an `ask_user`/`input/2` prompt is open,
+submitting answers that prompt instead.)
 
 #### Workspace `AGENTS.md`
 

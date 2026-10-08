@@ -9,9 +9,9 @@
 
 import { visibleWidth, wrapTextWithAnsi, type Component } from '@earendil-works/pi-tui';
 
-import { renderUserLine } from './theme.js';
+import { renderSteerLine, renderUserLine } from './theme.js';
 
-export type TranscriptLineStyle = 'user';
+export type TranscriptLineStyle = 'user' | 'steer';
 
 interface TranscriptEntry {
   text: string;
@@ -70,14 +70,20 @@ export class TranscriptComponent implements Component {
     // every line fits, which `TuiMainScreen` requires.
     const out: string[] = [];
     for (const entry of source) {
-      // User blocks add a space on each side, so wrap them two cells narrower.
-      const wrapWidth = entry.style === 'user' ? Math.max(1, width - 2) : width;
+      // Styled blocks reserve room for their label/padding.
+      const wrapWidth = entry.style === 'user'
+        ? Math.max(1, width - 2)
+        : entry.style === 'steer'
+          ? Math.max(1, width - 'Steering: '.length)
+          : width;
       const wrapped = visibleWidth(entry.text) <= wrapWidth
         ? [entry.text]
         : wrapTextWithAnsi(entry.text, wrapWidth);
-      for (const line of wrapped) {
-        out.push(entry.style === 'user' ? renderUserLine(line, width) : line);
-      }
+      wrapped.forEach((line, index) => {
+        if (entry.style === 'user') out.push(renderUserLine(line, width));
+        else if (entry.style === 'steer') out.push(renderSteerLine(line, width, index === 0));
+        else out.push(line);
+      });
     }
     return out;
   }

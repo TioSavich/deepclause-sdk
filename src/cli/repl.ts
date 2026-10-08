@@ -21,7 +21,7 @@ import { ReplStatusTracker, type ReplStatusSnapshot } from '../repl/status.js';
 import { LineSink, TranscriptComponent } from '../repl/tui/transcript.js';
 import { StatusBarComponent } from '../repl/tui/status-bar.js';
 import { Container, ProcessTerminal, Spacer, TuiMainScreen, matchesKey } from '@earendil-works/pi-tui';
-import { editorTheme, formatInputAnswer, formatSteer } from '../repl/tui/theme.js';
+import { editorTheme, formatInputAnswer } from '../repl/tui/theme.js';
 import { PromptEditor } from '../repl/tui/editor.js';
 import { loadProjectContext } from '../repl/project-context.js';
 import { createPiBackend } from '../repl/backend.js';
@@ -1039,12 +1039,12 @@ export async function runTui(
     } else if (text.trim()) {
       // No pending ask means a turn is running.
       if (runState.steerable) {
-        transcript.append(formatSteer(text));
+        transcript.append(text, 'steer');
         runtime.repl.steer(text);
       } else {
         // A goal query is running: queue the line for the solution pager.
         bufferedInput.push(text);
-        transcript.append(formatSteer(text));
+        transcript.append(text, 'steer');
       }
     }
 

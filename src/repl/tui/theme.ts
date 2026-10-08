@@ -13,7 +13,6 @@ const ANSI = {
   bold: '\u001b[1m',
   dim: '\u001b[2m',
   cyan: '\u001b[36m',
-  magenta: '\u001b[35m',
   yellow: '\u001b[33m',
   /** Blueish chrome for the input/status area border. */
   border: '\u001b[38;5;75m',
@@ -22,6 +21,10 @@ const ANSI = {
   /** pi-style user message: blue background, bright foreground. */
   userBg: '\u001b[48;5;24m',
   userFg: '\u001b[38;5;255m',
+  /** Steering message: distinct amber background so it reads as an interjection. */
+  steerBg: '\u001b[48;5;94m',
+  steerFg: '\u001b[38;5;230m',
+  boldOff: '\u001b[22m',
 } as const;
 
 function paint(text: string, code: string): string {
@@ -43,9 +46,16 @@ export function formatInputAnswer(text: string): string {
   return paint(`> ${text}`, ANSI.yellow);
 }
 
-/** A steering message submitted while a turn is already running. */
-export function formatSteer(text: string): string {
-  return paint(`» ${text}`, `${ANSI.bold}${ANSI.magenta}`);
+/**
+ * Render one line of a steering message as a full-width amber block, prefixed
+ * with `Steering: ` on the first line. Padded to the terminal width.
+ */
+export function renderSteerLine(text: string, width: number, first = true): string {
+  const label = first ? 'Steering: ' : '          ';
+  const visible = label.length + visibleWidth(text);
+  const padding = Math.max(0, width - visible);
+  const labelStyled = first ? `${ANSI.bold}Steering: ${ANSI.boldOff}` : label;
+  return `${ANSI.steerBg}${ANSI.steerFg}${labelStyled}${text}${' '.repeat(padding)}${ANSI.reset}`;
 }
 
 /** The border of the editing box while the runtime needs human input. */

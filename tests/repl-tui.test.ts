@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest';
 
 import { LineSink, TranscriptComponent } from '../src/repl/tui/transcript.js';
 import { StatusBarComponent } from '../src/repl/tui/status-bar.js';
-import { dim, editorTheme, formatInputAnswer, formatSteer, promptBorder, promptLabel, renderUserLine } from '../src/repl/tui/theme.js';
+import { dim, editorTheme, formatInputAnswer, promptBorder, promptLabel, renderSteerLine, renderUserLine } from '../src/repl/tui/theme.js';
 import { PromptEditor } from '../src/repl/tui/editor.js';
 import { visibleWidth, type TUI } from '@earendil-works/pi-tui';
 import { ReplStatusTracker } from '../src/repl/status.js';
@@ -66,6 +66,14 @@ describe('TranscriptComponent + LineSink', () => {
     expect(rendered[0].replace(/\u001b\[[0-9;]*m/g, '')).toHaveLength(20);
   });
 
+  it('renders steer entries as full-width Steering blocks', () => {
+    const transcript = new TranscriptComponent();
+    transcript.append('focus on X', 'steer');
+    const rendered = transcript.render(40);
+    expect(rendered[0]).toContain('\u001b[48;5;94m');
+    expect(rendered[0].replace(/\u001b\[[0-9;]*m/g, '')).toHaveLength(40);
+  });
+
   it('wraps long user entries without exceeding the width', () => {
     const transcript = new TranscriptComponent();
     transcript.append('x'.repeat(100), 'user');
@@ -115,9 +123,12 @@ describe('TUI theme', () => {
     expect(promptLabel('? x').replace(/\u001b\[[0-9;]*m/g, '')).toBe('? x');
   });
 
-  it('styles a steering message distinctly', () => {
-    expect(formatSteer('focus on X')).toContain('\u001b[35m');
-    expect(formatSteer('focus on X').replace(/\u001b\[[0-9;]*m/g, '')).toBe('» focus on X');
+  it('renders a steering line as a full-width "Steering:" block', () => {
+    const line = renderSteerLine('focus on X', 40);
+    expect(line).toContain('\u001b[48;5;94m');
+    const visible = line.replace(/\u001b\[[0-9;]*m/g, '');
+    expect(visible.startsWith('Steering: focus on X')).toBe(true);
+    expect(visible).toHaveLength(40);
   });
 });
 
