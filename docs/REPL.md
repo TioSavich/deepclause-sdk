@@ -248,6 +248,8 @@ exist — by default just `bash`** — so the agent never invents
   the written order, rather than one clause at a time.
 * **Verify** — call `listing(Name/Arity)` after changing a predicate.
 * **Commit incrementally** — `end_turn` each working piece before moving on.
+* **Propose follow-ups** — after one-off work (e.g. `bash`/`curl` research),
+  suggest the reusable predicate it implies; commit it only when the user agrees.
 * **Bounded iteration** — no unbounded loops/assert/execute; use finite
   recursion, CLP(FD)/CLP(Q), or an explicit bound. `execute` is gas-limited and
   the turn has a model-call budget.
