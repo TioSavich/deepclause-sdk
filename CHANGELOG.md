@@ -11,6 +11,10 @@
 
 ### Changed
 
+- **Authoring agent tool set trimmed.** `ask_user` and the loop-level `finish`
+  are no longer offered to the authoring model. Clarifying questions go in the
+  final message, and a turn ends when the model replies without a tool call.
+  (`ask_user`/`input/2` remain available to DML as host tools.)
 - **Markdown rendering and grey reasoning.** Assistant text is rendered as
   markdown (headings, fenced/inline code, bold/italic, links, lists,
   blockquotes). Model reasoning is now italic grey (like pi) and wired to

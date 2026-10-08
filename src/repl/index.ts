@@ -54,7 +54,7 @@ export interface HarnessReplOptions {
   maxModelCalls?: number;
   /** Host tool catalog text injected into the meta prompt (M5). */
   hostToolsCatalog?: string;
-  /** Human-in-the-loop channel for the meta ask_user tool (M6). */
+  /** Human-in-the-loop channel for DML `input/2` / `exec(ask_user(...))`. */
   askUser?: (prompt: string, options?: string[]) => Promise<{ answer: string } | { cancelled: true }>;
   /** Explicit judgment backend registry. When omitted, an `llm` backend is built from the active model. */
   judgeSelection?: JudgeSelection;

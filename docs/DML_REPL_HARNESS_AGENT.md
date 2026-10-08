@@ -27,8 +27,8 @@ abilities", "no Markdown→DML compiler").
 
 - The authoring agent is a regular `LLMBackend` agent loop with a system prompt.
 - It works on the harness through tools (`begin_turn`, `end_turn`, `rollback`,
-  `listing`, `define`, `assert`, `retract`, `delete`, `execute`, `ask_user`,
-  `reference`). It has no file or shell tools: file I/O goes through DML or `bash`.
+  `listing`, `define`, `assert`, `retract`, `delete`, `execute`, `reference`).
+  It has no file or shell tools: file I/O goes through DML or `bash`.
 - It can run several committed turns in one request until the goal is met.
 - The DML runtime is unchanged: DML-internal `task/N` still uses frames and the
   meta-interpreter.
@@ -84,7 +84,7 @@ the agent's own conversation is the history.
 
 ### Tools
 
-`finish` (agent loop) plus:
+The authoring agent's tools:
 
 | Tool | Purpose |
 |---|---|
@@ -97,7 +97,6 @@ the agent's own conversation is the history.
 | `retract` | remove a clause/predicate |
 | `delete` | delete a predicate by `Name/Arity` |
 | `execute` | run a DML goal against the scratch harness (also how files are written) |
-| `ask_user` | ask the human |
 | `reference` | DML reference / authoring / patterns / examples / snippets |
 
 ## Files

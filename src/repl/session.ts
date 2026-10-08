@@ -70,7 +70,7 @@ export interface DMLSessionOptions {
   maxModelCalls?: number;
   /** Host tool catalog text injected into the meta prompt (M5). */
   hostToolsCatalog?: string;
-  /** Human-in-the-loop channel for the meta ask_user tool (M6). */
+  /** Human-in-the-loop channel for DML `input/2` / `exec(ask_user(...))`. */
   askUser?: (prompt: string, options?: string[]) => Promise<{ answer: string } | { cancelled: true }>;
   /**
    * Persistent session/trace/harness history. When set, the session records
@@ -1191,10 +1191,6 @@ export class DMLSession {
       `deepclause_mi:repl_delete_predicate('${this.sessionId}', ${atom}, ${Number(arityText)}, Result)`
     );
     return this.editResult(plainValue(result?.Result));
-  }
-
-  async askUser(prompt: string, choices?: string[]): Promise<string | undefined> {
-    return this.requireInput(prompt, choices);
   }
 
   async reference(topic: string): Promise<string> {

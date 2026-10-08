@@ -220,15 +220,6 @@ export class HarnessAgent {
       description: tool.description,
       parameters: tool.parameters as unknown as Record<string, unknown>,
     }));
-    backendTools.push({
-      name: 'finish',
-      description: 'Finish the request. Call when the harness change is committed (or the question is answered).',
-      parameters: {
-        type: 'object',
-        properties: { success: { type: 'boolean' } },
-        required: ['success'],
-      },
-    });
 
     let calls = 0;
     let finished = false;
@@ -347,11 +338,15 @@ export class HarnessAgent {
 
       if (toolCalls.length === 0) {
         // No tool call: the model answered directly or stopped; end the turn.
+        finished = true;
         break;
       }
 
       for (const call of toolCalls) {
         yield { type: 'tool_call', toolName: call.name, toolArgs: call.arguments, toolState: 'starting' };
+        // `finish` is not offered to the model any more; a turn ends when the
+        // model replies without tool calls. Tolerate a stray `finish` (older
+        // transcripts, tests) as an explicit stop.
         if (call.name === 'finish') {
           finished = true;
           yield { type: 'tool_call', toolName: 'finish', toolArgs: call.arguments, toolState: 'completed', toolSummary: 'done' };

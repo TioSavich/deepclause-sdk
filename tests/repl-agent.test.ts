@@ -41,7 +41,6 @@ function stubController(overrides: Partial<HarnessToolController> = {}): {
       record('execute', undefined);
       return { bindings: [], solutions: [], output: 'child-output' };
     },
-    askUser: async () => record('askUser', 'yes'),
     reference: async () => record('reference', 'reference text'),
     ...overrides,
   };
@@ -69,10 +68,14 @@ describe('createHarnessTools', () => {
     const names = [...createHarnessTools(controller).keys()];
     for (const expected of [
       'listing', 'begin_turn', 'end_turn', 'rollback', 'define', 'assert', 'assert_many',
-      'retract', 'delete', 'execute', 'ask_user', 'reference',
+      'retract', 'delete', 'execute', 'reference',
     ]) {
       expect(names).toContain(expected);
     }
+    // `ask_user` is a DML host tool (input/2, exec(ask_user)), not an authoring tool.
+    expect(names).not.toContain('ask_user');
+    // `finish` is not exposed to the model either.
+    expect(names).not.toContain('finish');
   });
 
   it('routes each tool to the controller', async () => {

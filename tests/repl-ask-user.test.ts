@@ -42,18 +42,6 @@ class CannedBackend implements LLMBackend {
   }
 }
 
-function finalResponse(code: string): CannedResponse {
-  return {
-    text: 'Here is the harness.',
-    toolCalls: [
-      { name: 'begin_turn', arguments: {} },
-      { name: 'assert_many', arguments: { clauses: code } },
-      { name: 'end_turn', arguments: {} },
-      { name: 'finish', arguments: { success: true } },
-    ],
-  };
-}
-
 let workspace: string;
 let repl: HarnessRepl | null = null;
 
@@ -79,49 +67,6 @@ afterEach(async () => {
   await repl?.dispose();
   repl = null;
   await fs.rm(workspace, { recursive: true, force: true });
-});
-
-describe('agent ask_user', () => {
-  it('asks the human mid-turn and continues', async () => {
-    const asked: string[] = [];
-    const backend = new CannedBackend([
-      { text: '', toolCalls: [{ name: 'ask_user', arguments: { prompt: 'Which ticker?' } }] },
-      finalResponse('ticker(aapl).', ''),
-    ]);
-    repl = await createHarnessRepl({
-      workspacePath: workspace,
-      model: 'test-model',
-      provider: 'openai',
-      llmBackend: backend,
-      onInput: async (prompt) => {
-        asked.push(prompt);
-        return 'AAPL';
-      },
-    });
-
-    const events = await collect(repl.prompt('add a price tracker'));
-    expect(asked).toEqual(['Which ticker?']);
-    expect(events.some((event) => event.type === 'error')).toBe(false);
-    expect(values(await collect(repl.query('ticker(X)')), 'X')).toEqual(['aapl']);
-  });
-
-  it('returns cancelled when no input channel is configured', async () => {
-    const backend = new CannedBackend([
-      { text: '', toolCalls: [{ name: 'ask_user', arguments: { prompt: 'Which ticker?' } }] },
-      finalResponse('kept(1).', ''),
-    ]);
-    repl = await createHarnessRepl({
-      workspacePath: workspace,
-      model: 'test-model',
-      provider: 'openai',
-      llmBackend: backend,
-      // no onInput: autonomous run must not hang
-    });
-
-    const events = await collect(repl.prompt('add something'));
-    expect(events.some((event) => event.type === 'error')).toBe(false);
-    expect(values(await collect(repl.query('kept(X)')), 'X')).toEqual(['1']);
-  });
 });
 
 describe('harness input/2', () => {

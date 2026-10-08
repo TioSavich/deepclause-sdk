@@ -904,8 +904,8 @@ DML skills can also be grown interactively in a persistent **living module**.
 - `freeze.` makes the module read-only; `export <file>.` serializes it.
   `export harness.zip` bundles the module with its linked script files;
   `export harness.dml` inlines them into one portable file.
-- `ask_user` (authoring agent) and `input/2` / `exec(ask_user(...))` (module) ask the
-  human. They never block in non-interactive runs (`-g`, piped stdin, CI).
+- `input/2` / `exec(ask_user(...))` (module) ask the human. They never block in
+  non-interactive runs (`-g`, piped stdin, CI).
 
 **Self-containment.** The harness is the `.dml` **plus the files it links**.
 Materialize each program with a DML goal (`make_directory_path(...)`,

@@ -58,9 +58,11 @@ call `begin_turn` again before editing further. If you finish a turn with a
 transaction still open, the host nudges you to `end_turn` or `rollback`. Commit
 incrementally for anything larger than a couple of predicates.
 
-Other tools: `ask_user(prompt, options?)` asks the human; `reference(topic)`
-reads the DeepClause docs (`language`, `authoring`, `patterns`, `examples`,
-`snippets`, `tools`); `finish(success)` ends your turn.
+Other tools: `reference(topic)` reads the DeepClause docs (`language`,
+`authoring`, `patterns`, `examples`, `snippets`, `tools`).
+
+End your turn by replying with text and no tool call. To ask the human a
+question, write it in that final message.
 
 # Your goal
 
@@ -1136,8 +1138,8 @@ DML skills can also be grown interactively in a persistent **living module**.
 - `freeze.` makes the module read-only; `export <file>.` serializes it.
   `export harness.zip` bundles the module with its linked script files;
   `export harness.dml` inlines them into one portable file.
-- `ask_user` (authoring agent) and `input/2` / `exec(ask_user(...))` (module) ask the
-  human. They never block in non-interactive runs (`-g`, piped stdin, CI).
+- `input/2` / `exec(ask_user(...))` (module) ask the human. They never block in
+  non-interactive runs (`-g`, piped stdin, CI).
 
 **Self-containment.** The harness is the `.dml` **plus the files it links**.
 Materialize each program with a DML goal (`make_directory_path(...)`,

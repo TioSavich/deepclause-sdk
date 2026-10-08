@@ -49,7 +49,6 @@ export interface HarnessToolController {
   deletePredicate(nameArity: string): Promise<{ ok: boolean; error?: string }>;
   /** Run a DML goal against the scratch harness. */
   execute(goal: string, limit?: number, signal?: AbortSignal, onEvent?: (event: DMLEvent) => void): Promise<HarnessExecuteResult>;
-  askUser(prompt: string, choices?: string[]): Promise<string | undefined>;
   /** DML reference / authoring guide / examples / snippets. */
   reference(topic: string): Promise<string>;
 }
@@ -173,23 +172,6 @@ export function createHarnessTools(controller: HarnessToolController): Map<strin
       context?.signal,
       context?.onEvent,
     ),
-  });
-
-  tools.set('ask_user', {
-    description: 'Ask the human a clarifying question before writing code. Provide options for a menu when appropriate.',
-    parameters: {
-      type: 'object',
-      properties: {
-        prompt: stringProp('The question to ask.'),
-        options: { type: 'array', description: 'Optional menu of answers.' },
-      },
-      required: ['prompt'],
-    },
-    execute: async (args) => {
-      const choices = Array.isArray(args.options) ? args.options.map(String) : undefined;
-      const answer = await controller.askUser(String(args.prompt ?? ''), choices);
-      return answer === undefined ? { cancelled: true } : { answer };
-    },
   });
 
   tools.set('reference', {

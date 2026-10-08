@@ -197,7 +197,7 @@ While a turn is running you can keep typing. Submitting a line **steers** the
 running agent (pi-style): the message is injected before the next model call,
 and an in-flight model call is interrupted so the agent sees it immediately. The
 status bar shows `running (type to steer)`, and the message is echoed as a
-full-width `Steering: …` block. (While an `ask_user`/`input/2` prompt is open,
+full-width `Steering: …` block. (While an `input/2` prompt is open,
 submitting answers that prompt instead.)
 
 #### Workspace `AGENTS.md`
@@ -231,7 +231,7 @@ To change the built-in prompt itself, edit
 
 The authoring agent is restricted to `listing`, `begin_turn`, `end_turn`,
 `rollback`, `define`, `assert`, `assert_many`, `retract`, `delete`, `execute`,
-`ask_user`, and `reference`. It has no file or shell tools: all file I/O goes
+and `reference`. It has no file or shell tools: all file I/O goes
 through DML (`write_file/2`, `make_directory_path/1`, …) or `bash`. The
 system prompt is the single bundled `AGENT_PROMPT.md` (see above). The catalog
 pairing rule is explicit: **only the `exec(...)` names in the catalog
@@ -258,14 +258,16 @@ exist — by default just `bash`** — so the agent never invents
   recursion, CLP(FD)/CLP(Q), or an explicit bound. `execute` is gas-limited and
   the turn has a model-call budget.
 
-`ask_user` / `input/2` prompt in the editor (the question shows in its top
-border) and read through the REPL's own input line:
+DML `input/2` / `exec(ask_user(...))` prompts in the editor (the question shows
+in its top border) and reads through the REPL's own input line. The authoring
+agent has no `ask_user` tool — it asks clarifying questions in its final
+message:
 
 ```text
 dml> ask me for my name
-? What is your name?
-> Andreas
-  ✔ ask_user(prompt=What is your name?) — Andreas
+I can do that — what name should I store?
+
+dml> call it "Andreas"
 ```
 
 ### Direct questions
@@ -424,14 +426,14 @@ in-memory module; it does not stop `bash` from writing files in the workspace.
 
 Both levels share one input channel:
 
-* the authoring agent may call `ask_user` to resolve an ambiguity before writing;
+* the authoring agent asks clarifying questions in its final message (it has no
+  `ask_user` tool);
 * the harness may call `input/2` or `exec(ask_user(prompt: …))` while running.
 
 In an interactive TTY the question is prompted. In non-interactive runs (`-g`,
-piped stdin, CI) the meta `ask_user` returns `cancelled` and `input/2` fails
-instead of blocking; `--no-ask` fails immediately, and `--answer "…"` supplies a
-canned reply. `ask_user` is exempt from the capability tool policy: it only
-relays a question to the human.
+piped stdin, CI) `input/2` fails instead of blocking; `--no-ask` fails
+immediately, and `--answer "…"` supplies a canned reply. `ask_user` is exempt
+from the capability tool policy: it only relays a question to the human.
 
 ## Backends
 
@@ -593,8 +595,8 @@ Or persistently in `.deepclause/config.json` (`0` = unlimited):
 cat prompts.txt | deepclause repl -l seed.dml --export out.dml --no-ask
 ```
 
-In non-TTY mode input is read line by line until EOF; `ask_user`/`input` never
-block.
+In non-TTY mode input is read line by line until EOF; `input/2` never
+blocks.
 
 ## Configuration
 

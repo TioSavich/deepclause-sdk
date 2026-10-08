@@ -33,7 +33,7 @@ CLI commands: `init`, `login`, `logout`, `set-backend`, `set-model`, `show-model
 - **Author mode** (plain English): a TypeScript authoring agent writes, tests,
   and commits DML through harness tools
   (`begin_turn`/`end_turn`/`rollback`/`listing`/`define`/`assert`/`retract`/
-  `delete`/`execute`/file tools/`ask_user`/`reference`), and can run several
+  `delete`/`execute`/`reference`), and can run several
   committed turns in one request.
 - **Transactions**: each turn snapshots the module and commits
   replace-by-predicate; a failed turn leaves the harness unchanged.
