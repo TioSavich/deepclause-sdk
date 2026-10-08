@@ -141,6 +141,89 @@ and converting files. Use the DML file predicates (`read_file/2`, `write_file/2`
 bound and reasoned over inside Prolog. Every path is workspace-relative and
 confined to the workspace.
 
+# Mixing languages: interpolation, quoting, escaping
+
+DML often drives a second language — a shell command, a Python/Node script, a
+JSON/YAML file. Escaping is where that breaks. The safe shape is **one language
+per layer**: DML orchestrates and hands over a path plus plain data; the script
+implements. Never nest code inside code.
+
+## DML strings
+
+- `{Var}` interpolation exists only in `task/N` / `prompt/N` descriptions (it is
+  hoisted into `format/2` for the model prompt). It is **not** for building code
+  or shell commands.
+- For every other string, build it with `format/2,3`: `~w` (write a term),
+  `~q` (quoted, read-back-safe), `~a` (atom), `~s` (string as-is), `~d`
+  (integer), `~n` (newline).
+- A DML/Prolog string literal escapes `\n`, `\t`, `\"`, `\\`; a quoted atom
+  doubles a single quote (`'it''s'`).
+- Prefer `~q`/`~s` over `~w` whenever the value is not a controlled atom.
+
+## Shell: pass data, never splice code
+
+Do not interpolate data into a command string — quoting differs and injection is
+easy:
+
+```prolog
+% WRONG: the value can break out of the command
+format(atom(Cmd), "curl ~w", [Url]), exec(bash(command: Cmd), R).
+
+% RIGHT: fixed command shape; the value crosses via a file
+make_directory_path(".dc-tmp"),
+write_file(".dc-tmp/input.txt", Url),
+exec(bash(command: "curl --data-binary @.dc-tmp/input.txt https://example.com"), R).
+```
+
+- Single-quote only **known** paths and flags:
+  `format(atom(Cmd), "python3 '~w' '~w'", [Script, Input])`.
+- Never interpolate user text, file contents, or model output into the command.
+- Use `exec(bash(command: Cmd, timeoutMs: N), R)` for anything that may hang.
+
+## Writing a script in another language
+
+Write the program as a **workspace file**, and keep DML out of its body. Do not
+embed multi-line foreign code in a goal — it needs two rounds of escaping (DML
+and the target language) and is the main source of breakage.
+
+```prolog
+script_file(extract, ".dc-repl/scripts/extract.py"),
+
+run_extract(Input, Output) :-
+    script_file(extract, Script),
+    format(atom(Cmd), "python3 '~w' '~w'", [Script, Input]),
+    exec(bash(command: Cmd), R),
+    get_dict(stdout, R, Output).
+```
+
+- Create the file with a goal run through `execute`. For short content use DML
+  `write_file/2`; for multi-line code use a **quoted heredoc** so the shell
+  copies it literally:
+  ```prolog
+  exec(bash(command: "cat > scripts/x.py <<'PY'
+  ...python code, with its own quotes and $ untouched...
+  PY
+  "), R)
+  ```
+  The `<<'PY'` (quoted delimiter) stops shell expansion. The whole command is
+  still a DML string, so escape DML's `\n`, `\"`, `\\` — exactly once.
+- The script reads its input from **argv, stdin, or a file**, never from the
+  command string, and does its own quoting internally.
+- Link the file with `script_file/2` so `export` bundles it.
+- To vary a script's behaviour, generate its **input file**, not its source: one
+  fixed script, different data.
+
+## Escaping checklist
+
+- One language per layer: DML orchestrates, the script implements.
+- DML strings escape DML; the shell escapes shell strings; never both at once.
+- Untrusted data crosses a boundary through a file or stdin — not through a
+  string that will be re-parsed.
+- JSON/CSV/YAML: build with `format/2` (`~q` for strings) or write it from a
+  script; do not hand-concatenate quotes.
+- If you find yourself writing `\\\"` (three levels), stop and move the code
+  into a file.
+
 # Typical patterns
 
 ## Deep research

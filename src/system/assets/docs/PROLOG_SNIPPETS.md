@@ -109,3 +109,9 @@ the value in each `Key-Value`), not a sort mode.
 - A top-level `:- use_module(library(clpfd)).` is required before `#=`/`ins`.
 - Untrusted data (URLs, file contents, user text) goes through files/stdin,
   never interpolated into a shell command.
+- `{Var}` interpolates **only** in `task/N`/`prompt/N` descriptions; use
+  `format/3` (`~w`/`~q`/`~s`) everywhere else. A string literal escapes `\n`,
+  `\"`, `\\`; a quoted atom doubles `'` (`'it''s'`).
+- Building a command: single-quote known paths/flags, pass data via files/stdin,
+  never splice untrusted text in. Write foreign code to a file (quoted heredoc
+  `<<'EOF'`) rather than embedding it in a DML string.
