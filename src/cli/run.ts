@@ -11,6 +11,7 @@ import * as fs from 'fs/promises';
 import * as path from 'path';
 
 import { loadConfig, resolveReplCompactionConfig, type Provider } from './config.js';
+import { resolveModelSlotConfig } from '../system/config/model-slots.js';
 import { promptUser } from './readline.js';
 import type { DMLEvent } from '../types.js';
 import { DMLSession } from '../repl/session.js';
@@ -99,6 +100,14 @@ export async function run(
     thinkingLevel: config.backend?.thinkingLevel,
   });
 
+  // The active model's context window drives compaction thresholds; resolve it
+  // from the bundled model database when the pi backend does not provide it.
+  const contextWindow = backend.contextWindow
+    ?? resolveModelSlotConfig(config, 'run', {
+      modelId: options.model ?? config.models.run,
+      temperature: options.temperature ?? config.temperatures.run,
+    }).contextWindow;
+
   const { selection: judgeSelection, warnings: judgeWarnings } = resolveReplJudgeSelection({
     llmBackend: backend.llmBackend,
     model: backend.model,
@@ -166,7 +175,7 @@ export async function run(
       judgeSelection,
     },
     compaction: { settings: resolveReplCompactionConfig(config), auto: true },
-    contextWindow: backend.contextWindow,
+    contextWindow,
     onInput: options.onUserInput ?? promptUser,
   });
 

@@ -17,25 +17,27 @@
  */
 
 import type { LLMBackend, LLMUsage, MemoryMessage } from '../types.js';
+import {
+  DEFAULT_COMPACTION_SETTINGS,
+  shouldCompact as piShouldCompact,
+} from '@earendil-works/pi-coding-agent';
 
 // =============================================================================
 // Settings
 // =============================================================================
 
+/**
+ * pi's compaction settings (same shape as its `core/compaction` settings).
+ * `DEFAULT_COMPACTION_SETTINGS` and the threshold come straight from pi; only
+ * the cut/summarization below is the SDK's port.
+ */
 export interface CompactionSettings {
   enabled: boolean;
-  /** Tokens reserved for the model response when deciding to compact. */
   reserveTokens: number;
-  /** Approximate number of recent tokens to keep verbatim. */
   keepRecentTokens: number;
 }
 
-/** Mirrors pi's `DEFAULT_COMPACTION_SETTINGS`. */
-export const DEFAULT_COMPACTION_SETTINGS: CompactionSettings = {
-  enabled: true,
-  reserveTokens: 16384,
-  keepRecentTokens: 20000,
-};
+export { DEFAULT_COMPACTION_SETTINGS };
 
 /** Leading marker of a compacted checkpoint message. */
 export const SUMMARY_PREFIX = '[Context summary]';
@@ -68,10 +70,11 @@ export function shouldCompact(
   contextWindow: number,
   settings: CompactionSettings = DEFAULT_COMPACTION_SETTINGS,
 ): boolean {
-  if (!settings.enabled || contextWindow <= 0) {
+  // Guard the unknown-window case (pi assumes a positive window).
+  if (contextWindow <= 0) {
     return false;
   }
-  return contextTokens > contextWindow - settings.reserveTokens;
+  return piShouldCompact(contextTokens, contextWindow, settings);
 }
 
 // =============================================================================

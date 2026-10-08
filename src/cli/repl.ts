@@ -26,7 +26,7 @@ import { PromptEditor } from '../repl/tui/editor.js';
 import { loadProjectContext } from '../repl/project-context.js';
 import { createPiBackend } from '../repl/backend.js';
 import { createReplToolset, type ReplToolset } from '../repl/toolset.js';
-import { parseModelId, type Provider } from '../system/config/model-slots.js';
+import { parseModelId, resolveModelSlotConfig, type Provider } from '../system/config/model-slots.js';
 import { loadReplConfig, resolveReplCompactionConfig, updateConfig } from './config.js';
 
 export interface ReplCliOptions {
@@ -382,6 +382,13 @@ export async function createReplRuntime(options: ReplCliOptions): Promise<ReplRu
         + "Run 'deepclause login' to sign in, or 'deepclause set-backend env' to use provider API keys.",
       );
     }
+  } else {
+    // env backend: take the context window from the bundled model database so
+    // compaction thresholds still work without pi.
+    contextWindow = resolveModelSlotConfig(config, 'run', {
+      modelId: options.model ?? config.models.run,
+      temperature: options.temperature ?? config.temperatures.run,
+    }).contextWindow;
   }
 
   // Judgment backends. `llm` reuses the active model/backend; `jev` is opt-in
