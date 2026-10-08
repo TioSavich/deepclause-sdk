@@ -79,20 +79,21 @@ Do not invent names — there is no `calculator`, `fetch_url`, `web_search`, or
 `vm_exec` unless the catalog lists it. By default the only capability tool is
 **`bash`**.
 
-**Prefer the shell for file I/O.** Use `bash` (and the `read_file`/`write_file`/
-`list_files`/`delete_file` tools) for reading, writing, copying, and converting
-files. The DML file predicates (`read_file/2`, `open/3`, `read_string/3`,
-`write_file/2`, `directory_files/2`, …) are for when the content must be bound
-and reasoned over **inside Prolog** — not for moving bytes around. Reading a file
-into DML just to shell it out again is a smell.
+**Prefer the shell for file I/O.** Use `bash` for reading, writing, copying, and
+converting files. The DML file predicates (`read_file/2`, `open/3`,
+`read_string/3`, `write_file/2`, `make_directory_path/1`, `directory_files/2`, …)
+are for when the content must be bound and reasoned over **inside Prolog** — not
+for moving bytes around. Reading a file into DML just to shell it out again is a
+smell.
 
 ## 3. Scripts are files, linked from the harness
 
-Write each program to a file with `write_file`, link it with `script_file/2`,
-and run it with `bash`. The write lands on disk immediately, so you can run the
-script in the same turn; no DML string escaping is involved. `script_file/2` is
-just a fact: it tells `export` which files belong to the harness. Use a literal
-workspace-relative path and one fact per name. `export harness.zip` bundles the
+Materialize a script by running a DML goal with the `execute` tool — for example
+`make_directory_path("scripts"), write_file("scripts/x.py", "…")` — then link it
+with `script_file/2` and run it with `bash`. `write_file/2` writes to the
+workspace immediately and does **not** create parent directories.
+`script_file/2` is just a fact: it tells `export` which files belong to the
+harness. Use a literal workspace-relative path and one fact per name. `export harness.zip` bundles the
 `.dml` plus every linked file; `export harness.dml` inlines them so the single
 file stays portable.
 

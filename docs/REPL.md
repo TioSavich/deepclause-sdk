@@ -233,8 +233,8 @@ To change the built-in prompt itself, edit
 
 The authoring agent is restricted to `listing`, `begin_turn`, `end_turn`,
 `rollback`, `define`, `assert`, `assert_many`, `retract`, `delete`, `execute`,
-`read_file`, `write_file`, `list_files`, `delete_file`, `ask_user`, and
-`reference`. The harness's own `tool/2` predicates are hidden from it, and the
+`ask_user`, and `reference`. It has no file or shell tools: all file I/O goes
+through DML (`write_file/2`, `make_directory_path/1`, …) or `bash`. The
 system prompt embeds the bundled `DML_REFERENCE.md`, a curated set of **idiomatic
 harness patterns** (`HARNESS_EXAMPLES.md`, plus `HARNESS_PATTERNS.md` via
 `reference("patterns")`), the host tool catalog, and the current harness manifest. The
@@ -307,15 +307,16 @@ Running is the authoring agent's job: while authoring a turn it calls the
 
 ### Self-containment and bundles
 
-The harness is the `.dml` **plus the files it links**. Write each program to a
-file (the authoring agent has `write_file`/`read_file` tools), link it with a
-`script_file/2` fact, and run it with `exec(bash(...))`:
+The harness is the `.dml` **plus the files it links**. Materialize each program
+with a DML goal (the `execute` tool on `make_directory_path(...), write_file(...)`),
+link it with a `script_file/2` fact, and run it with `exec(bash(...))`:
 
 ```prolog
 script_file(url_reader, ".dc-repl/scripts/url_reader.py").
 
 tool(url_text(Url, Text), "Fetch a URL and strip HTML.") :-
     script_file(url_reader, Script),
+    make_directory_path(".dc-tmp"),
     write_file(".dc-tmp/url.txt", Url),
     format(atom(Cmd), "python3 '~w' '.dc-tmp/url.txt'", [Script]),
     exec(bash(command: Cmd), Result),
@@ -324,8 +325,9 @@ tool(url_text(Url, Text), "Fetch a URL and strip HTML.") :-
 
 The untrusted URL is passed through a file rather than interpolated into the
 shell command. `script_file/2` has no runtime semantics — it tells the exporter
-which files belong to the harness. `write_file` lands on disk immediately, so
-the agent can run a script with `bash` in the same turn.
+which files belong to the harness. `write_file/2` writes to the workspace
+immediately and does not create parent directories, so the agent can run a
+script with `bash` in the same turn.
 
 `export harness.zip` writes the self-contained bundle (`harness.dml` + every
 linked file + a manifest); `-l harness.zip` extracts and loads it.

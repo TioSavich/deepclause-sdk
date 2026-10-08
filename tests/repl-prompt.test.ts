@@ -190,16 +190,13 @@ describe('prompt mode', () => {
 
   
 
-  it('write_file lands on disk immediately (the same turn can read it)', async () => {
+  it('materializes a script file via a DML goal (execute)', async () => {
     backend = new CannedBackend([{
       text: '',
       toolCalls: [
-        { name: 'write_file', arguments: { path: 'scripts/hello.txt', content: 'hi-from-meta' } },
-        // DML file I/O reads the workspace, so this only works when the write is
-        // immediate (it used to be invisible until commit).
-        { name: 'execute', arguments: { goal: 'read_file("scripts/hello.txt", C), output(C)' } },
-        { name: 'set_result', arguments: { variable: 'DMLCode', value: 'kept(1).' } },
-        { name: 'set_result', arguments: { variable: 'Answer', value: '' } },
+        // The authoring agent has no file tool; it writes files through DML.
+        // DML file I/O reads the workspace, so the write is immediate.
+        { name: 'execute', arguments: { goal: 'make_directory_path("scripts"), write_file("scripts/hello.txt", "hi-from-meta"), output("written")' } },
         { name: 'finish', arguments: { success: true } },
       ],
     }]);
@@ -208,25 +205,19 @@ describe('prompt mode', () => {
     const events = await collect(repl.prompt('write a script file'));
     expect(events.some((event) => event.type === 'error')).toBe(false);
     expect(await fs.readFile(path.join(workspace, 'scripts/hello.txt'), 'utf8')).toBe('hi-from-meta');
-    expect(events.some((event) => event.type === 'output' && event.content === 'hi-from-meta')).toBe(true);
   });
 
-  it('rejects file writes that escape the workspace', async () => {
+  it('rejects DML file writes that escape the workspace', async () => {
     backend = new CannedBackend([{
       text: '',
       toolCalls: [
-        { name: 'write_file', arguments: { path: '../escape.txt', content: 'nope' } },
-        { name: 'set_result', arguments: { variable: 'DMLCode', value: 'kept(1).' } },
-        { name: 'set_result', arguments: { variable: 'Answer', value: '' } },
+        { name: 'execute', arguments: { goal: 'write_file("../escape.txt", "nope")' } },
         { name: 'finish', arguments: { success: true } },
       ],
     }]);
     repl = await openRepl();
 
-    const events = await collect(repl.prompt('try to escape'));
-    expect(events.some((event) => (
-      event.type === 'tool_call' && event.toolName === 'write_file' && event.toolState === 'failed'
-    ))).toBe(true);
+    await collect(repl.prompt('try to escape'));
     const escaped = path.join(path.dirname(workspace), 'escape.txt');
     expect(await fs.access(escaped).then(() => true).catch(() => false)).toBe(false);
   });

@@ -1156,22 +1156,6 @@ export class DMLSession {
     return this.editResult(plainValue(result?.Result));
   }
 
-  async readFile(path: string): Promise<string | null> {
-    return this.readWorkspaceFile(path);
-  }
-
-  async writeFile(path: string, content: string): Promise<void> {
-    await this.writeWorkspaceFile(path, content);
-  }
-
-  async listFiles(path = '.'): Promise<string[]> {
-    return this.listWorkspaceDir(path);
-  }
-
-  async deleteFile(path: string): Promise<void> {
-    await this.writeWorkspaceFile(path, null);
-  }
-
   async askUser(prompt: string, choices?: string[]): Promise<string | undefined> {
     return this.requireInput(prompt, choices);
   }
@@ -1368,32 +1352,6 @@ export class DMLSession {
       return await fs.readFile(this.resolveWorkspacePath(this.normalizeRel(relPath)), 'utf8');
     } catch {
       return null;
-    }
-  }
-
-  /**
-   * Write a workspace file (or delete it when content is null). Writes land on
-   * disk immediately so the author can run the file with bash in the same turn.
-   */
-  private async writeWorkspaceFile(relPath: string, content: string | null): Promise<void> {
-    if (this.isFrozen()) {
-      throw new Error('harness is frozen; file writes are disabled');
-    }
-    const abs = this.resolveWorkspacePath(this.normalizeRel(relPath));
-    if (content === null) {
-      await fs.rm(abs, { force: true });
-      return;
-    }
-    await fs.mkdir(path.dirname(abs), { recursive: true });
-    await fs.writeFile(abs, content, 'utf8');
-  }
-
-  /** List a workspace directory. */
-  private async listWorkspaceDir(relPath = '.'): Promise<string[]> {
-    try {
-      return (await fs.readdir(this.resolveWorkspacePath(this.normalizeRel(relPath)))).sort();
-    } catch {
-      return [];
     }
   }
 

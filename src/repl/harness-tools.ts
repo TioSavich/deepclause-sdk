@@ -47,10 +47,6 @@ export interface HarnessToolController {
   deletePredicate(nameArity: string): Promise<{ ok: boolean; error?: string }>;
   /** Run a DML goal against the scratch harness. */
   execute(goal: string, limit?: number, signal?: AbortSignal, onEvent?: (event: DMLEvent) => void): Promise<HarnessExecuteResult>;
-  readFile(path: string): Promise<string | null>;
-  writeFile(path: string, content: string): Promise<void>;
-  listFiles(path?: string): Promise<string[]>;
-  deleteFile(path: string): Promise<void>;
   askUser(prompt: string, choices?: string[]): Promise<string | undefined>;
   /** DML reference / authoring guide / examples / snippets. */
   reference(topic: string): Promise<string>;
@@ -175,53 +171,6 @@ export function createHarnessTools(controller: HarnessToolController): Map<strin
       context?.signal,
       context?.onEvent,
     ),
-  });
-
-  tools.set('read_file', {
-    description: 'Read a workspace file (workspace-relative path).',
-    parameters: { type: 'object', properties: { path: stringProp('Workspace-relative file path.') }, required: ['path'] },
-    execute: async (args) => {
-      const filePath = String(args.path ?? '');
-      const content = await controller.readFile(filePath);
-      return content === null ? { error: `not found: ${filePath}` } : { path: filePath, content };
-    },
-  });
-
-  tools.set('write_file', {
-    description: 'Write a workspace file (workspace-relative path). The write lands on disk immediately, so bash can run it in the same turn.',
-    parameters: {
-      type: 'object',
-      properties: {
-        path: stringProp('Workspace-relative file path.'),
-        content: stringProp('The full file content.'),
-      },
-      required: ['path', 'content'],
-    },
-    execute: async (args) => {
-      const filePath = String(args.path ?? '');
-      const content = String(args.content ?? '');
-      await controller.writeFile(filePath, content);
-      return { ok: true, path: filePath };
-    },
-  });
-
-  tools.set('list_files', {
-    description: 'List a workspace directory (default ".").',
-    parameters: { type: 'object', properties: { path: stringProp('Workspace-relative directory (default ".").') }, required: [] },
-    execute: async (args) => {
-      const dir = args.path ? String(args.path) : '.';
-      return { path: dir, entries: await controller.listFiles(dir) };
-    },
-  });
-
-  tools.set('delete_file', {
-    description: 'Delete a workspace file (workspace-relative path).',
-    parameters: { type: 'object', properties: { path: stringProp('Workspace-relative file path.') }, required: ['path'] },
-    execute: async (args) => {
-      const filePath = String(args.path ?? '');
-      await controller.deleteFile(filePath);
-      return { ok: true, path: filePath };
-    },
   });
 
   tools.set('ask_user', {

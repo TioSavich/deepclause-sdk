@@ -46,24 +46,21 @@ so a workspace-relative path just works. It exists so the exporter knows which
 files belong to the harness. `script_body/2` is removed; a fact by that name is
 now an ordinary user predicate with no special handling.
 
-## 3. Meta tools: the author edits files directly
+## 3. How scripts are materialized (no file tools)
 
-The meta task gains generic, workspace-scoped file tools. Content travels as a
-plain string argument, never as escaped DML:
+The authoring agent has **no file tools**. A script is written to the workspace
+by running a DML goal through the `execute` tool:
 
-| Tool | Behavior |
-|---|---|
-| `read_file(path)` | reads a workspace file |
-| `write_file(path, content)` | writes a workspace file (lands on disk immediately) |
-| `list_files(path?)` | lists a workspace directory |
-| `delete_file(path)` | deletes a workspace file |
+```prolog
+make_directory_path(".dc-repl/scripts"),
+write_file(".dc-repl/scripts/url_reader.py", "...").
+```
 
 Rules:
 
 * paths are workspace-relative; traversal (`..`, absolute) is rejected;
-* reads are allowed when frozen; writes/deletes are refused when frozen;
-* the meta frame also gets the capability host tools — by default **`bash`** —
-  so the author can probe the environment (`python3 --version`, `which curl`, …)
+* the capability host tool — by default **`bash`** — is available to `exec/2`, so
+  the author can probe the environment (`python3 --version`, `which curl`, …)
   and test commands directly. Harness `tool/2` predicates stay hidden.
 
 There are deliberately **no** `write_script`/`list_scripts` tools: scripts are
@@ -71,10 +68,12 @@ just files.
 
 ## 4. File writes
 
-File writes are **not** buffered. `write_file`/`delete_file` land on disk
-immediately, so the meta task can write a script and run it with `bash` in the
-same turn. (The earlier in-memory staging overlay made `bash` see a stale view,
-so the author would fight the filesystem instead of the problem.)
+File writes are **not** buffered. DML `write_file/2`/`delete_file/1` (run through
+`execute`) land on disk immediately, so the author can write a script and run it
+with `bash` in the same turn. `write_file/2` does not create parent directories —
+call `make_directory_path/1` first. (The earlier in-memory staging overlay made
+`bash` see a stale view, so the author would fight the filesystem instead of the
+problem.)
 
 The prompt turn is still a transaction for the **module**: the living module is
 snapshotted before the meta task and restored on failure/abort, and the commit
@@ -114,37 +113,39 @@ Zip is produced with `fflate`.
 
 ## 7. Freeze
 
-Frozen: the module is immutable, `write_file`/`delete_file` are refused, and a
-loaded bundle's scripts are made read-only on disk. `read_file`, queries,
-`execute`, `bash`, and nested `task` calls keep working. Freeze remains an
-integrity lock, not a sandbox (see the proposal §16).
+Frozen: the module is immutable (edits are refused) and a loaded bundle's scripts
+are made read-only on disk. Queries, `execute`, `bash`, and nested `task` calls
+keep working. DML file predicates are language-level and are not gated by freeze,
+so freeze is an integrity lock on the *module*, not a sandbox (see the proposal
+§16).
 
 ## 8. Authoring contract changes
 
-The meta prompt's self-containment rule becomes:
+The authoring prompt's self-containment rule becomes:
 
 > The harness is the `.dml` **plus** the files it links with `script_file/2`.
-> Write each program to a file with `write_file`, link it with
-> `script_file(Name, Path)`, and run it with `exec(bash(...))`. Pass untrusted
-> data through files or stdin, never interpolated into the shell command.
-> `export` bundles the linked files, so they travel with the harness.
+> You have no file tools: materialize a script by running a DML goal with
+> `execute` (`make_directory_path("scripts"), write_file("scripts/x.py", "…")`),
+> link it with `script_file(Name, Path)`, and run it with `exec(bash(...))`. Pass
+> untrusted data through files or stdin, never interpolated into the shell
+> command. `export` bundles the linked files, so they travel with the harness.
 
 The `DML_REFERENCE.md` and `DML_AUTHORING.md` examples move from `script_body/2`
 to files.
 
 ## 9. Tests
 
-* `write_file` writes immediately and `bash` can run the script in the same
-  turn; export zip; reload in a clean workspace; run again.
+* DML `write_file/2` writes immediately and `bash` can run the script in the
+  same turn; export zip; reload in a clean workspace; run again.
 * `.dml` auto-inline round-trips (embedded file materialized on load).
 * A failing turn/abort restores the module and writes a bundle zip (workspace
   file edits stay on disk).
-* Frozen: `write_file`/`delete_file` refused, reads and runs still work.
-* Traversal (`../x`, absolute paths) rejected for both file tools and bundle
+* Frozen: module edits refused; bundle scripts read-only; queries/runs still work.
+* Traversal (`../x`, absolute paths) rejected for DML file predicates and bundle
   entries.
 * The meta frame offers `bash`; harness `tool/2` predicates are not exposed.
 
 ## 10. Out of scope
 
 * Per-file raw-source retention (reconstructed clauses still lose comments).
-* Incremental/patch script editing beyond `read_file`/`write_file`.
+* Incremental/patch script editing beyond rewriting a whole file.

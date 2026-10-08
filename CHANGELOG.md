@@ -4,6 +4,13 @@
 
 ### Changed
 
+- **The authoring agent has no file or shell tools.** `read_file`, `write_file`,
+  `list_files`, and `delete_file` were removed; the agent's file I/O now goes
+  through DML (`make_directory_path/1` + `write_file/2`, …) or `bash` via its
+  `execute` tool. Its tool set is now only harness editing (`listing`, `begin_turn`,
+  `end_turn`, `rollback`, `define`, `assert`, `assert_many`, `retract`, `delete`,
+  `execute`), plus `ask_user` and `reference` (and the loop-level `finish`).
+  `write_file/2` does not create parent directories.
 - **`module_doc/1` is now the harness's skill description.** The manifest leads
   with `- skill: <module_doc>` (previously a trailing `- harness:` line), and the
   authoring prompt tells the agent to read it at the start of the session and

@@ -23,9 +23,10 @@ module_doc("Example harness: a few small skills used as patterns. Use when you n
 
 ## 1. Wrap a workspace script as a tool
 
-Write the program to a file, link it with `script_file/2`, expose it as a
-`tool/2`. Untrusted data goes through files/stdin, never interpolated into the
-shell command:
+Materialize the program as a workspace file (run a DML goal with
+`make_directory_path("scripts"), write_file("scripts/count_words.py", "…")`),
+link it with `script_file/2`, and expose it as a `tool/2`. Untrusted data goes
+through files/stdin, never interpolated into the shell command:
 
 ```prolog
 script_file(count_words, ".dc-repl/scripts/count_words.py").

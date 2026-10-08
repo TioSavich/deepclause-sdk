@@ -41,10 +41,6 @@ function stubController(overrides: Partial<HarnessToolController> = {}): {
       record('execute', undefined);
       return { bindings: [], solutions: [], output: 'child-output' };
     },
-    readFile: async () => record('readFile', 'content'),
-    writeFile: async () => { record('writeFile', undefined); },
-    listFiles: async () => record('listFiles', ['a.dml']),
-    deleteFile: async () => { record('deleteFile', undefined); },
     askUser: async () => record('askUser', 'yes'),
     reference: async () => record('reference', 'reference text'),
     ...overrides,
@@ -73,8 +69,7 @@ describe('createHarnessTools', () => {
     const names = [...createHarnessTools(controller).keys()];
     for (const expected of [
       'listing', 'begin_turn', 'end_turn', 'rollback', 'define', 'assert', 'assert_many',
-      'retract', 'delete', 'execute', 'read_file', 'write_file', 'list_files', 'delete_file',
-      'ask_user', 'reference',
+      'retract', 'delete', 'execute', 'ask_user', 'reference',
     ]) {
       expect(names).toContain(expected);
     }

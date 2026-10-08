@@ -327,7 +327,7 @@ agent_main :-
     system("You are a safe assistant."),
     
     % Run task with only safe tools
-    with_tools([read_file, list_files], (
+    with_tools([search, fetch_page], (
         task("Analyze the files in the workspace.", Analysis)
     )),
     
@@ -399,7 +399,7 @@ Memory stores `media{path, mime}` — never the image bytes. Judgments
 
 ### File I/O and paths — prefer the shell
 
-**Prefer `exec(bash(...))` (and the host file tools) for file operations.**
+**Prefer `exec(bash(...))` for file operations.**
 Reading, writing, copying, or converting files is usually clearer and more
 robust as a shell command; reach for the DML predicates below only when the
 content must be bound and reasoned over inside Prolog. Pulling a file into DML
@@ -414,16 +414,20 @@ predicates all take a relative path:
 ```prolog
 read_file("images/a.png", Bytes),
 write_file("out/report.txt", Text),
+make_directory_path("out/nested"),          % create a directory (and parents)
+append_file("out/log.txt", Line),
+delete_file("out/report.txt"),
 directory_files("images", Names),        % bare entry names: ["a.png", ...]
+exists_file("images/a.png"),
 size_file("images/a.png", Size),
-time_file("images/a.png", Modified),
-exists_file("images/a.png").
+time_file("images/a.png", Modified).
 ```
 
-`directory_files/2` returns bare entry names (no directory), so build a path with
-`atom_concat('images/', Name, Path)` when you need one. `bash` runs with a wider
-view of the sandbox than DML has; convert anything from the shell to a
-workspace-relative path before handing it to DML.
+`write_file/2` does **not** create parent directories — call
+`make_directory_path/1` first. `directory_files/2` returns bare entry names (no
+directory), so build a path with `atom_concat('images/', Name, Path)` when you
+need one. `bash` runs with a wider view of the sandbox than DML has; convert
+anything from the shell to a workspace-relative path before handing it to DML.
 
 ---
 
@@ -843,12 +847,13 @@ DML skills can also be grown interactively in a persistent **living module**.
 - `freeze.` makes the harness read-only; `export <file>.` serializes it.
   `export harness.zip` bundles the module with its linked script files;
   `export harness.dml` inlines them into one portable file.
-- `ask_user` (meta task) and `input/2` / `exec(ask_user(...))` (harness) ask the
+- `ask_user` (authoring agent) and `input/2` / `exec(ask_user(...))` (harness) ask the
   human. They never block in non-interactive runs (`-g`, piped stdin, CI).
 
 **Self-containment.** The harness is the `.dml` **plus the files it links**.
-Write each program to a file (the meta task has `write_file`/`read_file` tools),
-link it with `script_file(Name, Path)`, and run it with `exec(bash(...))`. The
+Materialize each program with a DML goal (`make_directory_path(...)`,
+`write_file(...)`), link it with `script_file(Name, Path)`, and run it with
+`exec(bash(...))`. The
 exporter bundles the linked files, so they travel with the harness. Pass
 untrusted data through files or stdin, never interpolated into the shell
 command.
