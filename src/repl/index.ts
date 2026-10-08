@@ -48,8 +48,6 @@ export interface HarnessReplOptions {
   /** Unified human-in-the-loop channel for meta ask_user and harness input/2. */
   onInput?: (prompt: string, options?: string[]) => Promise<string | undefined>;
   initialHarnessMemory?: MemoryMessage[];
-  /** Prompt-mode repair attempts after an invalid commit (default 1). */
-  repairRounds?: number;
   /** Maximum nested frame depth (default 3). */
   maxDepth?: number;
   /** Maximum model calls per turn (default 24; 0 = unlimited). */
@@ -72,8 +70,6 @@ export interface HarnessReplOptions {
   compaction?: { settings: CompactionSettings; auto: boolean };
   /** Active model context window, used for compaction thresholds. */
   contextWindow?: number;
-  /** Authoring implementation: the DML `meta` frame (legacy) or the TS `agent`. */
-  authoring?: 'meta' | 'agent';
   /** Agent authoring docs: embed the DML reference/authoring guides, or use the tool. */
   agentDocs?: 'embed' | 'tool';
 }
@@ -210,7 +206,6 @@ export async function createHarnessRepl(options: HarnessReplOptions): Promise<Ha
     toolPolicy: options.toolPolicy,
     onInputRequired: options.onInputRequired,
     onInput: options.onInput,
-    repairRounds: options.repairRounds,
     maxDepth: options.maxDepth,
     maxModelCalls: options.maxModelCalls,
     hostToolsCatalog: options.hostToolsCatalog,
@@ -218,7 +213,6 @@ export async function createHarnessRepl(options: HarnessReplOptions): Promise<Ha
     history: options.history,
     compaction: options.compaction,
     contextWindow: options.contextWindow,
-    authoring: options.authoring,
     agentDocs: options.agentDocs,
     runnerOptions: {
       model: options.model,

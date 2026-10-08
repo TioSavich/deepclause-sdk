@@ -75,8 +75,6 @@ export function buildParamsTerm(params: Record<string, unknown>): string {
 /** Human label for a frame kind, used by the renderer. */
 export function frameKindLabel(kind: FrameKind): string {
   switch (kind) {
-    case 'meta':
-      return 'meta';
     case 'object':
       return 'run';
     case 'nested':

@@ -46,8 +46,7 @@ function finalResponse(code: string): CannedResponse {
   return {
     text: 'Here is the harness.',
     toolCalls: [
-      { name: 'set_result', arguments: { variable: 'DMLCode', value: code } },
-      { name: 'set_result', arguments: { variable: 'Answer', value: '' } },
+      { name: 'assert_many', arguments: { clauses: code } },
       { name: 'finish', arguments: { success: true } },
     ],
   };
@@ -80,7 +79,7 @@ afterEach(async () => {
   await fs.rm(workspace, { recursive: true, force: true });
 });
 
-describe('meta ask_user', () => {
+describe('agent ask_user', () => {
   it('asks the human mid-turn and continues', async () => {
     const asked: string[] = [];
     const backend = new CannedBackend([
@@ -171,8 +170,7 @@ describe('harness input/2', () => {
       text: '',
       toolCalls: [
         { name: 'execute', arguments: { goal: 'input("Nested question?", A), output(A)' } },
-        { name: 'set_result', arguments: { variable: 'DMLCode', value: 'kept(1).' } },
-      { name: 'set_result', arguments: { variable: 'Answer', value: '' } },
+        { name: 'assert_many', arguments: { clauses: 'kept(1).' } },
         { name: 'finish', arguments: { success: true } },
       ],
     }]);

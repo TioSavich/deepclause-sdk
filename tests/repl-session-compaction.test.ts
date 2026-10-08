@@ -14,16 +14,9 @@ interface CannedResponse {
   toolCalls?: Array<{ name: string; arguments: Record<string, unknown> }>;
 }
 
-/** Returns a direct answer (no DML) so a turn records meta memory. */
+/** A direct agent answer (no harness edit). */
 function answeredResponse(answer: string): CannedResponse {
-  return {
-    text: '',
-    toolCalls: [
-      { name: 'set_result', arguments: { variable: 'DMLCode', value: '' } },
-      { name: 'set_result', arguments: { variable: 'Answer', value: answer } },
-      { name: 'finish', arguments: { success: true } },
-    ],
-  };
+  return { text: answer };
 }
 
 class CannedBackend implements LLMBackend {

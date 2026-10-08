@@ -12,7 +12,7 @@ import * as path from 'path';
 import { strFromU8, strToU8, unzipSync, zipSync } from 'fflate';
 
 import { loadProlog, mountWorkspace, type SWIPLModule } from '../prolog/loader.js';
-import { getMetaPromptAssetPath, getWorkspaceDocAssetPath } from '../system/assets/index.js';
+import { getWorkspaceDocAssetPath } from '../system/assets/index.js';
 import { DMLRunner, toJsValue, type Frame, type InternalRunOptions, type RunnerOptions } from '../runner.js';
 import {
   compactMemory,
@@ -23,8 +23,7 @@ import {
 } from './compaction.js';
 import { HarnessAgent } from './agent.js';
 import { createHarnessTools } from './harness-tools.js';
-import type { HarnessCommitResult, HarnessExecuteResult } from './harness-tools.js';
-import type {
+import type { HarnessCommitResult, HarnessExecuteResult } from './harness-tools.js';import type {
   DMLEvent,
   FrameKind,
   LLMBackend,
@@ -38,7 +37,6 @@ import {
   type HarnessExportOptions,
   type HarnessExportResult,
 } from './export.js';
-import { createMetaTools, type ExecuteResult } from './tools.js';
 import {
   HistoryStore,
   harnessHash,
@@ -66,9 +64,7 @@ export interface DMLSessionOptions {
   /** Unified human-in-the-loop channel for meta ask_user and harness input/2. */
   onInput?: (prompt: string, options?: string[]) => Promise<string | undefined>;
   initialHarnessMemory?: MemoryMessage[];
-  /** Prompt-mode repair attempts after an invalid commit (default 1). */
-  repairRounds?: number;
-  /** Maximum nested frame depth (meta -> execute -> object task). Default 3. */
+  /** Maximum nested frame depth (execute -> object task). Default 3. */
   maxDepth?: number;
   /** Maximum model calls across all frames for one turn (default 100; 0 = unlimited). */
   maxModelCalls?: number;
@@ -87,8 +83,6 @@ export interface DMLSessionOptions {
   compaction?: { settings: CompactionSettings; auto: boolean };
   /** Active model context window, used for compaction thresholds. */
   contextWindow?: number;
-  /** Authoring implementation: the DML `meta` frame (legacy) or the TS `agent`. */
-  authoring?: 'meta' | 'agent';
   /** Agent authoring docs: embed the DML reference/authoring guides, or use the tool. */
   agentDocs?: 'embed' | 'tool';
   /**
@@ -129,7 +123,6 @@ export class DMLSession {
   private tools: Map<string, ToolDefinition>;
   private toolPolicy: ToolPolicy | null;
   private inputHandler?: (prompt: string, options?: string[]) => Promise<string | undefined>;
-  private repairRounds: number;
   private maxDepth: number;
   private maxModelCalls: number;
   private hostToolsCatalog?: string;
@@ -140,7 +133,6 @@ export class DMLSession {
   private llmBackend?: LLMBackend;
   private temperature = 0.7;
   private maxTokens = 65536;
-  private readonly authoring: 'meta' | 'agent';
   private readonly agentDocs: 'embed' | 'tool';
   /** Persisted authoring-agent conversation (agent mode). */
   private agentMessages: MemoryMessage[] = [];
@@ -148,6 +140,10 @@ export class DMLSession {
   /** Open edit transaction (agent mode): predicate list at snapshot. */
   private transactionBefore: string[] | null = null;
   private transactionDirty = false;
+  /** Whether the last agent turn committed an edit (for the history record). */
+  private lastTurnCommitted = false;
+  /** Version recorded by the last commit, when history is enabled. */
+  private lastCommitVersion?: number;
 
   /** Current nested frame depth (used for the depth budget). */
   private frameDepth = 0;
@@ -157,7 +153,6 @@ export class DMLSession {
   private modelCallBudget: number;
   private dmlReference?: string;
   private dmlAuthoring?: string;
-  private metaPromptTemplate?: string;
   private harnessExamples?: string;
   private prologSnippets?: string;
   private disposed = false;
@@ -182,7 +177,6 @@ export class DMLSession {
       ?? (options.askUser ? (prompt, choices) => options.askUser!(prompt, choices).then((r) => ('cancelled' in r ? undefined : r.answer)) : undefined)
       ?? options.onInputRequired
       ?? undefined;
-    this.repairRounds = options.repairRounds ?? 1;
     this.maxDepth = options.maxDepth ?? 3;
     this.maxModelCalls = options.maxModelCalls ?? 100;
     this.modelCallBudget = this.maxModelCalls;
@@ -195,7 +189,6 @@ export class DMLSession {
     this.llmBackend = options.runnerOptions.llmBackend;
     this.temperature = options.runnerOptions.temperature;
     this.maxTokens = options.runnerOptions.maxTokens;
-    this.authoring = options.authoring ?? 'meta';
     this.agentDocs = options.agentDocs ?? 'embed';
     this.runner = new DMLRunner(swipl, {
       ...options.runnerOptions,
@@ -667,19 +660,6 @@ export class DMLSession {
     return this.dmlAuthoring;
   }
 
-  /** Load the meta-prompt template once, for inclusion in the meta prompt. */
-  private async loadMetaPromptTemplate(): Promise<string> {
-    if (this.metaPromptTemplate !== undefined) {
-      return this.metaPromptTemplate;
-    }
-    try {
-      this.metaPromptTemplate = await fs.readFile(getMetaPromptAssetPath(), 'utf8');
-    } catch {
-      this.metaPromptTemplate = '';
-    }
-    return this.metaPromptTemplate;
-  }
-
   /** Load a bundled doc asset once (cached by field). */
   private async loadDocAsset(name: 'harness-examples' | 'prolog-snippets'): Promise<string> {
     const cached = name === 'harness-examples' ? this.harnessExamples : this.prologSnippets;
@@ -899,15 +879,15 @@ export class DMLSession {
 
   /**
    * Run a goal in an isolated `execute` child frame and collect its result.
-   * Used by the meta `execute` tool. The child frame uses the living scratch
-   * module and may itself call task() (RLM-style recursion).
+   * The child frame uses the living scratch module and may itself call task()
+   * (RLM-style recursion); its harness-memory writes are discarded afterward.
    */
   async executeGoal(
     goal: string,
     limit = 5,
     onEvent?: (event: DMLEvent) => void,
     signal?: AbortSignal,
-  ): Promise<ExecuteResult> {
+  ): Promise<HarnessExecuteResult> {
     const childDepth = this.frameDepth + 1;
     if (childDepth > this.maxDepth) {
       return {
@@ -931,7 +911,10 @@ export class DMLSession {
 
     const frameId = String(plainValue(start?.FrameId));
     const frame = this.runner.registerFrame(frameId, 'nested', 1);
-    const solutions: ExecuteResult['solutions'] = [];
+    // `execute` is a scratch test: capture harness memory and restore it after,
+    // so a goal's `system/1`/`user/1` writes do not leak into the live harness.
+    const memoryBefore = this.getMemory('harness');
+    const solutions: HarnessExecuteResult['solutions'] = [];
     let output = '';
     let runError: string | undefined;
     this.frameDepth = childDepth;
@@ -949,6 +932,7 @@ export class DMLSession {
     } finally {
       this.runner.endFrame(frame.id);
       this.frameDepth = childDepth - 1;
+      this.setMemory('harness', memoryBefore);
     }
 
     return {
@@ -964,7 +948,7 @@ export class DMLSession {
   /**
    * The TypeScript authoring agent: a normal `LLMBackend` agent with harness
    * tools. It runs one or more committed turns in a loop until the model calls
-   * `finish`. This is the `authoring: 'agent'` path.
+   * `finish`. It runs one or more committed turns per request.
    */
   async *agentPrompt(request: string, options: DMLQueryOptions = {}): AsyncGenerator<DMLEvent> {
     if (this.disposed) {
@@ -978,13 +962,18 @@ export class DMLSession {
 
     this.turnCounter += 1;
     const turn = this.turnCounter;
+    const historyStart = Date.now();
+    this.lastTurnCommitted = false;
+    this.lastCommitVersion = undefined;
     await this.beginTurn();
 
     const agent = await this.getHarnessAgent();
     let failed = false;
     try {
       for await (const event of agent.run(request, { signal: options.signal })) {
-        if (event.type === 'error') failed = true;
+        // A nested (`execute` child) error is a tool result the agent can react
+        // to; only the agent's own errors fail the turn.
+        if (event.type === 'error' && event.frameKind !== 'nested') failed = true;
         this.recordHistoryEvent(turn, event);
         yield event;
       }
@@ -1004,6 +993,24 @@ export class DMLSession {
       await this.endTurn();
     }
     await this.persistSessionHarness(this.history?.currentVersion ?? 0);
+
+    const outcome = options.signal?.aborted
+      ? 'aborted'
+      : failed
+        ? 'failed'
+        : this.lastTurnCommitted
+          ? 'committed'
+          : 'answered';
+    await this.finishHistoryTurn({
+      turn,
+      mode: 'prompt',
+      request,
+      outcome,
+      commitVersion: this.lastCommitVersion,
+      durationMs: Date.now() - historyStart,
+      modelCalls: this.modelCallsThisTurn,
+      error: failed ? 'authoring turn failed' : undefined,
+    });
   }
 
   /**
@@ -1060,9 +1067,13 @@ export class DMLSession {
     const after = this.predicateList();
     const changed = this.simplePredicateDiff(before, after);
     this.transactionBefore = null;
-    if (this.transactionDirty && this.history) {
-      await this.recordHistoryChange('commit', this.turnCounter, before, { touched: this.editTouched() });
+    const committed = this.transactionDirty;
+    let version: number | undefined;
+    if (committed && this.history) {
+      version = await this.recordHistoryChange('commit', this.turnCounter, before, { touched: this.editTouched() });
     }
+    this.lastTurnCommitted = committed;
+    this.lastCommitVersion = version;
     this.transactionDirty = false;
     this.prologQuery(`deepclause_mi:repl_edit_touched_clear('${this.sessionId}')`);
     await this.persistSessionHarness(this.history?.currentVersion ?? 0);
@@ -1082,6 +1093,8 @@ export class DMLSession {
     if (this.transactionBefore === null) return;
     this.prologQuery(`deepclause_mi:repl_snapshot_restore('${this.sessionId}')`);
     this.transactionBefore = null;
+    this.lastTurnCommitted = false;
+    this.lastCommitVersion = undefined;
     this.transactionDirty = false;
   }
 
@@ -1193,259 +1206,9 @@ export class DMLSession {
    * triggers at most one repair round; any failure leaves the harness
    * byte-identical.
    */
+  /** Prompt mode: author the harness through the TypeScript agent. */
   async *prompt(request: string, options: DMLQueryOptions = {}): AsyncGenerator<DMLEvent> {
-    if (this.authoring === 'agent') {
-      yield* this.agentPrompt(request, options);
-      return;
-    }
-    if (this.disposed) {
-      yield { type: 'error', content: 'Session has been disposed' };
-      return;
-    }
-
-    const runOptions = this.buildRunOptions(options);
-    this.modelCallsThisTurn = 0;
-    this.modelCallBudget = this.maxModelCalls;
-    let succeeded = false;
-    let lastError: string | undefined;
-    let currentRequest = request;
-    this.turnCounter += 1;
-    const historyTurn = this.turnCounter;
-    const historyStart = Date.now();
-    const historyBefore = this.predicateList();
-    let historyOutcome: HistoryTurnRecord['outcome'] = 'failed';
-    let historyVersion: number | undefined;
-
-    yield { type: 'task_activity', taskState: 'started', taskDescription: request };
-
-    // Session compaction (TypeScript, ported from pi): rewrite meta memory
-    // before assembling this turn's meta prompt when the context is large.
-    if (this.compactionAuto) {
-      try {
-        const { event } = await this.compactMetaMemory(false, options.signal);
-        if (event) yield event;
-      } catch (error) {
-        this.warnHistory(error);
-      }
-    }
-
-    try {
-      for (let attempt = 0; attempt <= this.repairRounds && !succeeded; attempt += 1) {
-        // 1. Snapshot the living module + bookkeeping + harness memory.
-        //    (Workspace file edits are written straight to disk.)
-        this.prologQuery(`deepclause_mi:repl_snapshot_save('${this.sessionId}')`);
-
-        const catalog = this.hostToolsCatalog
-          ?? 'No capability host tools are registered. Use DML/Prolog, or embed a script as a fact and run it with bash.';
-        this.prologQuery(
-          `deepclause_mi:repl_set_meta_catalog('${this.sessionId}', ${quoteString(catalog)})`
-        );
-        const reference = await this.loadDmlReference();
-        if (reference) {
-          this.prologQuery(
-            `deepclause_mi:repl_set_dml_reference('${this.sessionId}', ${quoteString(reference)})`
-          );
-        }
-        const authoring = await this.loadDmlAuthoring();
-        if (authoring) {
-          this.prologQuery(
-            `deepclause_mi:repl_set_authoring_examples('${this.sessionId}', ${quoteString(authoring)})`
-          );
-        }
-        const metaTemplate = await this.loadMetaPromptTemplate();
-        if (metaTemplate) {
-          this.prologQuery(
-            `deepclause_mi:repl_set_meta_template('${this.sessionId}', ${quoteString(metaTemplate)})`
-          );
-        }
-        const harnessExamples = await this.loadDocAsset('harness-examples');
-        if (harnessExamples) {
-          this.prologQuery(
-            `deepclause_mi:repl_set_harness_examples('${this.sessionId}', ${quoteString(harnessExamples)})`
-          );
-        }
-        const prologSnippets = await this.loadDocAsset('prolog-snippets');
-        if (prologSnippets) {
-          this.prologQuery(
-            `deepclause_mi:repl_set_prolog_snippets('${this.sessionId}', ${quoteString(prologSnippets)})`
-          );
-        }
-
-        // 2. Assemble the prompt and create the meta frame.
-        const promptResult = this.prologQuery(
-          `deepclause_mi:repl_meta_prompt('${this.sessionId}', ${quoteString(currentRequest)}, Prompt)`
-        );
-        const promptText = String(plainValue(promptResult?.Prompt) ?? '');
-        if (!promptText) {
-          this.prologQuery(`deepclause_mi:repl_snapshot_restore('${this.sessionId}')`);
-          lastError = 'failed to assemble the meta prompt';
-          break;
-        }
-
-        const meta = this.prologQuery(
-          `deepclause_mi:repl_run_meta('${this.sessionId}', ${quoteString(promptText)}, FrameId, Error)`
-        );
-        const metaError = plainValue(meta?.Error);
-        if (metaError !== 'none' || !meta?.FrameId) {
-          this.prologQuery(`deepclause_mi:repl_snapshot_restore('${this.sessionId}')`);
-          lastError = String(metaError ?? 'failed to create the meta frame');
-          break;
-        }
-
-        // 3. Run the meta task, streaming its events.
-        const metaFrame = this.runner.registerFrame(String(plainValue(meta.FrameId)), 'meta', 0);
-        // Build meta tools per agent-loop so nested `execute` output streams
-        // into the meta frame's event sequence.
-        const metaTools = (emit: (event: DMLEvent) => void) => createMetaTools({
-          sessionId: this.sessionId,
-          prologQuery: (goal) => this.prologQuery(goal),
-          isFrozen: () => this.isFrozen(),
-          executeGoal: (goal, limit, signal) => this.executeGoal(goal, limit, emit, signal),
-          askUser: async (prompt, choices) => {
-            const answer = await this.requireInput(prompt, choices);
-            return answer === undefined ? { cancelled: true } : { answer };
-          },
-          hostToolsCatalog: this.hostToolsCatalog,
-          onEvent: emit,
-          fileTools: {
-            read: (filePath) => this.readWorkspaceFile(filePath),
-            write: (filePath, content) => this.writeWorkspaceFile(filePath, content),
-            list: (dir) => this.listWorkspaceDir(dir),
-            remove: (filePath) => this.writeWorkspaceFile(filePath, null),
-          },
-        });
-
-        let code = '';
-        let answer = '';
-        let metaFailed: string | undefined;
-        this.frameDepth = 1;
-        try {
-          for await (const event of this.runner.runFrame(metaFrame.id, { ...runOptions, metaTools })) {
-            if (event.type === 'meta_result') {
-              code = event.metaResult?.code ?? '';
-              answer = event.metaResult?.answer ?? '';
-            } else if (event.type === 'error') {
-              // Only the meta frame's own errors abort the turn. An error from
-              // an `execute` child frame is a tool result the model can react
-              // to (it is still surfaced for rendering).
-              if (event.frameKind !== 'nested') {
-                metaFailed = event.content;
-              }
-              this.recordHistoryEvent(historyTurn, event);
-              yield event;
-            } else if (event.type !== 'finished') {
-              this.recordHistoryEvent(historyTurn, event);
-              yield event;
-            }
-          }
-        } catch (error) {
-          metaFailed = error instanceof Error ? error.message : String(error);
-          this.history?.recordEvent(
-            { turn: historyTurn, frame: 'meta' },
-            { type: 'error', content: metaFailed },
-          );
-          yield { type: 'error', content: metaFailed };
-        } finally {
-          this.runner.endFrame(metaFrame.id);
-          this.frameDepth = 0;
-        }
-
-        // Aborted turn: preserve the scratch state to a temp file, then restore
-        // the committed harness (the turn stays atomic).
-        if (options.signal?.aborted) {
-          historyOutcome = 'aborted';
-          const saved = await this.saveCurrentHarness('cancelled');
-          this.prologQuery(`deepclause_mi:repl_snapshot_restore('${this.sessionId}')`);
-          yield {
-            type: 'error',
-            content: saved ? `turn aborted; current harness saved to ${saved}` : 'turn aborted',
-          };
-          lastError = 'turn aborted';
-          break;
-        }
-
-        // A failed or empty meta turn (iteration cap, budget, model error):
-        // save the scratch module + linked scripts BEFORE discarding the
-        // transaction, so the author's work is recoverable, then abort.
-        if (metaFailed || (!code.trim() && !answer.trim())) {
-          historyOutcome = 'failed';
-          const saved = await this.saveCurrentHarness(
-            metaFailed ? 'meta task failed' : 'meta task produced no DML',
-          );
-          this.prologQuery(`deepclause_mi:repl_snapshot_restore('${this.sessionId}')`);
-          lastError = (metaFailed
-            ? `meta task failed: ${metaFailed}`
-            : 'the meta task returned no DML source or answer')
-            + (saved ? ` (current harness saved to ${saved})` : '');
-          break;
-        }
-
-        // 4. Discard scratch edits.
-        this.prologQuery(`deepclause_mi:repl_snapshot_restore('${this.sessionId}')`);
-
-        // Direct answer: a simple question the model answered without changing
-        // the harness. Render the reply and skip the commit entirely.
-        if (!code.trim() && answer.trim()) {
-          historyOutcome = 'answered';
-          const reply = answer.trim();
-          yield { type: 'output', content: reply };
-          const summary = `answered: ${reply.length > 200 ? `${reply.slice(0, 197)}…` : reply}`;
-          this.prologQuery(
-            `deepclause_mi:repl_record_meta('${this.sessionId}', ${quoteString(request)}, ${quoteString(summary)})`
-          );
-          succeeded = true;
-          break;
-        }
-
-        // 5. Strip an optional ```dml fence, then commit.
-        const extract = this.prologQuery(
-          `deepclause_mi:repl_extract_code(${quoteString(code)}, Source)`
-        );
-        const source = String(plainValue(extract?.Source) ?? code);
-        const commit = this.prologQuery(
-          `deepclause_mi:repl_commit('${this.sessionId}', ${quoteString(source)}, Result)`
-        );
-        const result = plainValue(commit?.Result);
-        if (result !== 'ok') {
-          lastError = String(result ?? 'commit failed');
-          currentRequest = `${request}\n\nYour previous response was rejected: ${lastError}. Return the complete corrected DML.`;
-          continue;
-        }
-        succeeded = true;
-        historyOutcome = 'committed';
-        historyVersion = await this.recordHistoryChange('commit', historyTurn, historyBefore);
-
-        // 6. Summarize the commit. Running is the meta task's job (via execute).
-        const committed = this.lastCommitPredicates();
-        const summary = committed ? `committed ${committed}` : 'committed (no predicates)';
-
-        // 7. Record the prompt + outcome in bounded meta memory.
-        this.prologQuery(
-          `deepclause_mi:repl_record_meta('${this.sessionId}', ${quoteString(request)}, ${quoteString(summary)})`
-        );
-      }
-    } finally {
-      yield {
-        type: 'task_activity',
-        taskState: succeeded ? 'completed' : 'failed',
-        taskDescription: request,
-      };
-    }
-
-    if (!succeeded) {
-      yield { type: 'error', content: lastError ?? 'prompt failed' };
-    }
-
-    await this.finishHistoryTurn({
-      turn: historyTurn,
-      mode: 'prompt',
-      request,
-      outcome: historyOutcome,
-      commitVersion: historyVersion,
-      durationMs: Date.now() - historyStart,
-      modelCalls: this.modelCallsThisTurn,
-      error: succeeded ? undefined : lastError,
-    });
+    yield* this.agentPrompt(request, options);
   }
 
   async dispose(): Promise<void> {
@@ -1553,52 +1316,15 @@ export class DMLSession {
       : { messages };
   }
 
-  /** Session compaction: compact meta memory before assembling the meta prompt. */
-  private async compactMetaMemory(
-    force: boolean,
-    signal?: AbortSignal,
-    customInstructions?: string,
-  ): Promise<{ event?: DMLEvent; result?: import('./compaction.js').CompactMemoryResult }> {
-    const settings = this.compactionSettings;
-    if (!settings?.enabled || !this.llmBackend) {
-      return {};
-    }
-    const messages = this.getMemory('meta');
-    if (messages.length === 0) {
-      return {};
-    }
-    const result = await compactMemory({
-      messages,
-      backend: this.llmBackend,
-      model: this.model,
-      contextWindow: this.contextWindow,
-      settings,
-      signal,
-      customInstructions,
-      force,
-    });
-    if (result.applied) {
-      this.setMemory('meta', result.messages);
-      try {
-        if (this.history) {
-          await this.persistSessionHarness(this.history.currentVersion);
-        }
-      } catch (error) {
-        this.warnHistory(error);
-      }
-    }
-    return { event: this.compactionEvent('session', 'before_user_message', result), result };
-  }
-
   /**
-   * Explicitly compact the session (meta) memory. Used by `compact.` and the
-   * `--compact` flag; returns the before/after token counts.
+   * Explicitly compact the authoring conversation. Used by `compact.`; returns
+   * the before/after token counts.
    */
   async compact(customInstructions?: string): Promise<{ applied: boolean; beforeTokens: number; afterTokens: number; error?: string }> {
-    const { result } = await this.compactMetaMemory(true, undefined, customInstructions);
-    if (!result) {
+    if (!this.harnessAgent) {
       return { applied: false, beforeTokens: 0, afterTokens: 0, error: 'compaction is disabled' };
     }
+    const result = await this.harnessAgent.compactMemory(true, undefined, customInstructions);
     return {
       applied: result.applied,
       beforeTokens: result.tokensBefore,

@@ -3,7 +3,7 @@
  *
  * Consumes the same `DMLEvent` stream the renderer sees and maintains:
  *  - cumulative tokens in/out (and cache/reasoning) for the whole session;
- *  - a split between the `meta` (harness authoring) frame and child frames;
+ *  - a split between the `agent` (harness authoring) frame and child frames;
  *  - the active frame's context usage (last prompt tokens vs. context window);
  *  - the current model + reasoning level.
  *
@@ -18,8 +18,8 @@ import {
   type TokenUsageTotals,
 } from '../system/runtime/token-usage.js';
 
-export type StatusFrameGroup = 'meta' | 'child' | 'judge';
-export type StatusFrameSlot = 'meta' | 'harness';
+export type StatusFrameGroup = 'agent' | 'child' | 'judge';
+export type StatusFrameSlot = 'agent' | 'harness';
 
 export interface StatusModelInfo {
   id: string;
@@ -50,7 +50,7 @@ export interface ReplStatusSnapshot {
   activeGroup: StatusFrameGroup | 'idle';
   activeDepth: number;
   activeSlot: StatusFrameSlot;
-  context: { meta: StatusContextUsage; harness: StatusContextUsage };
+  context: { agent: StatusContextUsage; harness: StatusContextUsage };
   /** Context for the currently active slot. */
   activeContext: StatusContextUsage;
   latestCacheHitRate?: number;
@@ -60,8 +60,8 @@ export interface ReplStatusSnapshot {
 export interface ReplStatusTrackerOptions {
   model: StatusModelInfo;
   contextWindow?: number;
-  /** Estimated meta memory tokens before the first model call. */
-  metaTokens?: number;
+  /** Estimated agent memory tokens before the first model call. */
+  agentTokens?: number;
   /** Estimated harness memory tokens before the first child model call. */
   harnessTokens?: number;
 }
@@ -94,18 +94,18 @@ export class ReplStatusTracker {
   private contextWindow: number;
   private readonly totals = createTokenUsageTotals();
   private readonly byGroup: Record<StatusFrameGroup, TokenUsageTotals> = {
-    meta: createTokenUsageTotals(),
+    agent: createTokenUsageTotals(),
     child: createTokenUsageTotals(),
     judge: createTokenUsageTotals(),
   };
   private activeGroup: StatusFrameGroup | 'idle' = 'idle';
   private activeDepth = 0;
   private lastPromptTokens: Record<StatusFrameGroup, number | null> = {
-    meta: null,
+    agent: null,
     child: null,
     judge: null,
   };
-  private estimated: { meta: number | null; harness: number | null };
+  private estimated: { agent: number | null; harness: number | null };
   private latestCacheHitRate?: number;
   private compaction?: StatusCompactionInfo;
 
@@ -113,7 +113,7 @@ export class ReplStatusTracker {
     this.model = options.model;
     this.contextWindow = options.contextWindow ?? 0;
     this.estimated = {
-      meta: options.metaTokens ?? null,
+      agent: options.agentTokens ?? null,
       harness: options.harnessTokens ?? null,
     };
   }
@@ -125,8 +125,8 @@ export class ReplStatusTracker {
 
   /** Seed the pre-call context estimate for a slot. */
   setEstimatedTokens(slot: StatusFrameSlot, tokens: number | null): void {
-    if (slot === 'meta') {
-      this.estimated.meta = tokens;
+    if (slot === 'agent') {
+      this.estimated.agent = tokens;
     } else {
       this.estimated.harness = tokens;
     }
@@ -138,9 +138,8 @@ export class ReplStatusTracker {
       return 'judge';
     }
     const kind: FrameKind | undefined = event.frameKind;
-    if (kind === 'meta') return 'meta';
     if (kind === 'nested' || kind === 'object' || kind === 'query') return 'child';
-    return this.activeGroup === 'meta' ? 'meta' : 'child';
+    return 'agent';
   }
 
   observe(event: DMLEvent): void {
@@ -179,12 +178,12 @@ export class ReplStatusTracker {
           afterTokens: event.afterTokens ?? event.beforeTokens ?? 0,
         };
         // After a compaction the exact size is unknown until the next call.
-        this.lastPromptTokens.meta = null;
+        this.lastPromptTokens.agent = null;
         this.lastPromptTokens.child = null;
         break;
       case 'task_activity':
-        if (event.taskState === 'started' && event.frameKind === 'meta') {
-          this.activeGroup = 'meta';
+        if (event.taskState === 'started' && !event.frameKind) {
+          this.activeGroup = 'agent';
         }
         break;
       default:
@@ -193,21 +192,21 @@ export class ReplStatusTracker {
   }
 
   private slotUsage(slot: StatusFrameSlot): StatusContextUsage {
-    const isMeta = slot === 'meta';
-    const observed = isMeta ? this.lastPromptTokens.meta : this.lastPromptTokens.child;
-    const fallback = isMeta ? this.estimated.meta : this.estimated.harness;
+    const isAgent = slot === 'agent';
+    const observed = isAgent ? this.lastPromptTokens.agent : this.lastPromptTokens.child;
+    const fallback = isAgent ? this.estimated.agent : this.estimated.harness;
     return emptyContext(this.contextWindow, observed ?? fallback);
   }
 
   snapshot(): ReplStatusSnapshot {
-    const context = { meta: this.slotUsage('meta'), harness: this.slotUsage('harness') };
-    const activeSlot: StatusFrameSlot = this.activeGroup === 'meta' ? 'meta' : 'harness';
-    const activeContext = activeSlot === 'meta' ? context.meta : context.harness;
+    const context = { agent: this.slotUsage('agent'), harness: this.slotUsage('harness') };
+    const activeSlot: StatusFrameSlot = this.activeGroup === 'agent' ? 'agent' : 'harness';
+    const activeContext = activeSlot === 'agent' ? context.agent : context.harness;
     return {
       model: { ...this.model },
       totals: cloneTotals(this.totals),
       byGroup: {
-        meta: cloneTotals(this.byGroup.meta),
+        agent: cloneTotals(this.byGroup.agent),
         child: cloneTotals(this.byGroup.child),
         judge: cloneTotals(this.byGroup.judge),
       },
@@ -238,9 +237,9 @@ export function formatUsageSegment(snapshot: ReplStatusSnapshot): string {
   return parts.join(' ');
 }
 
-/** The context segment: `meta 9.4k/128k 7%` for the active slot. */
+/** The context segment: `agent 9.4k/128k 7%` for the active slot. */
 export function formatContextSegment(snapshot: ReplStatusSnapshot): string {
-  const slot = snapshot.activeSlot === 'meta' ? 'meta' : 'run';
+  const slot = snapshot.activeSlot === 'agent' ? 'agent' : 'run';
   const { tokens, contextWindow, percent } = snapshot.activeContext;
   if (contextWindow <= 0) {
     return `${slot} ?`;

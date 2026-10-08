@@ -139,12 +139,9 @@ const ReplConfigSchema = z.object({
   // 0 means unlimited.
   maxModelCalls: z.number().int().nonnegative().optional().default(100),
   writeDepth: z.number().int().positive().optional().default(20),
-  repairRounds: z.number().int().nonnegative().optional().default(1),
   promptPrefix: z.string().optional().default('dml> '),
   /** Interactive UI: auto (TUI on a TTY), on, or off (line mode). */
   tui: z.enum(['auto', 'on', 'off']).optional().default('auto'),
-  /** Authoring implementation: the TypeScript agent (default) or the DML meta frame. */
-  authoring: z.enum(['agent', 'meta']).optional().default('agent'),
   /** Agent authoring: embed the DML reference/authoring guides in the prompt, or use the reference tool. */
   agentDocs: z.enum(['embed', 'tool']).optional().default('embed'),
   render: z.enum(['rich', 'plain', 'json']).optional(),
@@ -269,10 +266,8 @@ const DEFAULT_CONFIG: Config = {
     maxDepth: 3,
     maxModelCalls: 100,
     writeDepth: 20,
-    repairRounds: 1,
     promptPrefix: 'dml> ',
     tui: 'auto' as const,
-    authoring: 'agent' as const,
     agentDocs: 'embed' as const,
     showReasoning: 'summary',
     showToolArgs: true,

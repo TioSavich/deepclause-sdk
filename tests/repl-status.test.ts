@@ -29,25 +29,25 @@ function tracker(contextWindow = 100_000) {
 }
 
 describe('ReplStatusTracker', () => {
-  it('accumulates totals and splits meta vs child frames', () => {
+  it('accumulates totals and splits agent vs child frames', () => {
     const status = tracker();
-    status.observe({ ...usage(100, 20), frameKind: 'meta' });
+    status.observe({ ...usage(100, 20) });
     status.observe({ ...usage(200, 40), frameKind: 'object' });
     status.observe({ ...usage(300, 60), frameKind: 'nested' });
 
     const snapshot = status.snapshot();
     expect(snapshot.totals.inputTokens).toBe(600);
     expect(snapshot.totals.outputTokens).toBe(120);
-    expect(snapshot.byGroup.meta.inputTokens).toBe(100);
+    expect(snapshot.byGroup.agent.inputTokens).toBe(100);
     expect(snapshot.byGroup.child.inputTokens).toBe(500);
   });
 
   it('tracks the active frame and depth from model_call/usage', () => {
     const status = tracker();
-    status.observe({ type: 'model_call', modelCallState: 'started', frameKind: 'meta', depth: 0 });
-    status.observe({ ...usage(100, 10), frameKind: 'meta', depth: 0 });
-    expect(status.snapshot().activeGroup).toBe('meta');
-    expect(status.snapshot().activeSlot).toBe('meta');
+    status.observe({ type: 'model_call', modelCallState: 'started', depth: 0 });
+    status.observe({ ...usage(100, 10), depth: 0 });
+    expect(status.snapshot().activeGroup).toBe('agent');
+    expect(status.snapshot().activeSlot).toBe('agent');
 
     status.observe({ type: 'model_call', modelCallState: 'started', frameKind: 'object', depth: 1 });
     status.observe({ ...usage(50, 5), frameKind: 'object', depth: 1 });
@@ -58,13 +58,13 @@ describe('ReplStatusTracker', () => {
 
   it('uses last prompt tokens as context and falls back to estimates', () => {
     const status = tracker(10_000);
-    status.setEstimatedTokens('meta', 2_000);
-    expect(status.snapshot().context.meta.tokens).toBe(2_000);
-    expect(status.snapshot().context.meta.percent).toBeCloseTo(20);
+    status.setEstimatedTokens('agent', 2_000);
+    expect(status.snapshot().context.agent.tokens).toBe(2_000);
+    expect(status.snapshot().context.agent.percent).toBeCloseTo(20);
 
-    status.observe({ ...usage(3_000, 100, 500), frameKind: 'meta' });
-    expect(status.snapshot().context.meta.tokens).toBe(3_500);
-    expect(status.snapshot().context.meta.percent).toBeCloseTo(35);
+    status.observe({ ...usage(3_000, 100, 500) });
+    expect(status.snapshot().context.agent.tokens).toBe(3_500);
+    expect(status.snapshot().context.agent.percent).toBeCloseTo(35);
   });
 
   it('computes the cache hit rate from prompt tokens', () => {
@@ -85,8 +85,8 @@ describe('ReplStatusTracker', () => {
 
   it('clears the observed context after a compaction', () => {
     const status = tracker();
-    status.observe({ ...usage(4_000, 100), frameKind: 'meta' });
-    expect(status.snapshot().context.meta.tokens).toBe(4_000);
+    status.observe({ ...usage(4_000, 100) });
+    expect(status.snapshot().context.agent.tokens).toBe(4_000);
     status.observe({
       type: 'memory_compaction',
       compactionScope: 'session',
@@ -96,7 +96,7 @@ describe('ReplStatusTracker', () => {
       afterTokens: 900,
     });
     const snapshot = status.snapshot();
-    expect(snapshot.context.meta.tokens).toBeNull();
+    expect(snapshot.context.agent.tokens).toBeNull();
     expect(snapshot.compaction).toMatchObject({ beforeTokens: 4_100, afterTokens: 900, action: 'applied' });
   });
 });
@@ -115,11 +115,11 @@ describe('status formatting', () => {
 
   it('renders usage, context, and model segments', () => {
     const status = tracker(10_000);
-    status.observe({ ...usage(1_000, 100, 1_000), frameKind: 'meta' });
+    status.observe({ ...usage(1_000, 100, 1_000) });
     const snapshot = status.snapshot();
     expect(formatUsageSegment(snapshot)).toContain('↑1.0k');
     expect(formatUsageSegment(snapshot)).toContain('CH50%');
-    expect(formatContextSegment(snapshot)).toBe('meta 2.0k/10k 20%');
+    expect(formatContextSegment(snapshot)).toBe('agent 2.0k/10k 20%');
     expect(formatModelSegment(snapshot)).toBe('gpt-4o · medium');
     expect(formatStatusLine(snapshot)).toContain('gpt-4o · medium');
   });

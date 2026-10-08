@@ -321,7 +321,7 @@ export class ReplRenderer {
     // tracker still observes every event via `eventSink`.
     if (
       event.type === 'task_activity'
-      && (!event.frameKind || event.frameKind === 'meta')
+      && !event.frameKind
     ) {
       return;
     }
@@ -405,9 +405,6 @@ export class ReplRenderer {
   }
 
   private describeTask(event: DMLEvent): string {
-    if (event.frameKind === 'meta') {
-      return 'meta task (writing the harness)';
-    }
     const description = (event.taskDescription ?? '').replace(/\s+/g, ' ').trim();
     if (!description) return 'task';
     return description.length > 72 ? `${description.slice(0, 69)}…` : description;

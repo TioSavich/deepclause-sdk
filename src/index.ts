@@ -37,7 +37,7 @@ export { DMLSession } from './repl/session.js';export type { HarnessRepl, Harnes
 export type { DMLSessionOptions, DMLQueryOptions } from './repl/session.js';
 export { formatListing, highlightProlog, reflowListing } from './repl/highlight.js';
 
-// TypeScript authoring agent (`repl.authoring: 'agent'`)
+// TypeScript authoring agent
 export { HarnessAgent, buildAgentSystemPrompt, describeTools } from './repl/agent.js';
 export type { HarnessAgentOptions, HarnessAgentRunOptions } from './repl/agent.js';
 export { createHarnessTools } from './repl/harness-tools.js';

@@ -442,11 +442,10 @@ export interface DeepClauseSDK {
  * Kind of execution frame in the runner's reentrant frame stack.
  *
  * - `query`  — the default engine created by `runDML` (one solution / agent_main)
- * - `meta`   — the REPL's code-writing task frame (meta tools only)
- * - `nested` — an `execute` child frame run inside a meta task
+ * - `nested` — an `execute` child frame run by the authoring agent
  * - `object` — a harness run after a prompt commit (runtime tool policy)
  */
-export type FrameKind = 'query' | 'meta' | 'nested' | 'object';
+export type FrameKind = 'query' | 'nested' | 'object';
 
 /**
  * Variable with type information for type-safe LLM outputs

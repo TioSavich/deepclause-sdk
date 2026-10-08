@@ -167,8 +167,7 @@ describe('execute recursion', () => {
           text: '',
           toolCalls: [
             { name: 'execute', arguments: { goal: 'task("nested ask", R), output(R)' } },
-            { name: 'set_result', arguments: { variable: 'DMLCode', value: 'kept(1).' } },
-      { name: 'set_result', arguments: { variable: 'Answer', value: '' } },
+            { name: 'assert_many', arguments: { clauses: 'kept(1).' } },
             { name: 'finish', arguments: { success: true } },
           ],
         };
@@ -271,28 +270,6 @@ describe('budgets', () => {
     const events = await collect(repl.prompt('spend the budget'));
     expect(events.some((event) => event.type === 'error' && event.content?.includes('budget'))).toBe(true);
     expect(hasSolution(await collect(repl.query('kept(_)')))).toBe(false);
-  });
-
-  it('asks to extend the model-call budget and continues when the user agrees', async () => {
-    const prompts: string[] = [];
-    backend = new CannedBackend((_request, index) => {
-      if (index === 0) {
-        return { text: '', toolCalls: [{ name: 'listing', arguments: { filter: 'all' } }] };
-      }
-      return finalResponse('kept(1).', '');
-    });
-    repl = await openRepl({
-      maxModelCalls: 1,
-      onInput: async (prompt: string) => {
-        prompts.push(prompt);
-        return 'yes';
-      },
-    });
-
-    const events = await collect(repl.prompt('extend the budget'));
-    expect(events.some((event) => event.type === 'error')).toBe(false);
-    expect(prompts.some((prompt) => /budget/.test(prompt))).toBe(true);
-    expect(hasSolution(await collect(repl.query('kept(_)')))).toBe(true);
   });
 
   it('aborts when the user declines to extend the budget', async () => {

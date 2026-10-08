@@ -40,8 +40,7 @@ function commitResponse(code: string): CannedResponse {
   return {
     text: '',
     toolCalls: [
-      { name: 'set_result', arguments: { variable: 'DMLCode', value: code } },
-      { name: 'set_result', arguments: { variable: 'Answer', value: '' } },
+      { name: 'assert_many', arguments: { clauses: code } },
       { name: 'finish', arguments: { success: true } },
     ],
   };

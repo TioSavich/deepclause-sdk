@@ -247,14 +247,6 @@ export interface InternalRunOptions {
   /** Per-run default judgment backend name override. */
   judgeBackend?: string;
   /**
-   * Host-backed meta tools for `meta` frames. When set, a meta frame's agent
-   * tool set is replaced with exactly these tools (the harness's DML tools are
-   * hidden from the code-writing model). The factory receives an `emit`
-   * callback so nested work (e.g. the `execute` tool) can stream its events
-   * into the meta frame's output in sequence.
-   */
-  metaTools?: (emit: (event: DMLEvent) => void) => Map<string, ToolDefinition>;
-  /**
    * Called before each model call. Return false to abort the turn when a
    * budget is exhausted; may be async (e.g. to ask the user to continue).
    */
@@ -869,7 +861,7 @@ export class DMLRunner {
     payload: unknown,
     _memoryId: string, // No longer used - memory comes from payload
     options: InternalRunOptions,
-    frame?: Frame
+    _frame?: Frame
   ): AsyncGenerator<DMLEvent> {
     const rawPayload = payload as Record<string, unknown>;
     const taskDescription = String(toJsValue(rawPayload.taskDescription) ?? '');
@@ -991,44 +983,31 @@ export class DMLRunner {
       emitToolEvent({ type: 'tool_call', toolName, toolArgs: args });
     };
 
-    // Build available tools for the agent.
-    //
-    // For `meta` frames the tool set is *replaced* (not augmented) with the
-    // host meta tools; the harness's own DML tools are hidden from the
-    // code-writing model. For all other frames only DML tool/2 predicates are
-    // offered, and registered TS tools remain reachable via exec/2.
-    const isMetaFrame = frame?.kind === 'meta';
-    // The meta frame gets the meta tools plus the capability host tools (bash by
-    // default) so the author can probe the environment and run commands. Harness
-    // tool/2 predicates stay hidden. Meta tools win on name collisions.
-    const metaTools = isMetaFrame && options.metaTools ? options.metaTools(emitToolEvent) : undefined;
-    // Meta tools emit their own completion events via `notify`; everything else
-    // (e.g. bash) gets a generic completion so the host can preview output.
-    const selfReportingTools = metaTools ? new Set(metaTools.keys()) : undefined;
-    const availableTools = metaTools
-      ? new Map([...options.tools, ...metaTools])
-      : this.buildAgentTools(
-        userTools,
-        options.toolPolicy,
-        async (toolName: string, args: Record<string, unknown>) => {
-          return this.executeToolIsolated(
-            toolName,
-            args,
-            augmentedTools,
-            onToolOutput,
-            {
-              workspacePath: options.workspacePath,
-              signal: options.signal,
-              compaction: options.compaction,
-              toolPolicy: options.toolPolicy,
-              onModelCall: options.onModelCall,
-            },
-            [],
-            emitToolCall,
-            emitToolEvent,
-          );
-        }
-      );
+    // Build available tools for the agent: the harness's DML tool/2 predicates
+    // plus registered TS tools (reachable via exec/2).
+    const selfReportingTools = undefined;
+    const availableTools = this.buildAgentTools(
+      userTools,
+      options.toolPolicy,
+      async (toolName: string, args: Record<string, unknown>) => {
+        return this.executeToolIsolated(
+          toolName,
+          args,
+          augmentedTools,
+          onToolOutput,
+          {
+            workspacePath: options.workspacePath,
+            signal: options.signal,
+            compaction: options.compaction,
+            toolPolicy: options.toolPolicy,
+            onModelCall: options.onModelCall,
+          },
+          [],
+          emitToolCall,
+          emitToolEvent,
+        );
+      },
+    );
 
     // Run agent loop with streaming support
     const resultPromise = runAgentLoop({

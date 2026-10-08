@@ -9,8 +9,7 @@ export type WorkspaceDocAssetName =
   | 'dml-reference'
   | 'dml-authoring'
   | 'harness-examples'
-  | 'prolog-snippets'
-  | 'meta-prompt';
+  | 'prolog-snippets';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -57,18 +56,11 @@ function getWorkspaceDocFileName(name: WorkspaceDocAssetName): string {
       return 'HARNESS_EXAMPLES.md';
     case 'prolog-snippets':
       return 'PROLOG_SNIPPETS.md';
-    case 'meta-prompt':
-      return 'META_PROMPT.md';
   }
 }
 
 export function getWorkspaceDocAssetPath(name: WorkspaceDocAssetName): string {
   return join(DOCS_DIR, getWorkspaceDocFileName(name));
-}
-
-/** Bundled meta-prompt template (`META_PROMPT.md`), used by the REPL meta task. */
-export function getMetaPromptAssetPath(): string {
-  return getWorkspaceDocAssetPath('meta-prompt');
 }
 
 /** Bundled authoring-agent system prompt (`AGENT_PROMPT.md`). */

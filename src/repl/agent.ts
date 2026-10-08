@@ -18,7 +18,7 @@ import type {
   MemoryMessage,
   ToolDefinition,
 } from '../types.js';
-import { compactMemory, shouldCompact, type CompactionSettings } from './compaction.js';
+import { compactMemory, shouldCompact, type CompactionSettings, type CompactMemoryResult } from './compaction.js';
 import type { HarnessToolController } from './harness-tools.js';
 
 export interface HarnessAgentOptions {
@@ -135,6 +135,17 @@ function stringifyToolResult(result: unknown): string {
     : text;
 }
 
+/** A tool that returned `{ ok: false }` or `{ error }` should render as failed. */
+function toolResultFailure(result: unknown): string | undefined {
+  if (!result || typeof result !== 'object') return undefined;
+  const record = result as Record<string, unknown>;
+  if (record.ok === false) {
+    return typeof record.error === 'string' && record.error ? record.error : 'failed';
+  }
+  if (typeof record.error === 'string' && record.error) return record.error;
+  return undefined;
+}
+
 /**
  * A multi-turn authoring agent. `run` yields `DMLEvent`s (streaming text,
  * reasoning, tool calls, usage, errors) and follows the tool loop until the
@@ -179,6 +190,31 @@ export class HarnessAgent {
     if (!trimmed) return;
     this.pendingSteers.push(trimmed);
     this.steerAbort?.abort();
+  }
+
+  /**
+   * Compact the agent's own conversation. `force` ignores the threshold (used by
+   * the manual `compact.` command); the loop hook checks the threshold itself.
+   */
+  async compactMemory(force = false, signal?: AbortSignal, customInstructions?: string): Promise<CompactMemoryResult> {
+    const settings = this.options.compaction?.settings;
+    if (!settings?.enabled) {
+      return { applied: false, reason: 'disabled', messages: this.getMessages(), tokensBefore: 0, tokensAfter: 0 };
+    }
+    const result = await compactMemory({
+      messages: toMemoryMessages(this.messages),
+      backend: this.options.llmBackend,
+      model: this.options.model,
+      contextWindow: this.options.contextWindow,
+      settings,
+      signal,
+      customInstructions,
+      force,
+    });
+    if (result.applied) {
+      this.messages = fromMemoryMessages(result.messages);
+    }
+    return result;
   }
 
   async *run(request: string, options: HarnessAgentRunOptions = {}): AsyncGenerator<DMLEvent> {
@@ -240,21 +276,12 @@ export class HarnessAgent {
       }
 
       if (autoCompact && settings?.enabled && this.options.contextWindow) {
-        const projected = toMemoryMessages(this.messages);
         if (shouldCompact(lastInputTokens ?? 0, this.options.contextWindow, settings)) {
-          const result = await compactMemory({
-            messages: projected,
-            backend: llmBackend,
-            model: this.options.model,
-            contextWindow: this.options.contextWindow,
-            settings,
-            signal: options.signal,
-          });
+          const result = await this.compactMemory(true, options.signal);
           if (result.applied) {
-            this.messages = fromMemoryMessages(result.messages);
             yield {
               type: 'memory_compaction',
-              content: `compact session.before_model_call applied ${result.tokensBefore} -> ${result.tokensAfter} tokens`,
+              content: `compact agent.before_model_call applied ${result.tokensBefore} -> ${result.tokensAfter} tokens`,
               compactionScope: 'session',
               compactionTrigger: 'before_model_call',
               compactionAction: 'applied',
@@ -387,11 +414,15 @@ export class HarnessAgent {
         }
         while (toolEvents.length > 0) yield toolEvents.shift()!;
         await toolPromise;
-        if (toolFailure) {
-          result = { error: toolFailure instanceof Error ? toolFailure.message : String(toolFailure) };
+        const failureMessage = toolFailure
+          ? (toolFailure instanceof Error ? toolFailure.message : String(toolFailure))
+          : toolResultFailure(result);
+        const text = stringifyToolResult(failureMessage ? { error: failureMessage } : result);
+        if (failureMessage) {
+          yield { type: 'tool_call', toolName: call.name, toolArgs: call.arguments, toolState: 'failed', toolError: text.slice(0, 200) };
+        } else {
+          yield { type: 'tool_call', toolName: call.name, toolArgs: call.arguments, toolState: 'completed', toolSummary: text.slice(0, 200) };
         }
-        const text = stringifyToolResult(result);
-        yield { type: 'tool_call', toolName: call.name, toolArgs: call.arguments, toolState: 'completed', toolSummary: text.slice(0, 200) };
         this.messages.push({ role: 'tool', content: text, toolCallId: call.id, toolName: call.name });
       }
     }

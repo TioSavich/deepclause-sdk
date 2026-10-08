@@ -50,14 +50,8 @@ function finalResponse(code: string, run?: string): CannedResponse {
   return {
     text: 'Here is the harness.',
     toolCalls: [
-      ...(run
-        ? [
-            { name: 'assert_many', arguments: { clauses: code } },
-            { name: 'execute', arguments: { goal: run } },
-          ]
-        : []),
-      { name: 'set_result', arguments: { variable: 'DMLCode', value: code } },
-      { name: 'set_result', arguments: { variable: 'Answer', value: '' } },
+      ...(code.trim() ? [{ name: 'assert_many', arguments: { clauses: code } }] : []),
+      ...(run ? [{ name: 'execute', arguments: { goal: run } }] : []),
       { name: 'finish', arguments: { success: true } },
     ],
   };
@@ -190,96 +184,11 @@ describe('prompt mode', () => {
     expect(listing).toContain('demo/0');
   });
 
-  it('includes the bundled DML reference and guard rails in the meta prompt', async () => {
-    backend = new CannedBackend([finalResponse('kept(1).', '')]);
-    repl = await openRepl();
-    await collect(repl.prompt('build something'));
+  
 
-    const promptText = backend.calls[0].messages.map((message) => message.content).join('\n');
-    expect(promptText).toContain('DML LANGUAGE REFERENCE');
-    expect(promptText).toContain('# DML Language Reference');
-    expect(promptText).toContain('DML AUTHORING GUIDE');
-    expect(promptText).toContain('IDIOMATIC HARNESS EXAMPLES');
-    expect(promptText).toContain('COMMON PROLOG SNIPPETS');
-    expect(promptText).toContain('script_file(');
-    expect(promptText).toContain('tool(count_words(File, Count)');
-    expect(promptText).toContain('wildcard_match(');
-    expect(promptText).toContain('doc(Name/Arity, Text)');
-    expect(promptText).toContain('BOUNDED ITERATION');
-    expect(promptText).toContain('CLAUSE ORDER MATTERS');
-    expect(promptText).toContain('WHAT A HARNESS IS');
-    expect(promptText).toContain('living library of reusable DML SKILLS');
-    expect(promptText).toContain('DATA = CODE');
-    expect(promptText).toContain('TESTS');
-    expect(promptText).toContain('bash access to a sandbox');
-    expect(promptText).toContain('HISTORY: the harness remembers');
-    expect(promptText).toContain('harness_change/5');
-    expect(promptText).toContain('EVOLVE ONLY WHEN ASKED');
-    // Media handling is taught by the contract, reference, and authoring guide.
-    expect(promptText).toContain('MEDIA (images)');
-    expect(promptText).toContain('Media Predicates');
-    expect(promptText).toContain('attach_media');
-    // Skills must generalize into composable primitives, not task-shaped
-    // one-off scripts with a predicate per request.
-    expect(promptText).toContain("GENERALIZE, DON'T SPECIALIZE");
-    expect(promptText).toContain('composable primitives');
-    expect(promptText).toContain('another caller would plausibly reuse');
-    // Distinguish reusable capabilities from one-off actions, and forbid
-    // environment-specific values in committed predicates.
-    expect(promptText).toContain('SKILLS VS ONE-SHOT WORK');
-    expect(promptText).toContain('NO HARDCODED ENVIRONMENT');
-    expect(promptText).toContain('describe_image(Path, Text)');
-    // Skills are orchestration, not hand-written Prolog algorithms.
-    expect(promptText).toContain('KEEP SKILLS ABSTRACT');
-    expect(promptText).toContain('orchestration layer over model calls, not a logic library');
-    // CLP is bounded and discouraged for ordinary arithmetic.
-    expect(promptText).toContain('bound every domain');
-    expect(promptText).toContain('no per-goal timeout');
-    // Prefer the shell over Prolog file I/O.
-    expect(promptText).toContain('FILE I/O: prefer the shell');
-    expect(promptText).toContain('Prefer the shell for file I/O');
-    // Workspace-relative paths, determinism, and whole-predicate redefinition.
-    expect(promptText).toContain('PATHS: every path in DML is workspace-relative');
-    expect(promptText).toContain('DETERMINISM:');
-    expect(promptText).toContain('REDEFINE A PREDICATE WHOLE');
-    expect(promptText).toContain('File I/O and paths');
-  });
+  
 
-  it('keeps meta memory clean: raw request/outcome pairs, not the assembled prompt', async () => {
-    backend = new CannedBackend([finalResponse('p1(1).', ''), finalResponse('p2(1).', '')]);
-    repl = await openRepl();
-    await collect(repl.prompt('first request alpha'));
-    await collect(repl.prompt('second request beta'));
-
-    const secondCall = backend.calls[backend.calls.length - 1];
-    const promptPrefixed = secondCall.messages.filter((message) => message.content.startsWith('Subtask:'));
-    // Only the current turn's assembled prompt may appear; it is ephemeral.
-    expect(promptPrefixed).toHaveLength(1);
-
-    // Exclude the system prompt (it embeds the current turn's task text) and the
-    // current `Subtask:` message; the remainder is the persisted meta memory.
-    const persisted = secondCall.messages
-      .filter((message) => message.role !== 'system' && !message.content.startsWith('Subtask:'))
-      .map((message) => message.content)
-      .join('\n');
-    expect(persisted).not.toContain('You are the DeepClause REPL harness author');
-    expect(persisted).toContain('first request alpha');
-    expect(persisted).toContain('committed p1/1');
-  });
-
-  it('offers bash plus the file meta tools to the meta task', async () => {
-    backend = new CannedBackend([finalResponse('kept(1).', '')]);
-    repl = await openRepl();
-    await collect(repl.prompt('anything'));
-
-    const toolNames = (backend.calls[0].tools ?? []).map((tool) => tool.name);
-    expect(toolNames).toContain('bash');
-    expect(toolNames).toContain('listing');
-    expect(toolNames).toContain('write_file');
-    expect(toolNames).toContain('read_file');
-    expect(toolNames).toContain('list_files');
-    expect(toolNames).toContain('delete_file');
-  });
+  
 
   it('write_file lands on disk immediately (the same turn can read it)', async () => {
     backend = new CannedBackend([{
@@ -399,45 +308,9 @@ describe('prompt mode', () => {
     expect(outputs).toContain('Canberra');
   });
 
-  it('extracts and commits a fenced dml block', async () => {
-    const fenced = ['```dml', 'demo :- output("fenced-ok").', '```'].join('\n');
-    backend = new CannedBackend([finalResponse(fenced)]);
-    repl = await openRepl();
+  
 
-    const events = await collect(repl.prompt('add a fenced block'));
-    expect(events.some((event) => event.type === 'error')).toBe(false);
-    const listing = await repl.list('all');
-    expect(listing).toContain('demo/0');
-    expect(listing).not.toContain('```');
-  });
-
-  it('saves a bundle when the meta task ends without finishing', async () => {
-    const previous = process.env.DC_MAX_ITERATIONS;
-    process.env.DC_MAX_ITERATIONS = '3';
-    try {
-      backend = new CannedBackend([
-        { text: '', toolCalls: [{ name: 'assert', arguments: { clause: 'scratch_on_fail(1).' } }] },
-      ]);
-      repl = await openRepl();
-
-      const events = await collect(repl.prompt('never finish'));
-      const failure = events.find((event) => event.type === 'error' && event.content?.includes('no DML source'));
-      expect(failure).toBeDefined();
-
-      const savedPath = failure!.content!.match(/saved to (.+?)\)?$/)?.[1]?.trim();
-      expect(savedPath).toBeTruthy();
-      const { unzipSync, strFromU8 } = await import('fflate');
-      const entries = unzipSync(new Uint8Array(await fs.readFile(savedPath!)));
-      expect(strFromU8(entries['harness.dml'])).toContain('scratch_on_fail');
-      await fs.rm(savedPath!, { force: true });
-    } finally {
-      if (previous === undefined) {
-        delete process.env.DC_MAX_ITERATIONS;
-      } else {
-        process.env.DC_MAX_ITERATIONS = previous;
-      }
-    }
-  });
+  
 
   it('rewrites task/N inside scratch-asserted clauses (same as loaded code)', async () => {
     backend = new CannedBackend([
@@ -504,8 +377,7 @@ describe('prompt mode', () => {
       text: '',
       toolCalls: [
         { name: 'execute', arguments: { goal: 'no_such_predicate(1)' } },
-        { name: 'set_result', arguments: { variable: 'DMLCode', value: 'kept(1).' } },
-        { name: 'set_result', arguments: { variable: 'Answer', value: '' } },
+        { name: 'assert_many', arguments: { clauses: 'kept(1).' } },
         { name: 'finish', arguments: { success: true } },
       ],
     }]);
@@ -546,54 +418,18 @@ describe('prompt mode', () => {
   });
 
   it('answers a simple question directly without changing the harness', async () => {
-    backend = new CannedBackend([{
-      text: 'Answering directly.',
-      toolCalls: [
-        { name: 'set_result', arguments: { variable: 'DMLCode', value: '' } },
-        { name: 'set_result', arguments: { variable: 'Answer', value: 'We added a factorial rule.' } },
-        { name: 'finish', arguments: { success: true } },
-      ],
-    }]);
+    backend = new CannedBackend([{ text: 'We added a factorial rule.' }]);
     repl = await openRepl();
     await repl.session.loadCode('existing(1).\n');
     const before = await repl.list('all');
 
     const events = await collect(repl.prompt('what did we just do?'));
-    expect(events.some((event) => event.type === 'output' && event.content === 'We added a factorial rule.')).toBe(true);
+    expect(events.some((event) => event.type === 'stream' && event.content === 'We added a factorial rule.')).toBe(true);
     expect(events.some((event) => event.type === 'error')).toBe(false);
     expect(await repl.list('all')).toBe(before);
   });
 
-  it('saves the current harness to a temp file when a turn is aborted', async () => {
-    const controller = new AbortController();
-    let calls = 0;
-    backend = new CannedBackend(() => {
-      calls += 1;
-      if (calls === 1) {
-        return { text: '', toolCalls: [{ name: 'assert', arguments: { clause: 'scratch_from_abort(1).' } }] };
-      }
-      controller.abort(new Error('cancelled by user'));
-      return finalResponse('kept(1).', '');
-    });
-    repl = await openRepl();
-
-    const events = await collect(repl.prompt('abort me', { signal: controller.signal }));
-    const abortEvent = events.find((event) => event.type === 'error' && event.content?.includes('saved to'));
-    expect(abortEvent).toBeDefined();
-
-    // The scratch assert is discarded from the session...
-    const scratch = await collect(repl.query('scratch_from_abort(_)'));
-    expect(scratch.some((event) => event.type === 'solution')).toBe(false);
-
-    // ...but preserved in the temp file.
-    const savedPath = abortEvent!.content!.match(/saved to (.+)$/)?.[1]?.trim();
-    expect(savedPath).toBeTruthy();
-    expect(savedPath!.endsWith('.zip')).toBe(true);
-    const { unzipSync, strFromU8 } = await import('fflate');
-    const entries = unzipSync(new Uint8Array(await fs.readFile(savedPath!)));
-    expect(strFromU8(entries['harness.dml'])).toContain('scratch_from_abort');
-    await fs.rm(savedPath!, { force: true });
-  });
+  
 
   it('replaces by predicate on redefinition', async () => {
     const first = [
@@ -601,7 +437,16 @@ describe('prompt mode', () => {
       'fact(N, F) :- N > 0, N1 is N - 1, fact(N1, F1), F is N * F1.',
     ].join('\n');
     const second = 'fact(0, 1).';
-    backend = new CannedBackend([finalResponse(first), finalResponse(second)]);
+    backend = new CannedBackend([
+      finalResponse(first),
+      {
+        text: '',
+        toolCalls: [
+          { name: 'define', arguments: { head: 'fact(N, F)', clauses: second } },
+          { name: 'finish', arguments: { success: true } },
+        ],
+      },
+    ]);
     repl = await openRepl();
 
     await collect(repl.prompt('primeira'));
@@ -630,53 +475,29 @@ describe('prompt mode', () => {
     expect(values(await collect(repl.query('keep(X)')), 'X')).toEqual(['2']);
   });
 
-  it('repairs once after invalid DML then commits', async () => {
-    backend = new CannedBackend([
-      finalResponse('fact(0, 1) :- .'),
-      finalResponse('fixed(1).'),
-    ]);
-    repl = await openRepl();
+  
 
-    const events = await collect(repl.prompt('write something'));
-    expect(events.some((event) => event.type === 'error')).toBe(false);
-    expect(values(await collect(repl.query('fixed(X)')), 'X')).toEqual(['1']);
-    expect(backend.calls).toHaveLength(2);
-  });
-
-  it('leaves the harness untouched when both attempts are invalid', async () => {
-    backend = new CannedBackend([finalResponse('fact(0, 1) :- .')]);
+  it('leaves the harness untouched when the edit is invalid', async () => {
+    backend = new CannedBackend([{
+      text: '',
+      toolCalls: [
+        { name: 'assert_many', arguments: { clauses: 'fact(0, 1) :- .' } },
+        { name: 'finish', arguments: { success: true } },
+      ],
+    }]);
     repl = await openRepl();
     await repl.session.loadCode('existing(1).\n');
     const before = await repl.list('all');
 
     const events = await collect(repl.prompt('write broken code'));
-    expect(events.some((event) => event.type === 'error')).toBe(true);
+    expect(events.some((event) => event.type === 'tool_call' && event.toolName === 'assert_many' && event.toolState === 'failed')).toBe(true);
     expect(await repl.list('all')).toBe(before);
     expect(values(await collect(repl.query('existing(X)')), 'X')).toEqual(['1']);
   });
 
-  it('discards scratch asserts and retracts from the committed module', async () => {
-    backend = new CannedBackend([{
-      text: '',
-      toolCalls: [
-        { name: 'assert', arguments: { clause: 'scratch(1).' } },
-        { name: 'execute', arguments: { goal: 'scratch(X)' } },
-        { name: 'set_result', arguments: { variable: 'DMLCode', value: 'kept(1).' } },
-      { name: 'set_result', arguments: { variable: 'Answer', value: '' } },
-        { name: 'finish', arguments: { success: true } },
-      ],
-    }]);
-    repl = await openRepl();
+  
 
-    const events = await collect(repl.prompt('add kept but only test scratch'));
-    expect(events.some((event) => event.type === 'error')).toBe(false);
-
-    const scratch = await collect(repl.query('scratch(X)'));
-    expect(scratch.some((event) => event.type === 'solution')).toBe(false);
-    expect(values(await collect(repl.query('kept(X)')), 'X')).toEqual(['1']);
-  });
-
-  it('retracts clauses through the meta retract tool', async () => {
+  it('retracts clauses through the agent retract tool', async () => {
     backend = new CannedBackend([
       {
         text: '',
@@ -686,8 +507,6 @@ describe('prompt mode', () => {
           { name: 'retract', arguments: { clause: 'foo(_) :- true' } },
           { name: 'execute', arguments: { goal: 'foo(X)' } },
           { name: 'execute', arguments: { goal: 'bar(1)' } },
-          { name: 'set_result', arguments: { variable: 'DMLCode', value: 'kept(1).' } },
-          { name: 'set_result', arguments: { variable: 'Answer', value: '' } },
           { name: 'finish', arguments: { success: true } },
         ],
       },
@@ -699,13 +518,16 @@ describe('prompt mode', () => {
 
     expect(events.some((event) => event.type === 'tool_call' && event.toolName === 'retract' && event.toolState === 'completed')).toBe(true);
 
-    const executeCall = (goal: string) => events.find(
-      (event) => event.type === 'tool_call'
-        && event.toolName === 'execute'
-        && event.toolState === 'completed'
-        && (event.toolArgs as Record<string, unknown> | undefined)?.goal === goal,
-    );
-    expect(executeCall('foo(X)')?.toolSummary).toBe('0 solution(s)');
-    expect(executeCall('bar(1)')?.toolSummary).toBe('1 solution(s)');
+    const executeSolutions = (goal: string) => {
+      const event = events.find(
+        (candidate) => candidate.type === 'tool_call'
+          && candidate.toolName === 'execute'
+          && candidate.toolState === 'completed'
+          && (candidate.toolArgs as Record<string, unknown> | undefined)?.goal === goal,
+      );
+      return (JSON.parse(event?.toolSummary ?? '{}') as { solutions?: unknown[] }).solutions?.length ?? -1;
+    };
+    expect(executeSolutions('foo(X)')).toBe(0);
+    expect(executeSolutions('bar(1)')).toBe(1);
   });
 });

@@ -1588,9 +1588,24 @@ repl_read_prepared_terms(Stream, SessionId, Terms) :-
     ;   % Apply the same preprocessing as parse_dml_string/2 so scratch clauses
         % match loaded ones (task/prompt rewrite, interpolation, expand_term).
         preprocess_loaded_term(Term, Bindings, Prepared),
-        append(Prepared, Rest, Terms),
+        % Directives (e.g. use_module(library(clpfd))) must run while parsing so
+        % their operators are visible to the terms that follow; keep them out of
+        % the returned list so repl_commit_terms does not process them twice.
+        partition_directives(Prepared, Rules, Directives),
+        forall(member(Directive, Directives), process_clause(Directive, SessionId)),
+        append(Rules, Rest, Terms),
         repl_read_prepared_terms(Stream, SessionId, Rest)
     ).
+
+partition_directives([], [], []).
+partition_directives([Term|Terms], Rules, Directives) :-
+    (   Term = (:- _)
+    ->  Rules = Rules0,
+        Directives = [Term|Directives0]
+    ;   Rules = [Term|Rules0],
+        Directives = Directives0
+    ),
+    partition_directives(Terms, Rules0, Directives0).
 
 %% repl_commit_terms(+SessionId, +Terms)
 %% Assert already-preprocessed terms (the shared tail of assert_many/define).

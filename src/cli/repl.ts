@@ -70,7 +70,6 @@ export interface ReplCliOptions {
   /** Interactive UI: auto (TUI on a TTY), on, or off. */
   tui?: 'auto' | 'on' | 'off';
   /** Authoring implementation: `agent` (default) or `meta`. */
-  authoring?: 'meta' | 'agent';
   /** Agent authoring docs: `embed` (default) or `tool`. */
   agentDocs?: 'embed' | 'tool';
 }
@@ -298,8 +297,7 @@ export interface ReplRuntime {
   statusSnapshot(): ReplStatusSnapshot;
   /** Resolved interactive UI mode (`auto` unless overridden by config/flags). */
   tuiMode: 'auto' | 'on' | 'off';
-  /** Resolved authoring implementation (`agent` or `meta`). */
-  authoring: 'meta' | 'agent';
+  /** Agent authoring docs: `embed` (default) or `tool`. */
   /** Replace the input channel (the interactive loop uses its own readline). */
   setOnInput(handler: (prompt: string, choices?: string[]) => Promise<string | undefined>): void;
   /** Set when the env backend has no credentials for the selected provider. */
@@ -462,7 +460,6 @@ export async function createReplRuntime(options: ReplCliOptions): Promise<ReplRu
     gasLimit: options.gasLimit,
     maxDepth: options.depth ?? config.repl.maxDepth,
     maxModelCalls: options.maxModelCalls ?? config.repl.maxModelCalls,
-    repairRounds: config.repl.repairRounds,
     tools: toolset.tools,
     hostToolsCatalog: toolset.catalog,
     llmBackend,
@@ -470,7 +467,6 @@ export async function createReplRuntime(options: ReplCliOptions): Promise<ReplRu
     history: historyOptions,
     compaction: { settings: replCompaction, auto: replCompaction.auto },
     contextWindow,
-    authoring: options.authoring ?? config.repl.authoring,
     agentDocs: options.agentDocs ?? config.repl.agentDocs,
     onInput: buildCliOnInput(options),
   });
@@ -515,7 +511,6 @@ export async function createReplRuntime(options: ReplCliOptions): Promise<ReplRu
     inputHistory,
     statusSnapshot: () => statusTracker.snapshot(),
     tuiMode: options.tui ?? config.repl.tui ?? 'auto',
-    authoring: options.authoring ?? config.repl.authoring ?? 'agent',
     setOnInput: (handler) => repl.setOnInput(handler),
     missingCredential,
   };
@@ -1150,7 +1145,7 @@ export async function runTui(
       const controller = new AbortController();
       holder.turn = controller;
       runState.running = true;
-      runState.steerable = input.kind === 'prompt' && runtime.authoring === 'agent';
+      runState.steerable = input.kind === 'prompt';
       bufferedInput.length = 0;
       tui.requestRender();
       try {
@@ -1318,12 +1313,6 @@ export function registerReplCommand(program: Command): void {
       }
       return value;
     })
-    .option('--authoring <kind>', 'authoring implementation: agent (default) or meta', (value: string) => {
-      if (value !== 'agent' && value !== 'meta') {
-        throw new Error(`invalid --authoring kind: ${value} (use agent or meta)`);
-      }
-      return value;
-    })
     .option('--agent-docs <mode>', 'agent authoring docs: embed (default) or tool', (value: string) => {
       if (value !== 'embed' && value !== 'tool') {
         throw new Error(`invalid --agent-docs: ${value} (use embed or tool)`);
@@ -1365,7 +1354,6 @@ export function registerReplCommand(program: Command): void {
         answer: options.answer,
         interactiveInput: options.interactiveInput,
         tui: options.tui,
-        authoring: options.authoring,
         agentDocs: options.agentDocs,
         param: options.param,
         verbose: Boolean(options.verbose || options.debug),
