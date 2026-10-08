@@ -6,7 +6,7 @@
  * the live harness through a `HarnessToolController` implemented by `DMLSession`.
  */
 
-import type { ToolDefinition } from '../types.js';
+import type { DMLEvent, ToolDefinition } from '../types.js';
 
 export interface HarnessExecuteResult {
   bindings: Array<{ name: string; value: string }>;
@@ -46,7 +46,7 @@ export interface HarnessToolController {
   /** Delete a predicate by `Name/Arity`. */
   deletePredicate(nameArity: string): Promise<{ ok: boolean; error?: string }>;
   /** Run a DML goal against the scratch harness. */
-  execute(goal: string, limit?: number, signal?: AbortSignal): Promise<HarnessExecuteResult>;
+  execute(goal: string, limit?: number, signal?: AbortSignal, onEvent?: (event: DMLEvent) => void): Promise<HarnessExecuteResult>;
   readFile(path: string): Promise<string | null>;
   writeFile(path: string, content: string): Promise<void>;
   listFiles(path?: string): Promise<string[]>;
@@ -173,6 +173,7 @@ export function createHarnessTools(controller: HarnessToolController): Map<strin
       String(args.goal ?? ''),
       typeof args.limit === 'number' ? args.limit : undefined,
       context?.signal,
+      context?.onEvent,
     ),
   });
 

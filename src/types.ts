@@ -332,6 +332,8 @@ export interface DMLEvent extends FrameEventMeta {
 export interface ToolExecutionContext {
   /** Abort signal for the current turn; long-running tools should honor it. */
   signal?: AbortSignal;
+  /** Stream events produced while the tool runs (e.g. an `execute` child frame). */
+  onEvent?: (event: DMLEvent) => void;
 }
 
 export interface ToolDefinition {

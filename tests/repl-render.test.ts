@@ -290,6 +290,12 @@ describe('block spacing', () => {
     expect(lines.join('')).not.toMatch(/\n\n/);
   });
 
+  it('indents nested (execute child) frames one extra level', () => {
+    const { lines, renderer } = capture('plain');
+    renderer.render({ type: 'output', content: 'inside', frameKind: 'nested', depth: 1 } as DMLEvent);
+    expect(lines.join('')).toContain('    nested │ inside');
+  });
+
   it('separates a compaction notice from surrounding output', () => {
     const { lines, renderer } = capture('plain');
     renderer.render({ type: 'output', content: 'before' } as DMLEvent);

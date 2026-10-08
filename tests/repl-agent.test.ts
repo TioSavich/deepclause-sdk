@@ -31,7 +31,16 @@ function stubController(overrides: Partial<HarnessToolController> = {}): {
     assertMany: async () => record('assertMany', { ok: true }),
     retractClause: async () => record('retractClause', { ok: true }),
     deletePredicate: async (predicate) => { record('deletePredicate', undefined); return { ok: true, predicate } as { ok: boolean }; },
-    execute: async () => record('execute', { bindings: [], solutions: [], output: 'ok' }),
+    execute: async (_goal, _limit, _signal, onEvent) => {
+      onEvent?.({
+        type: 'output',
+        content: 'child-output',
+        frameKind: 'nested',
+        depth: 1,
+      } as DMLEvent);
+      record('execute', undefined);
+      return { bindings: [], solutions: [], output: 'child-output' };
+    },
     readFile: async () => record('readFile', 'content'),
     writeFile: async () => { record('writeFile', undefined); },
     listFiles: async () => record('listFiles', ['a.dml']),
@@ -150,6 +159,19 @@ describe('HarnessAgent', () => {
     const agent = new HarnessAgent({ controller, tools: createHarnessTools(controller), llmBackend: backend, model: 'm', streaming: true });
     const events = await collect(agent.run('hi'));
     expect(events.some((event) => event.type === 'tool_call' && event.toolState === 'failed')).toBe(true);
+  });
+
+  it('streams events an execute tool produces', async () => {
+    const { controller } = stubController();
+    const backend = new ScriptedBackend([
+      { text: '', toolCalls: [{ id: '1', name: 'execute', arguments: { goal: 'x' } }], finishReason: 'tool_use' },
+      { text: 'done', toolCalls: [{ id: '2', name: 'finish', arguments: { success: true } }], finishReason: 'tool_use' },
+    ]);
+    const agent = new HarnessAgent({ controller, tools: createHarnessTools(controller), llmBackend: backend, model: 'm', streaming: true });
+    const events = await collect(agent.run('run it'));
+    const output = events.find((event) => event.type === 'output' && event.content === 'child-output');
+    expect(output).toBeDefined();
+    expect(output?.frameKind).toBe('nested');
   });
 
   it('never persists host nudges in the conversation history', async () => {

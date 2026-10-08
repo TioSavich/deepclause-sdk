@@ -578,8 +578,12 @@ export class ReplRenderer {
   private frameLabel(event: DMLEvent): string {
     // `--no-events` also drops the frame label, so output/answer lines are plain.
     if (!this.showEvents || !event.frameKind) return '';
+    const depth = event.depth ?? 0;
     const label = event.frameKind === 'object' ? 'run' : event.frameKind;
-    return `${'  '.repeat(event.depth ?? 0)}${label} │ `;
+    // Indent nested (`execute` child) activity one extra level so it reads as
+    // belonging to the parent tool call.
+    const indent = '  '.repeat(event.frameKind === 'nested' ? depth + 1 : depth);
+    return `${indent}${label} │ `;
   }
 
   /**

@@ -176,6 +176,16 @@ describe('harness edit transactions', () => {
     expect(listing).not.toContain('./2');
   });
 
+  it('forwards execute child events for display', async () => {
+    repl = await openSession();
+    await repl.session.define('note(X)', 'note(a).\nnote(b).');
+    const child: DMLEvent[] = [];
+    const result = await repl.session.execute('note(X), output(X)', 5, undefined, (event) => child.push(event));
+    expect(result.solutions.length).toBe(2);
+    expect(child.some((event) => event.type === 'output')).toBe(true);
+    expect(child.some((event) => event.frameKind === 'nested')).toBe(true);
+  });
+
   it('records each changed predicate once in history', async () => {
     repl = await openSession(true);
     await repl.session.beginTurn();

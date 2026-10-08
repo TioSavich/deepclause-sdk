@@ -324,10 +324,30 @@ export class HarnessAgent {
           continue;
         }
         let result: unknown;
-        try {
-          result = await tool.execute(call.arguments, { signal: options.signal });
-        } catch (error) {
-          result = { error: error instanceof Error ? error.message : String(error) };
+        let toolFailure: unknown;
+        let toolSettled = false;
+        const toolEvents: DMLEvent[] = [];
+        let toolWake: (() => void) | null = null;
+        const wakeTool = (): void => {
+          if (toolWake) { const resolve = toolWake; toolWake = null; resolve(); }
+        };
+        const toolPromise = tool.execute(call.arguments, {
+          signal: options.signal,
+          onEvent: (event) => { toolEvents.push(event); wakeTool(); },
+        }).then(
+          (value) => { result = value; toolSettled = true; wakeTool(); },
+          (error) => { toolFailure = error; toolSettled = true; wakeTool(); },
+        );
+        // Stream events the tool produces (e.g. an `execute` child frame) live.
+        while (true) {
+          while (toolEvents.length > 0) yield toolEvents.shift()!;
+          if (toolSettled) break;
+          await new Promise<void>((resolve) => { toolWake = resolve; });
+        }
+        while (toolEvents.length > 0) yield toolEvents.shift()!;
+        await toolPromise;
+        if (toolFailure) {
+          result = { error: toolFailure instanceof Error ? toolFailure.message : String(toolFailure) };
         }
         const text = stringifyToolResult(result);
         yield { type: 'tool_call', toolName: call.name, toolArgs: call.arguments, toolState: 'completed', toolSummary: text.slice(0, 200) };

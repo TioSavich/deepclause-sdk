@@ -1167,8 +1167,13 @@ export class DMLSession {
     }
   }
 
-  async execute(goal: string, limit?: number, signal?: AbortSignal): Promise<HarnessExecuteResult> {
-    return this.executeGoal(goal, limit ?? 5, undefined, signal);
+  async execute(
+    goal: string,
+    limit?: number,
+    signal?: AbortSignal,
+    onEvent?: (event: DMLEvent) => void,
+  ): Promise<HarnessExecuteResult> {
+    return this.executeGoal(goal, limit ?? 5, onEvent, signal);
   }
 
   /**
