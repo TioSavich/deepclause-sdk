@@ -48,6 +48,19 @@ function commitResponse(code: string): CannedResponse {
   };
 }
 
+/** Replace a predicate, then commit (so re-running yields identical content). */
+function defineResponse(head: string, clauses: string): CannedResponse {
+  return {
+    text: '',
+    toolCalls: [
+      { name: 'begin_turn', arguments: {} },
+      { name: 'define', arguments: { head, clauses } },
+      { name: 'end_turn', arguments: {} },
+      { name: 'finish', arguments: { success: true } },
+    ],
+  };
+}
+
 async function collect(gen: AsyncGenerator<DMLEvent>): Promise<DMLEvent[]> {
   const events: DMLEvent[] = [];
   for await (const event of gen) {
@@ -109,6 +122,33 @@ describe('harness history', () => {
     const head = JSON.parse(await fs.readFile(path.join(workspace, '.deepclause/repl/harness/HEAD.json'), 'utf8'));
     expect(head.version).toBe(1);
     expect(head.sessionId).toBe(sessionId);
+  });
+
+  it('does not create a new version when the committed content is unchanged', async () => {
+    const backend = new CannedBackend([
+      defineResponse('demo', 'demo :- output(hi).'),
+      defineResponse('demo', 'demo :- output(hi).'),
+    ]);
+    repl = await createHarnessRepl({
+      workspacePath: workspace,
+      model: 'test-model',
+      provider: 'openai',
+      streaming: true,
+      llmBackend: backend,
+      tools: new Map(),
+      history: HISTORY,
+    });
+
+    await collect(repl.prompt('make a demo'));
+    await collect(repl.prompt('commit the same thing again'));
+
+    const head = JSON.parse(await fs.readFile(path.join(workspace, '.deepclause/repl/harness/HEAD.json'), 'utf8'));
+    expect(head.version).toBe(1);
+    const changes = (await fs.readFile(path.join(workspace, '.deepclause/repl/harness/changes.jsonl'), 'utf8'))
+      .trim()
+      .split('\n')
+      .filter((line) => JSON.parse(line).kind === 'commit');
+    expect(changes).toHaveLength(1);
   });
 
   it('loads prior history into a new session so DML can query it', async () => {

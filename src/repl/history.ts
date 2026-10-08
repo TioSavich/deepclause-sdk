@@ -322,11 +322,15 @@ export class HistoryStore {
    * Record a harness version. Returns the facts to assert and the new version.
    */
   async recordChange(record: HistoryChangeRecord): Promise<{ facts: string[]; version: number }> {
+    const ts = nowIso();
+    const hash = harnessHash(record.module, record.scripts);
+    // Committing content identical to HEAD is a no-op: do not burn a version.
+    if (hash === this.headHash && this.headVersion > 0) {
+      return { facts: [], version: this.headVersion };
+    }
     const version = this.maxVersion + 1;
     this.maxVersion = version;
     const parentVersion = this.headVersion;
-    const ts = nowIso();
-    const hash = harnessHash(record.module, record.scripts);
     const facts = [
       `harness_change(${version}, ${prologAtom(ts)}, ${prologAtom(record.kind)}, `
         + `${prologAtom(record.sessionId)}, ${record.turn}).`,

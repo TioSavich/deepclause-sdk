@@ -576,16 +576,16 @@ async function printBanner(runtime: ReplRuntime, loaded: string[]): Promise<void
       `    ${accent('/goal <dml>')}        run DML/Prolog directly against the current harness.`,
       '',
       `  ${bold('Example')}`,
-      `    ${dim('dml>')} add a research(Question, Answer) skill that answers with task/2`,
-      `    ${dim('dml>')} run research on "why is the sky blue?"`,
+      `    add a research(Question, Answer) skill that answers with task/2`,
+      `    run research on "why is the sky blue?"`,
       `    A = "…"`,
       '',
       `    ...or run DML directly (${accent('/goal')}):`,
-      `    ${dim('dml>')} ${accent('/goal')} research("why is the sky blue?", A).`,
+      `    ${accent('/goal')} research("why is the sky blue?", A).`,
       `    A = "…"`,
       '',
       `  When you're ready, export the harness and re-use it whenever you need:`,
-      `    ${dim('dml>')} /export research.dml            save a portable harness`,
+      `    /export research.dml              save a portable harness`,
       `    ${dim('$')} deepclause repl -l research.dml    load it back any time`,
       `    ${dim('$')} deepclause repl --session last   resume the last session`,
     );
@@ -624,7 +624,7 @@ export async function dispatchReplInput(
     case 'halt':
       return false;
     case 'help':
-      print(helpText(runtime));
+      print(helpText());
       return true;
     case 'listing': {
       const text = await repl.list(input.filter);
@@ -719,7 +719,7 @@ export async function dispatchReplInput(
   }
 }
 
-function helpText(runtime: ReplRuntime): string {
+function helpText(): string {
   return [
     'DeepClause REPL — a living DML harness you author by talking to it.',
     '',
@@ -742,15 +742,13 @@ function helpText(runtime: ReplRuntime): string {
     '    /halt                exit',
     '',
     '  Examples',
-    '    dml> /goal member(X, [a,b,c]).',
-    '    dml> /listing all',
-    '    dml> add a tally(List, Counts) skill, plus a demo',
-    '    dml> what skills does this harness have?',
+    '    /goal member(X, [a,b,c]).',
+    '    /listing all',
+    '    add a tally(List, Counts) skill, plus a demo',
+    '    what skills does this harness have?',
     '',
     '  Skills compose: task/N (LLM calls), exec/2 (host tools), judgments, CLP(FD)/',
     '  CLP(Q), and script_file/2 (bundled on export).',
-    '',
-    `  prompt: ${runtime.promptPrefix}`,
   ].join('\n');
 }
 
