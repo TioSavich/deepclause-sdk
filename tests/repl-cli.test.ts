@@ -3,7 +3,7 @@
  */
 import { describe, expect, it } from 'vitest';
 
-import { classifyReplInput, runGoalWithRenderer, runInteractiveGoal } from '../src/cli/repl.js';
+import { classifyReplInput, formatTurnInput, runGoalWithRenderer, runInteractiveGoal } from '../src/cli/repl.js';
 import { ReplRenderer } from '../src/repl/render.js';
 import type { DMLEvent } from '../src/types.js';
 import type { HarnessRepl } from '../src/repl/index.js';
@@ -66,6 +66,11 @@ describe('classifyReplInput', () => {
   it('ignores blank lines and comments', () => {
     expect(classifyReplInput('   ').kind).toBe('empty');
     expect(classifyReplInput('% a comment').kind).toBe('comment');
+  });
+
+  it('renders goal turns with a /goal prefix for editor history', () => {
+    expect(formatTurnInput({ mode: 'goal', request: 'member(X, [1,2])' })).toBe('/goal member(X, [1,2])');
+    expect(formatTurnInput({ mode: 'prompt', request: 'add a fact' })).toBe('add a fact');
   });
 
   it('classifies slash commands', () => {

@@ -97,6 +97,11 @@ export type ReplInput =
 
 const OUT_OF_BAND = new Set(['halt', 'help', 'reset', 'rollback', 'freeze', 'unfreeze', 'trace', 'notrace', 'params']);
 
+/** Render a recorded turn as the line the user would retype (goals get `/goal`). */
+export function formatTurnInput(turn: { mode: 'goal' | 'prompt'; request: string }): string {
+  return turn.mode === 'goal' ? `/goal ${turn.request}` : turn.request;
+}
+
 /**
  * Classify one REPL input line.
  *
@@ -441,8 +446,8 @@ export async function createReplRuntime(options: ReplCliOptions): Promise<ReplRu
     const target = sessionId ?? await store.latestSessionId();
     if (target) {
       inputHistory = (await store.readTurns(target))
-        .map((turn) => turn.request)
-        .filter((request) => typeof request === 'string' && request.length > 0);
+        .map((turn) => formatTurnInput(turn))
+        .filter((request) => request.length > 0);
     }
   }
 
