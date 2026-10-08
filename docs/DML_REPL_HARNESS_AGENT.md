@@ -2,9 +2,10 @@
 
 Status: **implemented (P1)** · Scope: `deepclause-sdk` REPL
 
-> P1 is implemented behind `repl.authoring` (`agent` via the CLI/runtime config,
-> `meta` still available). New files: `src/repl/agent.ts`,
-> `src/repl/harness-tools.ts`, `src/system/assets/docs/AGENT_PROMPT.md`.
+> P1 is implemented and P2 is complete: the TypeScript agent is the only
+> authoring path and the DML meta-frame implementation has been removed.
+> New files: `src/repl/agent.ts`, `src/repl/harness-tools.ts`,
+> `src/system/assets/docs/AGENT_PROMPT.md`.
 > Tests: `tests/repl-agent.test.ts`, `tests/repl-agent-session.test.ts`.
 
 ## Motivation
@@ -109,7 +110,7 @@ the agent's own conversation is the history.
 - `src/repl/session.ts` — implement `HarnessToolController`; `agentMessages`;
   `agentPrompt`; history/persistence fields; `authoring` selection.
 - `src/repl/index.ts` — `HarnessReplOptions.authoring`.
-- `src/cli/config.ts` — `repl.authoring: 'meta' | 'agent'` (CLI default `agent`).
+- `src/cli/config.ts` — `repl.agentDocs` (the agent is the only authoring mode).
 - `src/cli/repl.ts` — pass `authoring`; `--authoring` flag.
 - `src/repl/history.ts` — `SessionHarnessSnapshot.memory.agent`.
 - Tests: `tests/repl-agent-tools.test.ts`, `tests/repl-agent.test.ts`, plus a

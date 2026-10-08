@@ -115,34 +115,29 @@ The pager accepts **Enter** or `;` (next), `a` (all), and `.`/`q` (stop). Use
 
 ## Prompt mode
 
-> The default authoring implementation is the TypeScript **agent** (see
-> [Authoring agent](#authoring-agent-default) below). This section describes the
-> legacy `repl.authoring: meta` path; both commit transactionally.
-
 ```text
 dml> add a rule that computes factorial and a tool that formats integers
 
-meta │ Let me list the harness first.
-meta │   ⚙ listing(filter=all)
-meta │ I'll test it with execute, then commit fact/2.
-120
+Let me list the harness first.
+  ⚙ listing(filter=all)
+  ⚙ define(fact(N, F), ...)
+  ⚙ execute(fact(5, F))
+I'll commit it now.
+  ⚙ end_turn()
 committed fact/2, demo/0
 ```
 
 A prompt is an **edit transaction**:
 
-1. the living module, tool bookkeeping, and harness memory are snapshotted;
-2. (legacy) a `task_named/3` **meta task** runs in a `meta` frame, restricted to
-   exactly the host meta tools (`listing`, `assert`, `retract`, `execute`,
-   `ask_user`);
-3. the scratch edits are discarded (a failed prompt leaves the harness
-   unchanged);
-4. the returned DML source is validated and committed **replace-by-predicate**
-   (every predicate it defines is replaced);
-5. the declared entry is run; if none is declared, the commit is load-only.
+1. the living module is snapshotted at the start of the request;
+2. the authoring agent edits the harness through tools (`listing`, `define`,
+   `assert`/`assert_many`, `retract`, `delete`) and tests with `execute`;
+3. `end_turn` commits the change and records a version; `rollback` discards it;
+4. a run that ends without an explicit `end_turn` auto-commits, and a failed or
+   aborted run restores the harness unchanged.
 
-If the model returns invalid DML, the REPL makes one repair attempt with the
-parse error, then aborts without touching the harness.
+For a larger change the agent is asked to commit working pieces incrementally,
+so a late failure does not lose earlier progress.
 
 ### Cancelling a turn
 
@@ -175,31 +170,18 @@ It is skipped when the harness has no predicates, when `--export <file>` was
 given, or with `--no-save-on-exit`. Reload a bundle with
 `deepclause repl -l <file>.zip`.
 
-A turn that ends **without producing a change** — iteration cap, exhausted
-model-call budget, or a model error — is treated the same way: the transaction
-is discarded, the scratch module + linked scripts are written to a temp bundle,
-and the error reports the path, e.g.
-`ERROR: the meta task returned no DML source or answer (current harness saved to /tmp/deepclause-repl-….zip)`.
-So a long debugging turn is never lost even when the turn itself fails.
+A turn that ends **without a commit** — iteration cap, exhausted model-call
+budget, or a model error — is rolled back, so the harness is left unchanged and
+the turn reports the error.
 
-### Authoring agent (default)
+### Authoring agent
 
-`repl.authoring` selects how plain-English requests are authored:
-
-* **`agent`** (default): a normal TypeScript agent with a system prompt and
-  harness tools. It edits the live harness through `listing` / `define` /
-  `assert` / `assert_many` / `retract` / `delete`, tests with `execute`, and
-  commits with `end_turn` (or discards with `rollback`). The host snapshots at
-  the start of each request and auto-commits if the run ends without an explicit
-  `end_turn`. It can run several committed turns in one request.
-* **`meta`** (legacy): the DML `task_named/3` meta frame described below.
-
-Set it in `.deepclause/config.json` under `repl` or with `--authoring <kind>`:
-
-```bash
-deepclause repl --authoring agent   # default
-deepclause repl --authoring meta    # legacy
-```
+Plain-English requests are authored by a normal TypeScript agent with a system
+prompt and harness tools. It edits the live harness through `listing` /
+`define` / `assert` / `assert_many` / `retract` / `delete`, tests with
+`execute`, and commits with `end_turn` (or discards with `rollback`). The host
+snapshots at the start of each request and auto-commits if the run ends without
+an explicit `end_turn`; it can run several committed turns in one request.
 
 #### Steering a running turn
 
@@ -244,49 +226,46 @@ created one. The override must contain the same `{{CATALOG}}`, `{{TOOLS}}`, and
 To change the built-in prompt itself, edit
 `src/system/assets/docs/AGENT_PROMPT.md` and run `npm run build`.
 
-### Meta tools and guard rails (legacy `authoring: meta`)
+### Guard rails
 
-The code-writing meta task is restricted to `listing`, `assert`, `assert_many`,
-`retract`, `execute`, `read_file`, `write_file`, `list_files`, `delete_file`,
-`ask_user`, plus the capability host tools (**`bash`** by default). The meta
-prompt embeds the full bundled `DML_REFERENCE.md`, a curated set of **idiomatic
-harness patterns** (a `tool/2` wrapping `exec(bash(...))` + a `task(...)` chain
-+ a script file linked with `script_file/2`; a
-`task → task → output/answer` pipeline), the live host tool catalog, and the
-current harness manifest. It also states the catalog pairing rule explicitly:
-**only the `exec(...)` names in the catalog exist — by default just `bash`** —
-so it never invents `calculator`/`fetch_url`/`web_search`/`vm_exec`. The rules
-that matter most:
+The authoring agent is restricted to `listing`, `begin_turn`, `end_turn`,
+`rollback`, `define`, `assert`, `assert_many`, `retract`, `delete`, `execute`,
+`read_file`, `write_file`, `list_files`, `delete_file`, `ask_user`, and
+`reference`. The harness's own `tool/2` predicates are hidden from it, and the
+system prompt embeds the bundled `DML_REFERENCE.md`, a curated set of **idiomatic
+harness patterns**, the host tool catalog, and the current harness manifest. The
+catalog pairing rule is explicit: **only the `exec(...)` names in the catalog
+exist — by default just `bash`** — so the agent never invents
+`calculator`/`fetch_url`/`web_search`/`vm_exec`. The rules that matter most:
 
 * **Read before writing** — call `listing` first.
 * **Clause order matters** — a base case must precede a recursive rule. Define a
-  predicate with `assert_many`, which asserts a whole block in the written
-  order, rather than one clause at a time.
+  predicate with one `define`/`assert_many` call, which asserts the whole block in
+  the written order, rather than one clause at a time.
 * **Verify** — call `listing(Name/Arity)` after changing a predicate.
+* **Commit incrementally** — `end_turn` each working piece before moving on.
 * **Bounded iteration** — no unbounded loops/assert/execute; use finite
   recursion, CLP(FD)/CLP(Q), or an explicit bound. `execute` is gas-limited and
   the turn has a model-call budget.
 
-`ask_user` / `input/2` prompt on a clearly separated pane and read through the
-REPL's own input line (no second readline, so no character echo and no lost
-input):
+`ask_user` / `input/2` prompt in the editor (the question shows in its top
+border) and read through the REPL's own input line:
 
 ```text
 dml> ask me for my name
-meta │ ⠋ meta task (writing the harness)
 ? What is your name?
 > Andreas
-meta │   ✔ ask_user(prompt=What is your name?) — Andreas
+  ✔ ask_user(prompt=What is your name?) — Andreas
 ```
 
 ### Direct questions
 
 For a simple question that can be answered directly — "what did we just do?",
-"what can you do?", "how do I …?" — the meta task answers **without touching
-the harness**: instead of returning DML, it sets the `Answer` output to its
-reply. The reply is rendered as an `output` line and the living module is left
-byte-identical. Build/commit only happens when the request asks you to create,
-change, or run logic.
+"what can you do?", "how do I …?" — the agent answers **without touching the
+harness**: it replies in its final message and does not `end_turn`. The reply is
+rendered as streamed text and the living module is left byte-identical.
+Build/commit only happens when the request asks you to create, change, or run
+logic.
 
 ```text
 dml> what can you do?
@@ -315,7 +294,7 @@ Running is the authoring agent's job: while authoring a turn it calls the
 ### Self-containment and bundles
 
 The harness is the `.dml` **plus the files it links**. Write each program to a
-file (the meta task has `write_file`/`read_file` tools), link it with a
+file (the authoring agent has `write_file`/`read_file` tools), link it with a
 `script_file/2` fact, and run it with `exec(bash(...))`:
 
 ```prolog
@@ -332,7 +311,7 @@ tool(url_text(Url, Text), "Fetch a URL and strip HTML.") :-
 The untrusted URL is passed through a file rather than interpolated into the
 shell command. `script_file/2` has no runtime semantics — it tells the exporter
 which files belong to the harness. `write_file` lands on disk immediately, so
-the meta task can run a script with `bash` in the same turn.
+the agent can run a script with `bash` in the same turn.
 
 `export harness.zip` writes the self-contained bundle (`harness.dml` + every
 linked file + a manifest); `-l harness.zip` extracts and loads it.
@@ -340,26 +319,25 @@ linked file + a manifest); `-l harness.zip` extracts and loads it.
 a single file stays portable. See
 [`DML_REPL_SCRIPT_BUNDLES.md`](./DML_REPL_SCRIPT_BUNDLES.md).
 
-## Memory: two levels
+## Memory
 
-| Memory | Used by | Contents |
+Two conversations are kept apart:
+
+| Memory | Owner | Contents |
 |---|---|---|
-| **Harness memory** | object-level `task` predicates and the committed entry run | the harness's runtime conversation |
-| **Meta memory** | the code-writing meta task | recent prompts and outcomes |
+| **Harness memory** | object-level `task` predicates and goal runs | the harness's runtime conversation |
+| **Agent memory** | the authoring agent | your requests and the agent's replies |
 
-Keeping them apart is a core design decision: the model writing code does not
-accumulate the harness's runtime conversation, and the harness runtime never
-contains code-review chatter. The agent loop passes the meta memory as the
-model's conversation history, so the author sees its own previous requests and
-outcomes.
+Keeping them apart is a core design decision: the agent authoring the harness
+does not accumulate the harness's runtime conversation, and the harness runtime
+never contains authoring chatter.
 
-Meta memory is a **clean `messages[]`**: each successful turn records exactly
-`user: <your raw request>` and `assistant: <outcome + the predicates that were
-committed>`. The assembled meta prompt (authoring contract, reference, catalog,
-manifest) is **ephemeral** — it is the agent loop's current task text, not
-persisted. `execute` sees a snapshot of harness memory so it can test with
-realistic context; those writes are discarded at commit. The entry run is the
-only place harness memory advances.
+The agent's conversation is a clean `messages[]`: it appends `user: <your raw
+request>` and the assistant's replies, and is persisted in
+`sessions/<id>/harness.json` so `--session` resumes it. The assembled system
+prompt (authoring contract, reference, tool list, manifest) is **ephemeral**.
+`execute` runs against a snapshot of harness memory and discards its writes, and
+a goal run is the only place harness memory advances.
 
 ## History
 
@@ -411,7 +389,7 @@ in-memory module; it does not stop `bash` from writing files in the workspace.
 
 Both levels share one input channel:
 
-* the meta task may call `ask_user` to resolve an ambiguity before writing;
+* the authoring agent may call `ask_user` to resolve an ambiguity before writing;
 * the harness may call `input/2` or `exec(ask_user(prompt: …))` while running.
 
 In an interactive TTY the question is prompted. In non-interactive runs (`-g`,
@@ -498,7 +476,7 @@ configured. **File reading and writing are DML language, not host tools** — us
 `append_file/2` (paths resolve under the workspace).
 
 `bash` runs in the workspace shell, or a sandbox (`--sandbox` uses the AgentVM;
-`agentvm.network` controls networking). The meta task may explore that
+`agentvm.network` controls networking). The authoring agent may explore that
 environment and install a dependency when a skill genuinely needs one — installs
 are sandbox/session-local and do **not** travel with an exported harness, so
 prefer the standard library.

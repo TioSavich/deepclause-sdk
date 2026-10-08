@@ -4,14 +4,13 @@
 
 ### Added
 
-- **TypeScript authoring agent** (`repl.authoring: "agent"`, the default): the
-  REPL's main agent is now a normal LLM agent with a system prompt and harness
-  tools (`begin_turn`, `end_turn`, `rollback`, `listing`, `define`, `assert`,
-  `assert_many`, `retract`, `delete`, `execute`, the workspace file tools,
-  `ask_user`, `reference`). It can run several committed turns in one request;
-  `end_turn` validates and records a version, and it is asked to commit larger
-  changes incrementally. The DML `task_named/3` meta-frame path remains available
-  with `repl.authoring: "meta"`.
+- **TypeScript authoring agent**: the REPL's main agent is a normal LLM agent
+  with a system prompt and harness tools (`begin_turn`, `end_turn`, `rollback`,
+  `listing`, `define`, `assert`, `assert_many`, `retract`, `delete`, `execute`,
+  the workspace file tools, `ask_user`, `reference`). It can run several
+  committed turns in one request; `end_turn` validates and records a version, and
+  it is asked to commit larger changes incrementally. The DML `task_named/3`
+  meta-frame authoring path was **removed**.
 - **pi-style TUI** (`repl.tui: auto|on|off`, on a TTY by default): a scrolling
   transcript, a fixed status bar (tokens in/out, cache, context usage for the
   active frame, model + thinking level), and a fixed editor.
@@ -24,8 +23,9 @@
   session on startup (goal turns re-prefixed with `/goal`).
 - **Reasoning levels**: `backend.thinkingLevel` (off|minimal|low|medium|high|
   xhigh|max), selectable in `login`/`set-backend`/`set-model` and via `--thinking`.
-- **TypeScript compaction** ported from pi (session and loop), with a `compact.`
-  command; the DML compactor is no longer used on the CLI paths.
+- **TypeScript compaction** ported from pi (agent conversation + in-loop), with
+  a `compact.` command. The DML compactor (bindings, assets, and config) was
+  removed.
 - **Listing syntax highlighting** and reflow (doc merged onto the header,
   predicates separated, long clause bodies split).
 - **Workspace `AGENTS.md`** appended to the authoring agent's prompt;
@@ -33,6 +33,14 @@
   guide are embedded or left to the `reference` tool.
 - **`execute` child events** stream (model text, tool calls, `output/1`) under a
   nested label.
+
+### Removed
+
+- The DML `task_named/3` meta-frame authoring mode (and its `META_PROMPT.md`,
+  meta tools, and `repl.authoring` config) — the TypeScript agent replaced it.
+- The DML compactor (`src/compaction.ts`, the bundled compactor DML, the
+  `compaction` config section, and `createDeepClause`'s `compaction` option). The
+  TypeScript compaction is the only compactor.
 
 ### Fixed
 

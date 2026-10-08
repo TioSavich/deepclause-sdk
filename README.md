@@ -376,9 +376,9 @@ vendor/
 ```
 
 Bundled prompt assets: `AGENT_PROMPT.md` (the authoring agent's contract),
-`META_PROMPT.md` (the legacy meta task contract), `DML_REFERENCE.md` (language),
-`DML_AUTHORING.md` (guide), `HARNESS_EXAMPLES.md` (idiomatic shapes),
-`PROLOG_SNIPPETS.md` (tested building blocks).
+`DML_REFERENCE.md` (language), `DML_AUTHORING.md` (guide),
+`HARNESS_EXAMPLES.md` (idiomatic shapes), `PROLOG_SNIPPETS.md` (tested building
+blocks).
 
 ## Development
 

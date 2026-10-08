@@ -30,12 +30,11 @@ CLI commands: `init`, `login`, `logout`, `set-backend`, `set-model`, `show-model
 
 ## REPL
 
-- **Author mode** (plain English): a TypeScript authoring agent (`repl.authoring:
-  agent`, the default) writes/tests/commits DML through harness tools
+- **Author mode** (plain English): a TypeScript authoring agent writes, tests,
+  and commits DML through harness tools
   (`begin_turn`/`end_turn`/`rollback`/`listing`/`define`/`assert`/`retract`/
-  `delete`/`execute`/file tools/`ask_user`), and can run several committed turns
-  in one request. The legacy DML meta frame is still available
-  (`repl.authoring: meta`).
+  `delete`/`execute`/file tools/`ask_user`/`reference`), and can run several
+  committed turns in one request.
 - **Transactions**: each turn snapshots the module and commits
   replace-by-predicate; a failed turn leaves the harness unchanged.
 - **Auditability**: `.deepclause/repl/` holds `history.dml` (append-only
@@ -64,11 +63,11 @@ shows the full bash script / `execute` goal wrapped. `--no-stream`,
 is selectable in `deepclause login`, `set-backend`, `set-model`, and `repl`/`run`
 (`--thinking`) and is forwarded to pi's provider only for reasoning-capable
 models. The bundled catalog marks `[reasoning]` models in every picker.
-- **Compaction**: TypeScript compaction ported from pi (no DML compactor). It
-sizes context with the chars/4 estimate, cuts on user boundaries, and summarizes
-with the structured pi prompt through the active pi backend. Session (meta)
-memory compacts before a turn and in-loop memory compacts before a model call;
-`compact.` compacts on demand. `memory_compaction` events drive the status bar.
+- **Compaction**: TypeScript compaction ported from pi. It sizes context with
+  the chars/4 estimate, cuts on user boundaries, and summarizes with the
+  structured pi prompt through the active pi backend. The agent conversation
+  compacts in-loop before a model call and on demand with `compact.`
+  `memory_compaction` events drive the status bar.
 - **Cancellation**: Ctrl-C aborts the current turn and terminates a running `bash`.
 - **Steering**: submitting while a turn runs interrupts the in-flight model call
   and injects the message, rendered as a full-width `Steering: …` block. During a
@@ -90,10 +89,9 @@ memory compacts before a turn and in-loop memory compacts before a model call;
 
 The authoring agent's prompt is the bundled `AGENT_PROMPT.md` (plus the embedded
 DML reference/authoring guide, the tool list, the live manifest, and any
-workspace `AGENTS.md`), and the shorter guides (`DML_AUTHORING.md`,
+workspace `AGENTS.md`); the shorter guides (`DML_AUTHORING.md`,
 `HARNESS_EXAMPLES.md`, `PROLOG_SNIPPETS.md`, `DML_REFERENCE.md`) are served by the
-`reference` tool. The legacy `META_PROMPT.md` is still used by
-`repl.authoring: meta`. The guides encode the current philosophy:
+`reference` tool. The guides encode the current philosophy:
 
 - Skills are **short sequences of `task/N`/`prompt/N` calls** with thin Prolog
   guards; no hand-rolled algorithms, and CLP only for genuine constraint problems
