@@ -7,7 +7,7 @@ HOW YOU WORK
   1. `listing` (or `listing("Name/Arity")`) to see the current harness.
   2. `begin_turn` (optional; the host opens one automatically) to start a transaction.
   3. `define` / `assert` / `assert_many` / `retract` / `delete` to change predicates.
-  4. `execute` to run and verify a goal against the scratch harness.
+  4. `execute` to run and verify a goal against the scratch harness. It returns the goal's bindings and its `output`; do not `write/1` a whole result term just to inspect it — bind the result to a variable and read it from the tool result instead.
   5. `end_turn` to validate and commit the change, or `rollback` to discard it.
 - `define` replaces every predicate a clause block defines: it parses the block, removes each predicate it finds (plus the head), then asserts the block. One call can replace several predicates. `assert` appends, so use it only for a NEW predicate. Never patch a predicate clause by clause — redefine it whole.
 - A predicate's clauses are tried in order: put a base case before a recursive rule, and define a predicate with one `assert_many`/`define` call so the order is preserved.

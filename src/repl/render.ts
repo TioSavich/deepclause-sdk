@@ -61,6 +61,28 @@ function formatArgs(args: Record<string, unknown> | undefined): string {
 /** Max captured output lines previewed under a completed tool call. */
 const TOOL_OUTPUT_LINES = 3;
 
+/** Max physical lines of a single `output` event before it is collapsed. */
+const OUTPUT_LINES = 24;
+
+/**
+ * Bound a potentially huge `output` event (e.g. a `write/1` of a large term).
+ * Keeps the head and tail and collapses the middle; `--verbose` shows it whole.
+ */
+function boundOutput(text: string, max = OUTPUT_LINES): string[] {
+  const lines = text.replace(/\r\n?/g, '\n').split('\n');
+  if (lines.length <= max) {
+    return lines;
+  }
+  const head = Math.ceil((max - 1) / 2);
+  const tail = max - 1 - head;
+  const omitted = lines.length - head - tail;
+  return [
+    ...lines.slice(0, head),
+    `… (+${omitted} more line${omitted === 1 ? '' : 's'})`,
+    ...lines.slice(lines.length - tail),
+  ];
+}
+
 /** Pull a few output lines from a tool result (bash stdout/stderr). */
 function extractToolOutput(result: unknown): string[] {
   if (!result || typeof result !== 'object') return [];
@@ -340,9 +362,15 @@ export class ReplRenderer {
       case 'solution':
         this.solution(event.solution?.bindings ?? [], undefined, prefix);
         break;
-      case 'output':
-        this.writeLine(`${prefix}${this.paint(event.content ?? '', ANSI.output)}`);
+      case 'output': {
+        // A single event can carry a large multi-line term (`write/1`); bound it
+        // and keep the frame prefix on every physical line.
+        const lines = this.verbose ? (event.content ?? '').split('\n') : boundOutput(event.content ?? '');
+        for (const line of lines) {
+          this.writeLine(`${prefix}${this.paint(line, ANSI.output)}`);
+        }
         break;
+      }
       case 'answer':
         this.writeLine(`${prefix}${this.paint(event.content ?? '', ANSI.answer)}`);
         break;

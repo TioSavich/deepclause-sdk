@@ -192,6 +192,40 @@ describe('ReplRenderer', () => {
     expect(lines[1]).toContain('\u001b[1;38;5;118m');
   });
 
+  it('collapses a huge multi-line output event (head + tail)', () => {
+    const { lines, renderer } = capture('plain', false);
+    const content = Array.from({ length: 100 }, (_, i) => `line ${i}`).join('\n');
+    renderer.render({ type: 'output', content } as DMLEvent);
+    const out = lines.join('\n');
+    expect(out).toContain('line 0');
+    expect(out).toContain('line 99');
+    expect(out).toContain('more line');
+    // The middle is collapsed, not printed.
+    expect(out).not.toContain('line 50');
+  });
+
+  it('verbose mode keeps a huge output event whole', () => {
+    const lines: string[] = [];
+    const renderer = new ReplRenderer({
+      mode: 'plain',
+      color: false,
+      verbose: true,
+      sink: (text) => lines.push(text),
+      errorSink: (text) => lines.push(text),
+    });
+    const content = Array.from({ length: 100 }, (_, i) => `line ${i}`).join('\n');
+    renderer.render({ type: 'output', content } as DMLEvent);
+    expect(lines.join('\n')).toContain('line 50');
+  });
+
+  it('keeps the nested frame prefix on every output line', () => {
+    const { lines, renderer } = capture('plain', false);
+    renderer.render({ type: 'output', content: 'first\nsecond', frameKind: 'nested', depth: 1 } as DMLEvent);
+    expect(lines[0]).toContain('nested');
+    expect(lines[1]).toContain('nested');
+    expect(lines[1]).toContain('second');
+  });
+
   it('shows a live spinner while a model call is in progress (rich mode)', () => {
     vi.useFakeTimers();
     try {
