@@ -55,6 +55,8 @@ export interface ReplCliOptions {
   backend?: 'env' | 'pi';
   /** Render streamed model text/reasoning (default true). */
   stream?: boolean;
+  /** How much model reasoning to show: off | summary | full. */
+  showReasoning?: 'off' | 'summary' | 'full';
   /** Render activity events (task activity, tool calls, usage, logs; default true). */
   events?: boolean;
   /** Save the harness to a temp file on exit (default true). */
@@ -322,6 +324,7 @@ export async function createReplRuntime(options: ReplCliOptions): Promise<ReplRu
     verbose: options.verbose ?? false,
     stream: options.stream !== false,
     events: options.events !== false,
+    reasoning: options.showReasoning ?? config.repl.showReasoning,
     onEvent: (event) => statusHolder.tracker?.observe(event),
   });
   const statusHolder: { tracker?: ReplStatusTracker } = {};
@@ -1300,6 +1303,12 @@ export function registerReplCommand(program: Command): void {
     .option('--max-model-calls <number>', 'maximum model calls per turn (default 100)', parseInt)
     .option('--backend <kind>', 'override the configured backend (env|pi)')
     .option('--no-stream', 'hide streamed model text/reasoning (show only outputs and solutions)')
+    .option('--show-reasoning <mode>', 'how much model reasoning to show: off|summary|full', (value: string) => {
+      if (value !== 'off' && value !== 'summary' && value !== 'full') {
+        throw new Error(`invalid --show-reasoning: ${value} (use off, summary, or full)`);
+      }
+      return value;
+    })
     .option('--no-events', 'hide task activity, tool calls, usage, and logs')
     .option('--no-save-on-exit', 'do not save the harness to a temp bundle on exit')
     .option('--judge <name>', 'default judgment backend (llm|jev)')
@@ -1340,6 +1349,7 @@ export function registerReplCommand(program: Command): void {
         maxModelCalls: options.maxModelCalls,
         backend: options.backend,
         stream: options.stream,
+        showReasoning: options.showReasoning,
         events: options.events,
         saveOnExit: options.saveOnExit,
         judge: options.judge,

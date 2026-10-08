@@ -4,6 +4,11 @@
 
 ### Changed
 
+- **Markdown rendering and grey reasoning.** Assistant text is rendered as
+  markdown (headings, fenced/inline code, bold/italic, links, lists,
+  blockquotes). Model reasoning is now italic grey (like pi) and wired to
+  `repl.showReasoning` / `--show-reasoning` (`off` | `summary` | `full`, default
+  `summary`); previously the setting was unused and reasoning was faint/dimmed.
 - **Status bar `↑` counts total input.** The input figure now includes cache
   reads/writes (`↑` = fresh + cache reads + cache writes), so it reflects the
   real prompt size instead of only the uncached remainder; `R`/`W` still show

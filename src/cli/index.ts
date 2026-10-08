@@ -224,6 +224,12 @@ program
   .option('--goal <dml>', 'Run this goal instead of agent_main/N')
   .option('--verbose', 'Show debug output including tool calls')
   .option('--no-stream', 'Hide streamed model text/reasoning (show only outputs and answers)')
+  .option('--show-reasoning <mode>', 'How much model reasoning to show: off|summary|full', (value: string) => {
+    if (value !== 'off' && value !== 'summary' && value !== 'full') {
+      throw new Error(`invalid --show-reasoning: ${value} (use off, summary, or full)`);
+    }
+    return value;
+  })
   .option('--no-events', 'Hide task activity, tool calls, usage, and logs')
   .option('--plain', 'No color/formatting')
   .option('--json', 'Emit events as JSON lines')
@@ -254,6 +260,7 @@ program
         verbose: options.verbose,
         stream: options.stream,
         events: options.events,
+        showReasoning: options.showReasoning,
         plain: options.plain,
         json: options.json,
         sandbox: options.sandbox,

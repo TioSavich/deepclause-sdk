@@ -294,6 +294,19 @@ or `shell.idleTimeoutMs` sets the no-output (idle) timeout (default 180 s). A
 shell result carries `timeMs` (its wall-clock duration), and the authoring
 agent's `execute` result carries `elapsedMs`.
 
+### Reasoning and markdown
+
+Assistant text is rendered as **markdown** — headings, fenced and inline code,
+bold/italic, links, lists, and blockquotes (disable with `markdown: false`).
+Model **reasoning** is streamed as italic grey; `repl.showReasoning` or
+`--show-reasoning` controls it:
+
+* `off` — hide it;
+* `summary` (default) — a bounded preview (~600 chars per block);
+* `full` — everything.
+
+`--no-stream` hides both streamed text and reasoning.
+
 ### Entry points
 
 There is **no `agent_main` requirement** in the REPL. Name predicates
@@ -528,6 +541,7 @@ deepclause repl [options]
       --thinking <level>   reasoning level (off|minimal|low|medium|high|xhigh|max)
       --temperature <n>
       --no-stream          hide streamed model text/reasoning
+      --show-reasoning <m> how much model reasoning to show: off|summary|full
       --no-events          hide activity events
       --no-save-on-exit    do not save the harness on exit
       --sandbox            run shell tools in AgentVM

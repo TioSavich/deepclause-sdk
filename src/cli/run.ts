@@ -31,6 +31,8 @@ export interface RunOptions {
   verbose?: boolean;
   stream?: boolean;
   events?: boolean;
+  /** How much model reasoning to show: off | summary | full. */
+  showReasoning?: 'off' | 'summary' | 'full';
   plain?: boolean;
   json?: boolean;
   color?: boolean;
@@ -137,6 +139,7 @@ export async function run(
     verbose: options.verbose ?? false,
     stream: options.stream !== false,
     events: options.events !== false,
+    reasoning: options.showReasoning ?? config.repl.showReasoning,
   });
 
   const toolset = await createReplToolset({

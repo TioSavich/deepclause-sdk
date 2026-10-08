@@ -12,6 +12,7 @@
 
 import type { DMLBinding, DMLEvent } from '../types.js';
 import { formatListing } from './highlight.js';
+import { MarkdownStream } from './markdown.js';
 
 export type RenderMode = 'rich' | 'plain' | 'json';
 
@@ -23,6 +24,10 @@ export interface ReplRendererOptions {
   verbose?: boolean;
   /** Render streamed model text/reasoning (default true). `--no-stream` disables. */
   stream?: boolean;
+  /** How much model reasoning to show: `off`, `summary` (bounded), or `full`. */
+  reasoning?: 'off' | 'summary' | 'full';
+  /** Render assistant text as markdown (default true). */
+  markdown?: boolean;
   /** Render activity events (task activity, tool calls, usage, logs); default true. `--no-events` disables. */
   events?: boolean;
   /** Terminal width for the tool-call panel background (default: stdout columns, or 80). */
@@ -146,6 +151,8 @@ const ANSI = {
   cyan: '\u001b[36m',
   green: '\u001b[32m',
   red: '\u001b[31m',
+  /** Model reasoning: italic grey, like pi's thinking text. */
+  thinking: '\u001b[3;38;5;245m',
   /** DML `output/1` intermediate results. */
   output: '\u001b[38;5;150m',
   /** The final `answer/1`. */
@@ -204,18 +211,29 @@ export function formatBindings(bindings: DMLBinding[]): string {
   return bindings.map((binding) => `${binding.name} = ${binding.value}`).join('\n');
 }
 
+/** Max characters of reasoning shown in `summary` mode. */
+const REASONING_SUMMARY_CHARS = 600;
+
 export class ReplRenderer {
   readonly mode: RenderMode;
   private readonly color: boolean;
   private readonly verbose: boolean;
   private readonly showStream: boolean;
   private readonly showEvents: boolean;
+  private readonly reasoningMode: 'off' | 'summary' | 'full';
+  private readonly markdownEnabled: boolean;
+  private readonly markdown = new MarkdownStream();
+  private pendingTextEvent?: DMLEvent;
   private width: number;
   private sink: (text: string) => void;
   private errorSink: (text: string) => void;
   private eventSink?: (event: DMLEvent) => void;
   /** Frame key of the currently open streamed-text region, or null. */
   private lastStreamFrame: string | null = null;
+  /** Reasoning region key and characters shown so far (for `summary` mode). */
+  private reasoningRegion = '';
+  private reasoningChars = 0;
+  private reasoningTruncated = false;
   private atLineStart = true;
   /** Last detail body printed for a running call (dedupes start/running). */
   private lastToolDetail?: string;
@@ -232,6 +250,8 @@ export class ReplRenderer {
     this.verbose = options.verbose ?? false;
     this.showStream = options.stream ?? true;
     this.showEvents = options.events ?? true;
+    this.reasoningMode = options.reasoning ?? 'full';
+    this.markdownEnabled = options.markdown ?? true;
     this.width = options.width ?? (process.stdout.columns || 80);
     this.sink = options.sink ?? ((text) => process.stdout.write(text));
     this.errorSink = options.errorSink ?? ((text) => process.stderr.write(text));
@@ -285,9 +305,15 @@ export class ReplRenderer {
   /** Write a line to the normal sink. */
   writeLine(text = ''): void {
     this.stopSpinner();
+    this.flushStream();
     this.sink(`${text}\n`);
     this.lastStreamFrame = null;
     this.atLineStart = true;
+  }
+
+  /** Flush any buffered streamed text (e.g. an unterminated markdown line). */
+  flush(): void {
+    this.flushStream();
   }
 
   writeErrorLine(text: string): void {
@@ -409,7 +435,7 @@ export class ReplRenderer {
         break;
       case 'reasoning':
         if (event.content) {
-          this.writeStream(event, this.paint(event.content, ANSI.dim), 'reasoning');
+          this.writeReasoning(event, event.content);
         }
         break;
       case 'log':
@@ -619,8 +645,59 @@ export class ReplRenderer {
     }
   }
 
+  /**
+   * Stream reasoning according to `showReasoning`: `off` hides it, `summary`
+   * shows a bounded preview, `full` shows everything (all dimmed).
+   */
+  private writeReasoning(event: DMLEvent, chunk: string): void {
+    if (this.reasoningMode === 'off') {
+      return;
+    }
+    const region = `${event.frameKind ?? 'plain'}@${event.depth ?? 0}`;
+    if (region !== this.reasoningRegion) {
+      this.reasoningRegion = region;
+      this.reasoningChars = 0;
+      this.reasoningTruncated = false;
+    }
+    const limit = this.reasoningMode === 'summary' ? REASONING_SUMMARY_CHARS : Infinity;
+    if (this.reasoningChars >= limit) {
+      this.announceReasoningTruncated(event);
+      return;
+    }
+    const remaining = limit - this.reasoningChars;
+    const text = chunk.length > remaining ? chunk.slice(0, remaining) : chunk;
+    this.reasoningChars += text.length;
+    this.writeStream(event, this.paint(text, ANSI.thinking), 'reasoning');
+    if (this.reasoningChars >= limit) {
+      this.announceReasoningTruncated(event);
+    }
+  }
+
+  private announceReasoningTruncated(event: DMLEvent): void {
+    if (this.reasoningTruncated) {
+      return;
+    }
+    this.reasoningTruncated = true;
+    this.writeStream(
+      event,
+      this.paint(' … (reasoning truncated; set showReasoning=full to see it all)', ANSI.dim),
+      'reasoning',
+    );
+  }
+
   /** Write a streamed chunk, prefixing it with its frame label on first use. */
   private writeStream(event: DMLEvent, chunk: string, kind: 'text' | 'reasoning'): void {
+    if (kind === 'text' && this.markdownEnabled) {
+      this.pendingTextEvent = event;
+      for (const line of this.markdown.push(chunk)) {
+        this.writeStreamChunk(event, `${line}\n`, kind);
+      }
+      return;
+    }
+    this.writeStreamChunk(event, chunk, kind);
+  }
+
+  private writeStreamChunk(event: DMLEvent, chunk: string, kind: 'text' | 'reasoning'): void {
     // Include the kind so switching reasoning <-> text starts a fresh region.
     const key = `${event.frameKind ?? 'plain'}@${event.depth ?? 0}:${kind}`;
     if (key !== this.lastStreamFrame) {
@@ -638,6 +715,13 @@ export class ReplRenderer {
 
   /** Close an open streamed-text region before writing a line. */
   private flushStream(): void {
+    if (this.markdownEnabled && this.pendingTextEvent) {
+      const event = this.pendingTextEvent;
+      this.pendingTextEvent = undefined;
+      for (const line of this.markdown.flush()) {
+        this.writeStreamChunk(event, `${line}\n`, 'text');
+      }
+    }
     if (this.lastStreamFrame !== null) {
       if (!this.atLineStart) this.sink('\n');
       this.lastStreamFrame = null;

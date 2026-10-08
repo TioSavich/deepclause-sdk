@@ -366,6 +366,7 @@ describe('block spacing', () => {
     const { lines, renderer } = capture('plain');
     renderer.render({ type: 'tool_call', toolName: 'bash', toolState: 'completed', toolArgs: { command: 'ls' }, toolSummary: 'exit 0' } as DMLEvent);
     renderer.render({ type: 'stream', content: 'done' } as DMLEvent);
+    renderer.flush();
     expect(lines.join('')).toMatch(/\n\ndone/);
   });
 
@@ -446,5 +447,68 @@ describe('block spacing', () => {
     renderer.setSuppressInputPrompt(true);
     renderer.render({ type: 'input_required', prompt: 'What do you do?' } as DMLEvent);
     expect(lines.join('')).not.toContain('What do you do?');
+  });
+});
+
+describe('markdown and reasoning', () => {
+  it('renders assistant text as markdown', () => {
+    const { lines, renderer } = capture('plain', false);
+    renderer.render({ type: 'stream', content: '# Title\nThis is **bold** and `code`.\n- item\n' } as DMLEvent);
+    renderer.flush();
+    const out = lines.join('');
+    expect(out).toContain('Title');
+    expect(out).not.toContain('# Title');
+    expect(out).toContain('\u001b[1mbold');
+    expect(out).toContain('\u001b[38;5;141m•');
+    expect(out).toContain('item');
+  });
+
+  it('styles fenced code blocks and their content', () => {
+    const { lines, renderer } = capture('plain', false);
+    renderer.render({ type: 'stream', content: '```ts\nconst x = 1;\n```\n' } as DMLEvent);
+    renderer.flush();
+    const out = lines.join('');
+    expect(out).toContain('const x = 1;');
+    expect(out).toContain('\u001b[38;5;114m');
+  });
+
+  it('can disable markdown rendering', () => {
+    const lines: string[] = [];
+    const renderer = new ReplRenderer({
+      mode: 'plain',
+      color: false,
+      markdown: false,
+      sink: (text) => lines.push(text),
+      errorSink: (text) => lines.push(text),
+    });
+    renderer.render({ type: 'stream', content: '# Title\n' } as DMLEvent);
+    renderer.flush();
+    expect(lines.join('')).toContain('# Title');
+  });
+
+  it('renders reasoning as italic grey and hides it when off', () => {
+    const lines: string[] = [];
+    const renderer = new ReplRenderer({ mode: 'rich', color: true, sink: (text) => lines.push(text), errorSink: (text) => lines.push(text) });
+    renderer.render({ type: 'reasoning', content: 'thinking hard' } as DMLEvent);
+    renderer.flush();
+    const out = lines.join('');
+    expect(out).toContain('\u001b[3;38;5;245m');
+    expect(out).toContain('thinking hard');
+
+    const offLines: string[] = [];
+    const off = new ReplRenderer({ mode: 'rich', color: true, reasoning: 'off', sink: (text) => offLines.push(text), errorSink: (text) => offLines.push(text) });
+    off.render({ type: 'reasoning', content: 'secret reasoning' } as DMLEvent);
+    off.flush();
+    expect(offLines.join('')).not.toContain('secret reasoning');
+  });
+
+  it('bounds reasoning in summary mode', () => {
+    const lines: string[] = [];
+    const renderer = new ReplRenderer({ mode: 'plain', color: false, reasoning: 'summary', sink: (text) => lines.push(text), errorSink: (text) => lines.push(text) });
+    renderer.render({ type: 'reasoning', content: 'x'.repeat(2000) } as DMLEvent);
+    renderer.flush();
+    const out = lines.join('');
+    expect(out).toContain('reasoning truncated');
+    expect(out.length).toBeLessThan(1000);
   });
 });
