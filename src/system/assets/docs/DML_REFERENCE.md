@@ -145,8 +145,8 @@ Bind up to three variables.
 > **Note — `task/N` is load-time sugar.** `task/1,2,3,4` and `prompt/2,3,4` are
 > rewritten by the DML loader into `task_named/3` / `prompt_named/3` with typed
 > output variables. The rewrite runs whenever code is loaded (`deepclause run`,
-> the REPL `-l` and commit paths, `consult`, and the REPL meta task's
-> `assert`/`assert_many` tools). The untransformed form has no runtime handler,
+> the REPL `-l` and commit paths, `consult`, and the REPL `assert`/`assert_many`
+> tools). The untransformed form has no runtime handler,
 > so code that somehow reaches the runtime without the rewrite raises
 > `domain_error(unrewritten_task_form, Goal)` instead of failing silently.
 > `task/1`/`prompt/1` are handled directly and are unaffected.
@@ -855,16 +855,18 @@ backtracking reuses an answer instead of re-querying the model.
 DML skills can also be grown interactively in a persistent **living module**.
 
 - `goal: <dml>.` runs a goal and enumerates its solutions.
-- Plain English builds the harness: a meta task writes DML that is committed
-  replace-by-predicate (nothing is auto-run; the meta task uses the `execute`
-  tool when it needs to run something during the turn).
+- Plain English builds the module: the **authoring agent** inspects and edits it
+  through tools (`listing`, `begin_turn`, `define`/`assert`/`assert_many`,
+  `retract`/`delete`, `execute`, `end_turn`/`rollback`). Edits are transactions:
+  `begin_turn` is required before any edit, `end_turn` commits a version.
+  Nothing is auto-run; the agent uses `execute` to test during a turn.
 - There is **no implicit `agent_main` requirement** in the REPL. Run any
-  predicate with `goal: <name>(…)`. Define `agent_main` in the harness when it
+  predicate with `goal: <name>(…)`. Define `agent_main` in the module when it
   should also run with `deepclause run` / `/dc-run`.
-- `freeze.` makes the harness read-only; `export <file>.` serializes it.
+- `freeze.` makes the module read-only; `export <file>.` serializes it.
   `export harness.zip` bundles the module with its linked script files;
   `export harness.dml` inlines them into one portable file.
-- `ask_user` (authoring agent) and `input/2` / `exec(ask_user(...))` (harness) ask the
+- `ask_user` (authoring agent) and `input/2` / `exec(ask_user(...))` (module) ask the
   human. They never block in non-interactive runs (`-g`, piped stdin, CI).
 
 **Self-containment.** The harness is the `.dml` **plus the files it links**.

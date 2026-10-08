@@ -5,13 +5,15 @@
 ### Changed
 
 - **The system prompt is one file.** `AGENT_PROMPT.md` is now a single,
-  self-contained prompt (DML intro, module/skill model, inspect/execute/edit,
-  host tools, `tool/2`, file I/O, condensed reference, patterns, editing rules).
-  Template substitution is gone: `{{TOOLS}}`, `{{CATALOG}}`, `{{MANIFEST}}`,
-  `{{REFERENCE}}`, and `{{AUTHORING}}` were removed, along with the
-  `repl.agentDocs` / `--agent-docs` option. The full reference and pattern
-  library remain available through `reference(topic)`. `listing` now prints the
-  `module_doc/1` skill description first.
+  self-contained prompt: DML intro, module/skill model, inspect/execute/edit,
+  host tools (`bash`, `ask_user`), the `tool/2` annotation, file I/O, the
+  **complete DML reference** (mirrored verbatim from `DML_REFERENCE.md`), typical
+  **deep-research and coding-agent patterns**, and the editing rules. It also
+  states the design principle: keep DML simple, treat it as orchestration +
+  verification, and avoid algorithmic Prolog. Template substitution is gone:
+  `{{TOOLS}}`, `{{CATALOG}}`, `{{MANIFEST}}`, `{{REFERENCE}}`, `{{AUTHORING}}`
+  were removed, along with `repl.agentDocs` / `--agent-docs`. `listing` now
+  prints the `module_doc/1` skill description first.
 - **Enforced edit transactions.** `define`/`assert`/`assert_many`/`retract`/
   `delete` are refused while no transaction is open — the agent must call
   `begin_turn` first — and after `end_turn` a new `begin_turn` is required to edit
