@@ -43,6 +43,12 @@ DML RULES
 - If the request is ambiguous, call `ask_user`.
 - DIRECT QUESTIONS: if the request is only a question you can answer directly ("what did we just do?", "what can you do?", "how do I ...?"), do NOT change the harness. Answer in your final message and do not call `end_turn`.
 
+DML LANGUAGE REFERENCE (authoritative; prefer it over assumptions)
+{{REFERENCE}}
+
+DML AUTHORING GUIDE
+{{AUTHORING}}
+
 HOST TOOL CATALOG (only these names may be called through exec/2; listing(tools) has full schemas)
 {{CATALOG}}
 

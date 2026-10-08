@@ -70,6 +70,8 @@ export interface ReplCliOptions {
   tui?: 'auto' | 'on' | 'off';
   /** Authoring implementation: `agent` (default) or `meta`. */
   authoring?: 'meta' | 'agent';
+  /** Agent authoring docs: `embed` (default) or `tool`. */
+  agentDocs?: 'embed' | 'tool';
 }
 
 export type ReplInput =
@@ -404,6 +406,7 @@ export async function createReplRuntime(options: ReplCliOptions): Promise<ReplRu
     compaction: { settings: replCompaction, auto: replCompaction.auto },
     contextWindow,
     authoring: options.authoring ?? config.repl.authoring,
+    agentDocs: options.agentDocs ?? config.repl.agentDocs,
     onInput: buildCliOnInput(options),
   });
 
@@ -1217,6 +1220,12 @@ export function registerReplCommand(program: Command): void {
       }
       return value;
     })
+    .option('--agent-docs <mode>', 'agent authoring docs: embed (default) or tool', (value: string) => {
+      if (value !== 'embed' && value !== 'tool') {
+        throw new Error(`invalid --agent-docs: ${value} (use embed or tool)`);
+      }
+      return value;
+    })
     .option('-P, --param <key=value>', 'session parameter (repeatable)', collectParams, {})
     .option('-f, --freeze', 'start with the harness frozen (read-only lock)')
     .option('--locked', 'like --freeze, but forbid unfreeze for this process')
@@ -1253,6 +1262,7 @@ export function registerReplCommand(program: Command): void {
         interactiveInput: options.interactiveInput,
         tui: options.tui,
         authoring: options.authoring,
+        agentDocs: options.agentDocs,
         param: options.param,
         verbose: Boolean(options.verbose || options.debug),
         color: options.color,

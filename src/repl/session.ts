@@ -89,6 +89,8 @@ export interface DMLSessionOptions {
   contextWindow?: number;
   /** Authoring implementation: the DML `meta` frame (legacy) or the TS `agent`. */
   authoring?: 'meta' | 'agent';
+  /** Agent authoring docs: embed the DML reference/authoring guides, or use the tool. */
+  agentDocs?: 'embed' | 'tool';
   /**
    * Resume an existing session (identified by `sessionId`): restore its saved
    * harness and conversation memory and continue its turn numbering. Requires
@@ -139,6 +141,7 @@ export class DMLSession {
   private temperature = 0.7;
   private maxTokens = 65536;
   private readonly authoring: 'meta' | 'agent';
+  private readonly agentDocs: 'embed' | 'tool';
   /** Persisted authoring-agent conversation (agent mode). */
   private agentMessages: MemoryMessage[] = [];
   private harnessAgent?: HarnessAgent;
@@ -193,6 +196,7 @@ export class DMLSession {
     this.temperature = options.runnerOptions.temperature;
     this.maxTokens = options.runnerOptions.maxTokens;
     this.authoring = options.authoring ?? 'meta';
+    this.agentDocs = options.agentDocs ?? 'embed';
     this.runner = new DMLRunner(swipl, {
       ...options.runnerOptions,
       compactMessages: options.compaction
@@ -976,7 +980,7 @@ export class DMLSession {
     const turn = this.turnCounter;
     await this.beginTurn();
 
-    const agent = this.getHarnessAgent();
+    const agent = await this.getHarnessAgent();
     let failed = false;
     try {
       for await (const event of agent.run(request, { signal: options.signal })) {
@@ -1002,8 +1006,11 @@ export class DMLSession {
     await this.persistSessionHarness(this.history?.currentVersion ?? 0);
   }
 
-  private getHarnessAgent(): HarnessAgent {
+  private async getHarnessAgent(): Promise<HarnessAgent> {
     if (this.harnessAgent) return this.harnessAgent;
+    const docs = this.agentDocs === 'embed'
+      ? { reference: await this.loadDmlReference(), authoring: await this.loadDmlAuthoring() }
+      : undefined;
     this.harnessAgent = new HarnessAgent({
       controller: this,
       tools: createHarnessTools(this),
@@ -1019,6 +1026,7 @@ export class DMLSession {
         : undefined,
       hostToolsCatalog: this.hostToolsCatalog,
       workspacePath: this.workspacePath,
+      docs,
       knownMessages: this.agentMessages,
     });
     return this.harnessAgent;

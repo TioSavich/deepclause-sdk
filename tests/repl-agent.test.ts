@@ -187,4 +187,15 @@ describe('HarnessAgent', () => {
       await fs.rm(workspace, { recursive: true, force: true });
     }
   });
+
+  it('embeds the DML reference and authoring guide when provided', async () => {
+    const prompt = await buildAgentSystemPrompt({
+      tools: createHarnessTools(stubController().controller),
+      manifest: 'M',
+      reference: 'REF-BODY-HERE',
+      authoring: 'AUTH-BODY-HERE',
+    });
+    expect(prompt).toContain('REF-BODY-HERE');
+    expect(prompt).toContain('AUTH-BODY-HERE');
+  });
 });

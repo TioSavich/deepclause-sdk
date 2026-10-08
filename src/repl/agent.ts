@@ -36,6 +36,8 @@ export interface HarnessAgentOptions {
   hostToolsCatalog?: string;
   /** Workspace root, so a `.deepclause/system/AGENT_PROMPT.md` override is used. */
   workspacePath?: string;
+  /** Docs embedded in the system prompt (`agentDocs: 'embed'`). */
+  docs?: { reference?: string; authoring?: string };
   /** Pre-loaded documentation for the `reference` tool (handled by the controller). */
   knownMessages?: MemoryMessage[];
 }
@@ -66,6 +68,10 @@ export async function buildAgentSystemPrompt(options: {
   hostToolsCatalog?: string;
   manifest: string;
   workspacePath?: string;
+  /** Embedded DML language reference (`{{REFERENCE}}`). */
+  reference?: string;
+  /** Embedded DML authoring guide (`{{AUTHORING}}`). */
+  authoring?: string;
 }): Promise<string> {
   let template = '';
   try {
@@ -76,7 +82,9 @@ export async function buildAgentSystemPrompt(options: {
   return template
     .replace('{{CATALOG}}', options.hostToolsCatalog ?? '(no host capability tools registered)')
     .replace('{{TOOLS}}', describeTools(options.tools))
-    .replace('{{MANIFEST}}', options.manifest || '(empty harness)');
+    .replace('{{MANIFEST}}', options.manifest || '(empty harness)')
+    .replace('{{REFERENCE}}', options.reference?.trim() || '(call reference("language"))')
+    .replace('{{AUTHORING}}', options.authoring?.trim() || '(call reference("authoring"))');
 }
 
 /** Project the agent's message list onto `MemoryMessage[]` for compaction. */
@@ -167,6 +175,8 @@ export class HarnessAgent {
       hostToolsCatalog: this.options.hostToolsCatalog,
       manifest,
       workspacePath: this.options.workspacePath,
+      reference: this.options.docs?.reference,
+      authoring: this.options.docs?.authoring,
     });
 
     this.messages.push({ role: 'user', content: request });

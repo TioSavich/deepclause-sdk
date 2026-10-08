@@ -185,11 +185,21 @@ deepclause repl --authoring meta    # legacy
 #### Customizing the system prompt
 
 The agent's system prompt is assembled from the bundled
-`src/system/assets/docs/AGENT_PROMPT.md` plus three generated sections:
-`{{CATALOG}}` (the host tool catalog), `{{TOOLS}}` (the tool schemas), and
-`{{MANIFEST}}` (the live harness manifest).
+`src/system/assets/docs/AGENT_PROMPT.md` plus generated sections:
+`{{CATALOG}}` (the host tool catalog), `{{TOOLS}}` (the tool schemas),
+`{{MANIFEST}}` (the live harness manifest), and — by default — `{{REFERENCE}}`
+and `{{AUTHORING}}` (the DML language reference and authoring guide).
 
-To override it **without rebuilding the SDK**, create
+`repl.agentDocs` controls the last two:
+
+* **`embed`** (default) injects the full DML reference and authoring guide into the
+  system prompt, so the agent always has them.
+* **`tool`** leaves them out and relies on the `reference(topic)` tool; the prompt
+  is much smaller but the agent only sees the docs if it asks for them.
+
+Set it with `--agent-docs embed|tool` or under `repl` in the config.
+
+To override the prompt itself **without rebuilding the SDK**, create
 `.deepclause/system/AGENT_PROMPT.md` in the workspace; the runtime prefers it
 over the bundled file. It is an opt-in override (it is never seeded), so
 upgrading the SDK keeps the bundled prompt current for everyone who has not
@@ -548,6 +558,7 @@ block.
   "promptPrefix": "dml> ",
   "tui": "auto",
   "authoring": "agent",
+  "agentDocs": "embed",
   "render": "rich",
   "showReasoning": "summary",
   "showToolArgs": true,

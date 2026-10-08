@@ -74,6 +74,8 @@ export interface HarnessReplOptions {
   contextWindow?: number;
   /** Authoring implementation: the DML `meta` frame (legacy) or the TS `agent`. */
   authoring?: 'meta' | 'agent';
+  /** Agent authoring docs: embed the DML reference/authoring guides, or use the tool. */
+  agentDocs?: 'embed' | 'tool';
 }
 
 export interface RollbackResult {
@@ -211,6 +213,7 @@ export async function createHarnessRepl(options: HarnessReplOptions): Promise<Ha
     compaction: options.compaction,
     contextWindow: options.contextWindow,
     authoring: options.authoring,
+    agentDocs: options.agentDocs,
     runnerOptions: {
       model: options.model,
       provider: options.provider,
