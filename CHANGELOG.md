@@ -4,6 +4,10 @@
 
 ### Changed
 
+- **Status bar `↑` counts total input.** The input figure now includes cache
+  reads/writes (`↑` = fresh + cache reads + cache writes), so it reflects the
+  real prompt size instead of only the uncached remainder; `R`/`W` still show
+  the cache split and `CH%` the hit rate.
 - **Nested activity is indented, not labelled.** The `nested` word is gone;
   `execute` child events are shown by indentation plus a hanging `│`, and task
   activity renders as `▸ Task  <description>` / `✔ Task  done` / `✖ Task  failed`

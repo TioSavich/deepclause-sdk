@@ -117,11 +117,20 @@ describe('status formatting', () => {
     const status = tracker(10_000);
     status.observe({ ...usage(1_000, 100, 1_000) });
     const snapshot = status.snapshot();
-    expect(formatUsageSegment(snapshot)).toContain('↑1.0k');
+    expect(formatUsageSegment(snapshot)).toContain('↑2.0k');
     expect(formatUsageSegment(snapshot)).toContain('CH50%');
     expect(formatContextSegment(snapshot)).toBe('agent 2.0k/10k 20%');
     expect(formatModelSegment(snapshot)).toBe('gpt-4o · medium');
     expect(formatStatusLine(snapshot)).toContain('gpt-4o · medium');
+  });
+
+  it('counts cache reads in the ↑ input total', () => {
+    const status = tracker(100_000);
+    status.observe({ ...usage(400, 10, 20_000) });
+    const segment = formatUsageSegment(status.snapshot());
+    // 400 fresh + 20k cache read => 20.4k total input, and the cache split stays.
+    expect(segment).toContain('↑20k');
+    expect(segment).toContain('R20k');
   });
 
   it('formats an unknown context window', () => {

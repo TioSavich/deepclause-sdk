@@ -221,10 +221,19 @@ export class ReplStatusTracker {
   }
 }
 
-/** The usage segment of the status line: `↑in ↓out Rread Wwrite CH%`. */
+/**
+ * The usage segment of the status line: `↑in ↓out Rread Wwrite CH%`.
+ *
+ * `↑` is the **total** input the model processed — fresh input plus cache reads
+ * and writes — so it reflects the real prompt size rather than only the
+ * uncached remainder. `R`/`W` break out the cache portion.
+ */
 export function formatUsageSegment(snapshot: ReplStatusSnapshot): string {
   const parts: string[] = [];
-  if (snapshot.totals.inputTokens) parts.push(`↑${formatTokens(snapshot.totals.inputTokens)}`);
+  const inputTokens = snapshot.totals.inputTokens
+    + snapshot.totals.cacheReadTokens
+    + snapshot.totals.cacheWriteTokens;
+  if (inputTokens) parts.push(`↑${formatTokens(inputTokens)}`);
   if (snapshot.totals.outputTokens) parts.push(`↓${formatTokens(snapshot.totals.outputTokens)}`);
   if (snapshot.totals.cacheReadTokens) parts.push(`R${formatTokens(snapshot.totals.cacheReadTokens)}`);
   if (snapshot.totals.cacheWriteTokens) parts.push(`W${formatTokens(snapshot.totals.cacheWriteTokens)}`);

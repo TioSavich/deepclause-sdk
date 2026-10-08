@@ -176,7 +176,7 @@ describe('StatusBarComponent', () => {
     expect(lines).toHaveLength(2);
     expect(lines[0]).toContain('/work/project');
     expect(lines[0]).toContain('repl_1');
-    expect(lines[1]).toContain('↑1.0k');
+    expect(lines[1]).toContain('↑1.5k');
     expect(lines[1]).toContain('agent 1.5k/128k');
     expect(lines[1]).toContain('gpt-4o · high');
     for (const line of lines) {
