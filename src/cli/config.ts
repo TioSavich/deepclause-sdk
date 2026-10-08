@@ -113,6 +113,8 @@ const ReplConfigSchema = z.object({
   // 0 means unlimited.
   maxModelCalls: z.number().int().nonnegative().optional().default(100),
   writeDepth: z.number().int().positive().optional().default(20),
+  /** Harness to edit by default (a project can hold several; default `main`). */
+  harness: z.string().optional().default('main'),
   promptPrefix: z.string().optional().default('dml> '),
   /** Interactive UI: auto (TUI on a TTY), on, or off (line mode). */
   tui: z.enum(['auto', 'on', 'off']).optional().default('auto'),
@@ -211,6 +213,7 @@ const DEFAULT_CONFIG: Config = {
     maxModelCalls: 100,
     writeDepth: 20,
     promptPrefix: 'dml> ',
+    harness: 'main',
     tui: 'auto' as const,
     showReasoning: 'summary',
     showToolArgs: true,

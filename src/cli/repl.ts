@@ -57,6 +57,8 @@ export interface ReplCliOptions {
   stream?: boolean;
   /** How much model reasoning to show: off | summary | full. */
   showReasoning?: 'off' | 'summary' | 'full';
+  /** Harness to edit (a project can hold several). Default `main`. */
+  harness?: string;
   /** Render activity events (task activity, tool calls, usage, logs; default true). */
   events?: boolean;
   /** Save the harness to a temp file on exit (default true). */
@@ -286,6 +288,8 @@ export interface ReplRuntime {
   thinkingLevel?: string;
   /** Session id of this run. */
   sessionId: string;
+  /** Harness this session edits (a project can hold several). */
+  harnessName: string;
   /** Session id when the run resumed an earlier session. */
   resumedSession?: string;
   /** True when persistent history is enabled (sessions can be resumed). */
@@ -314,6 +318,12 @@ export async function createReplRuntime(options: ReplCliOptions): Promise<ReplRu
   const workspace = path.resolve(options.workspace ?? './');
   const config = await loadReplConfig(workspace);
   const replCompaction = resolveReplCompactionConfig(config);
+  // One harness per name within a project: `--harness`, else the `-l` file's
+  // name, else the configured default (`main`).
+  const harnessName = normalizeHarnessName(options.harness)
+    ?? (options.load?.length ? harnessNameFromFile(options.load[0]) : undefined)
+    ?? normalizeHarnessName(config.repl.harness)
+    ?? 'main';
   const modelId = options.model ?? config.models.run;
   const resolved = resolveModel(modelId);
   const provider = (options.provider as Provider | undefined) ?? resolved.provider;
@@ -471,6 +481,8 @@ export async function createReplRuntime(options: ReplCliOptions): Promise<ReplRu
     llmBackend,
     judgeSelection,
     history: historyOptions,
+    harness: harnessName,
+    autoLoadHarness: !(options.load?.length),
     compaction: { settings: replCompaction, auto: replCompaction.auto },
     contextWindow,
     onInput: buildCliOnInput(options),
@@ -511,6 +523,7 @@ export async function createReplRuntime(options: ReplCliOptions): Promise<ReplRu
     reasoning,
     thinkingLevel,
     sessionId: repl.session.getSessionId(),
+    harnessName,
     resumedSession: resume ? sessionId : undefined,
     historyEnabled: Boolean(historyOptions),
     inputHistory,
@@ -542,13 +555,13 @@ async function printBanner(runtime: ReplRuntime, loaded: string[]): Promise<void
 
   const state = loaded.length > 0
     ? `${loaded.length} file${loaded.length === 1 ? '' : 's'} loaded`
-    : 'blank harness';
+    : (runtime.repl.session.isEmpty() ? 'blank harness' : 'harness loaded');
   const frozen = runtime.repl.isFrozen() ? `  ${paint(' FROZEN ', '41;97')}` : '';
 
   const lines: string[] = [
     '',
     `  ${paint('DeepClause', '1;36')} ${paint('DML REPL', '1')}  ${dim(`v${runtime.version}`)}${frozen}`,
-    `  ${dim(state)}  ${dim('·')}  ${paint(runtime.model, '35')}  ${dim('·')}  ${dim(`backend ${runtime.backend}`)}`,
+    `  ${dim(state)}  ${dim('·')}  ${paint(runtime.model, '35')}  ${dim('·')}  ${dim(`backend ${runtime.backend}`)}  ${dim('·')}  ${dim(`harness ${runtime.harnessName}`)}`,
     `  ${dim(runtime.workspace)}`,
   ];
 
@@ -987,6 +1000,7 @@ export async function runTui(
     getSnapshot: () => runtime.statusSnapshot(),
     workspace: runtime.workspace,
     sessionId: runtime.sessionId,
+    harness: runtime.harnessName,
     backend: runtime.backend,
     isFrozen: () => runtime.repl.isFrozen(),
     isRunning: () => runState.running,
@@ -1213,6 +1227,10 @@ export async function startRepl(options: ReplCliOptions): Promise<number> {
     if (loadExit !== 0) {
       return loadExit;
     }
+    // A harness file loaded into a fresh harness becomes its baseline.
+    if (options.load?.length) {
+      await runtime.repl.session.finalizeHarnessBaseline();
+    }
 
     // Freeze/lock only after all `-l` loads succeed (load before lock).
     if (options.locked) {
@@ -1288,6 +1306,7 @@ export function registerReplCommand(program: Command): void {
     .option('-g, --goal <goal>', 'run one goal and exit (repeatable)', collect)
     .option('-l, --load <file>', 'load a DML file before starting (repeatable)', collect)
     .option('--session <id>', 'resume a previous session by id (or "last")')
+    .option('--harness <name>', 'harness to edit (a project can hold several; default main)')
     .option('--first', 'with a goal, print only the first solution')
     .option('--plain', 'no TUI formatting (auto when stdout is not a TTY)')
     .option('--json', 'emit results as JSON lines')
@@ -1373,6 +1392,19 @@ export function registerReplCommand(program: Command): void {
 
 function collect(value: string, previous: string[] | undefined): string[] {
   return [...(previous ?? []), value];
+}
+
+/** Slug a harness name (letters, digits, `.`, `_`, `-`); undefined when empty. */
+export function normalizeHarnessName(name?: string): string | undefined {
+  const trimmed = name?.trim();
+  if (!trimmed) return undefined;
+  const slug = trimmed.replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '');
+  return slug || undefined;
+}
+
+/** Harness name implied by a `-l` file: its basename without the `.dml`/`.zip`. */
+function harnessNameFromFile(file: string): string | undefined {
+  return normalizeHarnessName(path.basename(file).replace(/\.(dml|zip)$/i, ''));
 }
 
 function collectParams(value: string, previous: Record<string, string>): Record<string, string> {

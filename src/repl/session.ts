@@ -89,6 +89,13 @@ export interface DMLSessionOptions {
    * `history` and a `sessionId` that already exists.
    */
   resume?: boolean;
+  /** Harness this session edits (a project can hold several). Default `main`. */
+  harnessName?: string;
+  /**
+   * Load the harness's current content (`harness.dml`) on open. Default true.
+   * Set false when the caller supplies content explicitly (e.g. `-l`).
+   */
+  autoLoadHarness?: boolean;
 }
 
 export interface DMLQueryOptions {
@@ -158,6 +165,9 @@ export class DMLSession {
   private history?: HistoryStore;
   private historyOptions?: HistoryOptions;
   private resume: boolean;
+  /** Harness this session edits. */
+  private readonly harnessName: string;
+  private readonly autoLoadHarness: boolean;
   /** Monotonic per-session turn counter used by history records. */
   private turnCounter = 0;
   private historyWarned = false;
@@ -181,6 +191,8 @@ export class DMLSession {
     this.hostToolsCatalog = options.hostToolsCatalog;
     this.historyOptions = options.history;
     this.resume = options.resume ?? false;
+    this.harnessName = options.harnessName ?? 'main';
+    this.autoLoadHarness = options.autoLoadHarness ?? true;
     this.compactionSettings = options.compaction?.settings;
     this.compactionAuto = options.compaction?.auto ?? false;
     this.contextWindow = options.contextWindow;
@@ -218,6 +230,7 @@ export class DMLSession {
         options.workspacePath ?? process.cwd(),
         session.sessionId,
         options.history,
+        session.harnessName,
       );
       snapshot = await store.readSessionHarness();
       if (!snapshot) {
@@ -250,6 +263,16 @@ export class DMLSession {
         session.agentMessages = snapshot.memory.agent;
       }
       await session.restoreHarnessFromHistory(snapshot);
+    } else if (session.autoLoadHarness) {
+      // One harness per name: a fresh session starts from the harness's current
+      // content file (`harness.dml`), not an empty module.
+      const head = await session.history?.readHeadModule();
+      if (head?.module.trim()) {
+        const loaded = await session.loadCode(head.module);
+        if (loaded.error) {
+          session.warnHistory(new Error(`could not load harness '${session.harnessName}': ${loaded.error}`));
+        }
+      }
     }
     return session;
   }
@@ -282,26 +305,37 @@ export class DMLSession {
    */
   async load(file: string): Promise<{ error?: string }> {
     const before = this.predicateList();
+    // On a fresh harness the loaded file *is* the baseline, not a version.
+    const recordLoad = this.history?.hasCommits ?? false;
     const target = path.isAbsolute(file)
       ? file
       : path.resolve(this.workspacePath ?? process.cwd(), file);
     try {
       if (target.toLowerCase().endsWith('.zip')) {
         const result = await this.loadBundle(target);
-        if (!result.error) await this.recordHistoryChange('load', this.turnCounter, before);
+        if (!result.error && recordLoad) await this.recordHistoryChange('load', this.turnCounter, before);
         return result;
       }
       const code = await fs.readFile(target, 'utf8');
       const result = await this.loadCode(code);
       if (!result.error) {
         this.prologQuery(`deepclause_mi:repl_materialize_embedded('${this.sessionId}')`);
-        await this.recordHistoryChange('load', this.turnCounter, before);
+        if (recordLoad) await this.recordHistoryChange('load', this.turnCounter, before);
       }
       return result;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       return { error: `Failed to read ${file}: ${message}` };
     }
+  }
+
+  /**
+   * Establish a fresh harness's baseline from its current module (called after
+   * any `-l` files are loaded). A no-op once the harness has a baseline.
+   */
+  async finalizeHarnessBaseline(): Promise<void> {
+    if (!this.history) return;
+    await this.history.setInitialBaseline(this.moduleSource());
   }
 
   /** Workspace-relative files linked by `script_file/2` facts. */
@@ -323,6 +357,7 @@ export class DMLSession {
         this.workspacePath ?? process.cwd(),
         this.sessionId,
         this.historyOptions,
+        this.harnessName,
       );
       await store.init();
       const existing = await store.readFacts();
@@ -762,7 +797,7 @@ export class DMLSession {
       return { ok: false, error: String(outcome ?? 'rollback failed') };
     }
     this.assertHistoryFacts(
-      await this.history.recordRollback(plan.from, plan.to, this.turnCounter, this.sessionId)
+      await this.history.recordRollback(plan.from, plan.to, this.turnCounter, this.sessionId, plan.module)
     );
     return { ok: true, from: plan.from, to: plan.to };
   }

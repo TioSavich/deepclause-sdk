@@ -19,6 +19,8 @@ export interface StatusBarOptions {
   getSnapshot: () => ReplStatusSnapshot;
   workspace: string;
   sessionId: string;
+  /** Harness this session edits. */
+  harness?: string;
   backend: string;
   isFrozen?: () => boolean;
   /** True while a turn is running (so the user knows they can steer). */
@@ -49,8 +51,9 @@ export class StatusBarComponent implements Component {
     const snapshot = this.options.getSnapshot();
     const frozen = this.options.isFrozen?.() ? ' · FROZEN' : '';
     const running = this.options.isRunning?.() ? ' · running (type to steer)' : '';
+    const harness = this.options.harness ? ` · harness ${this.options.harness}` : '';
     const line1 = truncateToWidth(
-      `${this.options.workspace} · session ${this.options.sessionId} · backend ${this.options.backend}${frozen}${running}`,
+      `${this.options.workspace} · session ${this.options.sessionId}${harness} · backend ${this.options.backend}${frozen}${running}`,
       width,
       '…',
     );

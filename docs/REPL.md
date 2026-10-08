@@ -376,6 +376,22 @@ request>` and the assistant's replies, and is persisted in
 `execute` runs against a snapshot of harness memory and discards its writes, and
 a goal run is the only place harness memory advances.
 
+## Harnesses
+
+A project can hold several **harnesses**, each with its own content and history:
+
+- `--harness <name>` selects one (default `main`); `repl.harness` sets the default.
+- `-l <file>` targets the harness named after the file (`research.dml` →
+  `research`), creating it if needed: the loaded file becomes that harness's
+  **baseline**, so a harness brought in from elsewhere works without prior history.
+- A fresh session loads its harness's `harness.dml`, so it continues what is there
+  (the agent does not re-create existing skills).
+- `/rollback` walks the current harness only and floors at its baseline.
+
+Each harness lives in `.deepclause/repl/harnesses/<name>/`: `harness.dml` (current
+content), `baseline.dml` (version 0 / rollback floor), `HEAD.json`,
+`changes.jsonl`, and `versions/`.
+
 ## History
 
 Every session, turn, event trace, and harness version is persisted under
@@ -536,6 +552,7 @@ deepclause repl [options]
       --tui <mode>         interactive UI: auto|on|off
       --json               emit results as JSON lines
       --workspace <path>   workspace root (default ./)
+      --harness <name>     harness to edit (default main; a project can hold several)
       --backend <kind>     override the configured backend (env|pi)
       --judge <name>       default judgment backend (llm|jev)
       --model <model>      override the configured run model

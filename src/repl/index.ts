@@ -66,6 +66,10 @@ export interface HarnessReplOptions {
   onDiagnostic?: (message: string) => void;
   /** Persistent session/trace/harness history. Off unless provided. */
   history?: HistoryOptions;
+  /** Harness this session edits (a project can hold several). Default `main`. */
+  harness?: string;
+  /** Load the harness's current content on open (default true; `-l` sets false). */
+  autoLoadHarness?: boolean;
   /** TypeScript compaction settings (ported from pi). */
   compaction?: { settings: CompactionSettings; auto: boolean };
   /** Active model context window, used for compaction thresholds. */
@@ -209,6 +213,8 @@ export async function createHarnessRepl(options: HarnessReplOptions): Promise<Ha
     hostToolsCatalog: options.hostToolsCatalog,
     askUser: options.askUser,
     history: options.history,
+    harnessName: options.harness,
+    autoLoadHarness: options.autoLoadHarness,
     compaction: options.compaction,
     contextWindow: options.contextWindow,
     runnerOptions: {

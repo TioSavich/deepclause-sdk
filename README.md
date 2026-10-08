@@ -346,6 +346,7 @@ const { valid, errors, warnings } = await validateWithProlog(dmlSource);
   "shell": { "wrapper": "auto", "strictIsolation": false },
   "repl": {
     "tui": "auto",
+    "harness": "main",
     "maxModelCalls": 100,
     "compaction": { "enabled": true, "auto": true },
     "history": { "enabled": true, "dir": ".deepclause/repl", "trace": "summary" }

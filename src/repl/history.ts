@@ -152,6 +152,8 @@ export class HistoryStore {
     workspacePath: string,
     private readonly sessionId: string,
     options: HistoryOptions = {},
+    /** Harness this session edits (a project can hold several). */
+    readonly harnessName: string = 'main',
   ) {
     this.rootRel = (options.dir ?? DEFAULT_DIR).replace(/\\/g, '/').replace(/\/+$/, '');
     this.rootAbs = path.resolve(workspacePath, this.rootRel);
@@ -180,8 +182,24 @@ export class HistoryStore {
     return path.join(this.rootAbs, 'history.dml');
   }
 
+  /** Per-harness store: `.deepclause/repl/harnesses/<name>/`. */
   private get harnessDir(): string {
+    return path.join(this.rootAbs, 'harnesses', this.harnessName);
+  }
+
+  /** The single pre-harnesses store, migrated to `harnesses/main` once. */
+  private get legacyHarnessDir(): string {
     return path.join(this.rootAbs, 'harness');
+  }
+
+  /** The current content (source of truth; portable as a `.dml`). */
+  private get harnessFile(): string {
+    return path.join(this.harnessDir, 'harness.dml');
+  }
+
+  /** The module the harness started from (version 0 / rollback floor). */
+  private get baselineFile(): string {
+    return path.join(this.harnessDir, 'baseline.dml');
   }
 
   private get headFile(): string {
@@ -192,9 +210,15 @@ export class HistoryStore {
     return path.join(this.harnessDir, 'changes.jsonl');
   }
 
+  /** Whether the harness has any committed versions (HEAD > baseline). */
+  get hasCommits(): boolean {
+    return this.headVersion > 0;
+  }
+
   /** Create directories, read the current version, and prune old entries. */
   async init(): Promise<void> {
     await fs.mkdir(this.sessionDirAbs, { recursive: true });
+    await this.migrateLegacyHarness();
     await fs.mkdir(path.join(this.harnessDir, 'versions'), { recursive: true });
     try {
       const head = JSON.parse(await fs.readFile(this.headFile, 'utf8')) as {
@@ -208,7 +232,83 @@ export class HistoryStore {
     } catch {
       // no HEAD yet
     }
+    // A harness always has a baseline (empty for a fresh one) and a current file.
+    await this.ensureHarnessFiles();
     await this.prune();
+  }
+
+  /** Move the legacy single `harness/` store into `harnesses/main/` (once). */
+  private async migrateLegacyHarness(): Promise<void> {
+    if (this.harnessName !== 'main') return;
+    try {
+      await fs.access(path.join(this.legacyHarnessDir, 'HEAD.json'));
+    } catch {
+      return; // nothing to migrate
+    }
+    try {
+      await fs.access(this.harnessDir);
+      return; // the per-harness dir already exists
+    } catch {
+      // proceed
+    }
+    await fs.mkdir(path.dirname(this.harnessDir), { recursive: true });
+    await fs.rename(this.legacyHarnessDir, this.harnessDir);
+  }
+
+  /** Ensure `baseline.dml` and `harness.dml` exist (materializing from HEAD). */
+  private async ensureHarnessFiles(): Promise<void> {
+    let baseline = '';
+    try {
+      baseline = await fs.readFile(this.baselineFile, 'utf8');
+    } catch {
+      await fs.writeFile(this.baselineFile, '', 'utf8');
+    }
+    try {
+      const current = await fs.readFile(this.harnessFile, 'utf8');
+      if (current.trim() || this.headVersion <= 0) return;
+    } catch {
+      // write below
+    }
+    const head = this.headVersion > 0 ? await this.readVersion(this.headVersion) : null;
+    await fs.writeFile(this.harnessFile, head?.module ?? baseline, 'utf8');
+  }
+
+  /** The module at HEAD: the live `harness.dml`, or the HEAD version snapshot. */
+  async readHeadModule(): Promise<{ version: number; module: string } | null> {
+    let module = '';
+    try {
+      module = await fs.readFile(this.harnessFile, 'utf8');
+    } catch {
+      module = '';
+    }
+    if (module.trim()) return { version: this.headVersion, module };
+    if (this.headVersion > 0) {
+      const current = await this.readVersion(this.headVersion);
+      if (current?.module.trim()) return { version: this.headVersion, module: current.module };
+    }
+    return null;
+  }
+
+  /** The module this harness started from (version 0). */
+  async readBaseline(): Promise<string> {
+    try {
+      return await fs.readFile(this.baselineFile, 'utf8');
+    } catch {
+      return '';
+    }
+  }
+
+  /**
+   * Establish the baseline of a fresh harness from its first content (e.g. a
+   * harness file loaded with `-l`). No-op once the harness has a baseline or
+   * any committed version.
+   */
+  async setInitialBaseline(module: string): Promise<void> {
+    if (this.headVersion > 0) return;
+    if ((await this.readBaseline()).trim()) return;
+    await fs.mkdir(this.harnessDir, { recursive: true });
+    await fs.writeFile(this.baselineFile, module, 'utf8');
+    await fs.writeFile(this.harnessFile, module, 'utf8');
   }
 
   /** The persisted facts, to be loaded into the module at session start. */
@@ -375,6 +475,8 @@ export class HistoryStore {
       turn: record.turn,
       hash,
     });
+    // Keep the live harness file in step with HEAD (it is the source of truth).
+    await fs.writeFile(this.harnessFile, record.module, 'utf8');
     this.headVersion = version;
     this.headHash = hash;
     return { facts, version };
@@ -382,18 +484,24 @@ export class HistoryStore {
 
   /**
    * Plan a rollback to the parent of HEAD. Returns null when there is nothing
-   * to undo, otherwise the module source to restore.
+   * to undo, otherwise the module source to restore (floored at the baseline).
    */
   async prepareRollback(): Promise<{ from: number; to: number; module: string } | null> {
     if (this.headVersion <= 0) return null;
     const current = await this.readVersion(this.headVersion);
     const to = current?.parentVersion ?? Math.max(this.headVersion - 1, 0);
-    const target = to > 0 ? await this.readVersion(to) : null;
-    return { from: this.headVersion, to, module: target?.module ?? '' };
+    const module = to > 0 ? (await this.readVersion(to))?.module ?? '' : await this.readBaseline();
+    return { from: this.headVersion, to, module };
   }
 
-  /** Persist a rollback (facts + HEAD + change log); does not touch the module. */
-  async recordRollback(from: number, to: number, turn: number, sessionId: string): Promise<string[]> {
+  /** Persist a rollback (facts + HEAD + change log + harness file). */
+  async recordRollback(
+    from: number,
+    to: number,
+    turn: number,
+    sessionId: string,
+    module?: string,
+  ): Promise<string[]> {
     const ts = nowIso();
     const facts = [
       `harness_rollback(${from}, ${to}, ${prologAtom(ts)}, ${prologAtom(sessionId)}, ${turn}).`,
@@ -409,7 +517,12 @@ export class HistoryStore {
       turn,
       rollback: true,
     });
+    if (module !== undefined) {
+      await fs.writeFile(this.harnessFile, module, 'utf8');
+    }
     this.headVersion = to;
+    // The hash no longer matches HEAD's content until the next commit.
+    this.headHash = undefined;
     return facts;
   }
 

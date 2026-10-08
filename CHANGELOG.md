@@ -68,6 +68,16 @@
 
 ### Added
 
+- **Multiple harnesses per project.** A project now holds one directory per
+  harness under `.deepclause/repl/harnesses/<name>/` (`harness.dml`,
+  `baseline.dml`, `HEAD.json`, `changes.jsonl`, `versions/`). `--harness <name>`
+  (default `main`, `repl.harness`) selects one; `-l <file>` targets the harness
+  named after the file, creating it if needed, and the loaded file becomes that
+  harness's **baseline** — so a harness brought in from elsewhere works with no
+  prior history. A fresh session loads its harness's current content (it no
+  longer re-creates existing skills and piles up versions), and `/rollback`
+  walks only the current harness, floored at its baseline. The old single
+  `harness/` store is migrated to `harnesses/main/` once.
 - **Shell wall-clock timeout.** `exec(bash(command: Cmd, timeoutMs: N), R)`
   bounds a command by wall clock (exit code 124 on timeout); `DC_HOST_SHELL_TIMEOUT_MS`
   and `shell.timeoutMs` set the default (0 = off). Shell results now carry

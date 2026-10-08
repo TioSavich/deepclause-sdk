@@ -268,7 +268,7 @@ describe('harness edit transactions', () => {
     await repl.session.define('a(1)', 'a(1).\nb(2).');
     await repl.session.endTurn();
 
-    const changesPath = path.join(workspace, '.deepclause', 'repl', 'harness', 'changes.jsonl');
+    const changesPath = path.join(workspace, '.deepclause', 'repl', 'harnesses', 'main', 'changes.jsonl');
     const lines = (await fs.readFile(changesPath, 'utf8')).trim().split('\n');
     const last = JSON.parse(lines[lines.length - 1]) as { changed: Array<{ predicate: string }> };
     const predicates = last.changed.map((change) => change.predicate);

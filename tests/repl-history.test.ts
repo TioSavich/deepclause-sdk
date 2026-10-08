@@ -119,7 +119,7 @@ describe('harness history', () => {
     expect(await fs.readFile(path.join(sessionDir, 'turns.jsonl'), 'utf8')).toContain('"outcome":"committed"');
     expect(await fs.readFile(path.join(sessionDir, 'events.jsonl'), 'utf8')).toContain('"type":"tool_call"');
 
-    const head = JSON.parse(await fs.readFile(path.join(workspace, '.deepclause/repl/harness/HEAD.json'), 'utf8'));
+    const head = JSON.parse(await fs.readFile(path.join(workspace, '.deepclause/repl/harnesses/main/HEAD.json'), 'utf8'));
     expect(head.version).toBe(1);
     expect(head.sessionId).toBe(sessionId);
   });
@@ -142,13 +142,140 @@ describe('harness history', () => {
     await collect(repl.prompt('make a demo'));
     await collect(repl.prompt('commit the same thing again'));
 
-    const head = JSON.parse(await fs.readFile(path.join(workspace, '.deepclause/repl/harness/HEAD.json'), 'utf8'));
+    const head = JSON.parse(await fs.readFile(path.join(workspace, '.deepclause/repl/harnesses/main/HEAD.json'), 'utf8'));
     expect(head.version).toBe(1);
-    const changes = (await fs.readFile(path.join(workspace, '.deepclause/repl/harness/changes.jsonl'), 'utf8'))
+    const changes = (await fs.readFile(path.join(workspace, '.deepclause/repl/harnesses/main/changes.jsonl'), 'utf8'))
       .trim()
       .split('\n')
       .filter((line) => JSON.parse(line).kind === 'commit');
     expect(changes).toHaveLength(1);
+  });
+
+  it('a fresh session starts from the harness content file', async () => {
+    repl = await createHarnessRepl({
+      workspacePath: workspace,
+      model: 'test-model',
+      provider: 'openai',
+      streaming: true,
+      llmBackend: new CannedBackend([defineResponse('demo', 'demo :- output(hi).')]),
+      tools: new Map(),
+      history: HISTORY,
+    });
+    await collect(repl.prompt('make a demo'));
+    await repl.dispose();
+    repl = undefined;
+
+    repl = await createHarnessRepl({
+      workspacePath: workspace,
+      model: 'test-model',
+      provider: 'openai',
+      streaming: true,
+      llmBackend: new CannedBackend([{ text: 'ok' }]),
+      tools: new Map(),
+      history: HISTORY,
+    });
+    expect(repl.session.isEmpty()).toBe(false);
+    const events = await collect(repl.query('demo'));
+    expect(events.some((event) => event.type === 'output' && event.content === 'hi')).toBe(true);
+  });
+
+  it('keeps separate histories per named harness', async () => {
+    const make = async (harness: string, head: string, clauses: string): Promise<void> => {
+      const session = await createHarnessRepl({
+        workspacePath: workspace,
+        model: 'test-model',
+        provider: 'openai',
+        llmBackend: new CannedBackend([defineResponse(head, clauses)]),
+        tools: new Map(),
+        history: HISTORY,
+        harness,
+      });
+      await collect(session.prompt(`make ${harness}`));
+      await session.dispose();
+    };
+    await make('alpha', 'demoA', 'demoA :- output(a).');
+    await make('beta', 'demoB', 'demoB :- output(b).');
+
+    const dir = path.join(workspace, '.deepclause/repl/harnesses');
+    const alpha = await fs.readFile(path.join(dir, 'alpha/harness.dml'), 'utf8');
+    const beta = await fs.readFile(path.join(dir, 'beta/harness.dml'), 'utf8');
+    expect(alpha).toContain('demoA');
+    expect(alpha).not.toContain('demoB');
+    expect(beta).toContain('demoB');
+    expect(beta).not.toContain('demoA');
+    const headA = JSON.parse(await fs.readFile(path.join(dir, 'alpha/HEAD.json'), 'utf8'));
+    const headB = JSON.parse(await fs.readFile(path.join(dir, 'beta/HEAD.json'), 'utf8'));
+    expect(headA.version).toBe(1);
+    expect(headB.version).toBe(1);
+  });
+
+  it('a harness file loaded into a new harness becomes its baseline', async () => {
+    await fs.writeFile(path.join(workspace, 'external.dml'), 'external :- output(hello).\n', 'utf8');
+    repl = await createHarnessRepl({
+      workspacePath: workspace,
+      model: 'test-model',
+      provider: 'openai',
+      llmBackend: new CannedBackend([{ text: 'ok' }]),
+      tools: new Map(),
+      history: HISTORY,
+      harness: 'external',
+      autoLoadHarness: false,
+    });
+    const loaded = await repl.session.load('external.dml');
+    expect(loaded.error).toBeUndefined();
+    await repl.session.finalizeHarnessBaseline();
+
+    // No committed versions: rollback floors at the loaded file.
+    expect(await repl.session.rollback()).toMatchObject({ ok: false });
+    const baseline = await fs.readFile(
+      path.join(workspace, '.deepclause/repl/harnesses/external/baseline.dml'),
+      'utf8',
+    );
+    expect(baseline).toContain('external');
+    expect(baseline).toContain('output(hello)');
+    await repl.dispose();
+    repl = undefined;
+
+    // A later session for that harness loads the imported content.
+    repl = await createHarnessRepl({
+      workspacePath: workspace,
+      model: 'test-model',
+      provider: 'openai',
+      llmBackend: new CannedBackend([{ text: 'ok' }]),
+      tools: new Map(),
+      history: HISTORY,
+      harness: 'external',
+    });
+    const events = await collect(repl.query('external'));
+    expect(events.some((event) => event.type === 'output' && event.content === 'hello')).toBe(true);
+  });
+
+  it('migrates the legacy single harness store to harnesses/main', async () => {
+    const legacy = path.join(workspace, '.deepclause/repl/harness');
+    await fs.mkdir(path.join(legacy, 'versions'), { recursive: true });
+    await fs.writeFile(path.join(legacy, 'HEAD.json'), JSON.stringify({ version: 1, maxVersion: 1 }), 'utf8');
+    await fs.writeFile(
+      path.join(legacy, 'versions/0001_2026-01-01T00-00-00-000Z.json'),
+      JSON.stringify({ version: 1, parentVersion: null, module: 'legacy :- output(1).' }),
+      'utf8',
+    );
+
+    repl = await createHarnessRepl({
+      workspacePath: workspace,
+      model: 'test-model',
+      provider: 'openai',
+      llmBackend: new CannedBackend([{ text: 'ok' }]),
+      tools: new Map(),
+      history: HISTORY,
+    });
+    expect(repl.session.isEmpty()).toBe(false);
+    const migrated = await fs.readFile(
+      path.join(workspace, '.deepclause/repl/harnesses/main/harness.dml'),
+      'utf8',
+    );
+    expect(migrated).toContain('legacy');
+    const events = await collect(repl.query('legacy'));
+    expect(events.some((event) => event.type === 'output' && event.content === '1')).toBe(true);
   });
 
   it('loads prior history into a new session so DML can query it', async () => {
@@ -245,7 +372,7 @@ describe('harness history', () => {
     const history = await fs.readFile(path.join(workspace, '.deepclause/repl/history.dml'), 'utf8');
     expect(history).toContain('harness_rollback(');
     const head = JSON.parse(
-      await fs.readFile(path.join(workspace, '.deepclause/repl/harness/HEAD.json'), 'utf8'),
+      await fs.readFile(path.join(workspace, '.deepclause/repl/harnesses/main/HEAD.json'), 'utf8'),
     );
     expect(head.version).toBe(0);
     expect(head.maxVersion).toBe(2);

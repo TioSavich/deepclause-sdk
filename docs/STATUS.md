@@ -38,9 +38,13 @@ CLI commands: `init`, `login`, `logout`, `set-backend`, `set-model`, `show-model
 - **Transactions**: each turn snapshots the module and commits
   replace-by-predicate; a failed turn leaves the harness unchanged.
 - **Auditability**: `.deepclause/repl/` holds `history.dml` (append-only
-  `harness_*` facts), `harness/HEAD.json`, `harness/changes.jsonl`,
-  `harness/versions/*.json`, and `sessions/<id>/{session.json,harness.json,
-  turns.jsonl,events.jsonl}`. `rollback.` restores the previous version.
+  `harness_*` facts) and, per harness, `harnesses/<name>/{harness.dml,
+  baseline.dml,HEAD.json,changes.jsonl,versions/*.json}`, plus
+  `sessions/<id>/{session.json,harness.json,turns.jsonl,events.jsonl}`.
+  `rollback.` restores the previous version, floored at the harness baseline.
+- **Multiple harnesses per project**: `--harness <name>` (default `main`) selects
+  an independent harness with its own content and history; `-l file.dml` uses/creates
+  a harness named after the file, whose loaded content becomes its baseline.
 - **Resume**: `deepclause repl --session <id|last>` restores the harness, memory,
   and turn numbering from the durable `sessions/<id>/harness.json`.
 - **Media**: `read_media/2` + `attach_media/1` attach a workspace image to the next
