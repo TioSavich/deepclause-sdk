@@ -83,7 +83,7 @@ models. The bundled catalog marks `[reasoning]` models in every picker.
   (`AGENT_PROMPT.md`); the full DML reference and pattern library are read on
   demand via the `reference` tool.
 - **`execute` events**: a goal run by the agent's `execute` tool streams its
-  model text, tool calls, and `output/1` under an indented `nested │` label.
+  model text, tool calls, and `output/1` indented under the parent tool call.
 
 ## Authoring model
 

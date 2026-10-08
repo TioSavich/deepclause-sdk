@@ -218,18 +218,21 @@ describe('ReplRenderer', () => {
     expect(lines.join('\n')).toContain('line 50');
   });
 
-  it('keeps the nested frame prefix on every output line', () => {
+  it('indents nested-frame output on every line, with no label', () => {
     const { lines, renderer } = capture('plain', false);
     renderer.render({ type: 'output', content: 'first\nsecond', frameKind: 'nested', depth: 1 } as DMLEvent);
-    expect(lines[0]).toContain('nested');
-    expect(lines[1]).toContain('nested');
+    expect(lines[0]).not.toContain('nested');
+    expect(lines[0].startsWith('    ')).toBe(true);
+    expect(lines[1]).not.toContain('nested');
+    expect(lines[1].startsWith('    ')).toBe(true);
     expect(lines[1]).toContain('second');
   });
 
   it('truncates a long nested output line to the width', () => {
     const { lines, renderer } = capture('plain', false, 80);
     renderer.render({ type: 'output', content: 'x'.repeat(500), frameKind: 'nested', depth: 1 } as DMLEvent);
-    expect(lines[0]).toContain('nested');
+    expect(lines[0]).not.toContain('nested');
+    expect(lines[0].startsWith('    ')).toBe(true);
     expect(lines[0]).toContain('…');
     // Prefix + content + ellipsis stays within the width (sink chunks keep \n).
     expect(lines[0].replace(/\n$/, '').length).toBeLessThanOrEqual(80);
@@ -245,7 +248,7 @@ describe('ReplRenderer', () => {
       solution: { bindings: [{ name: 'R', value: `dict{stdout:"${'y'.repeat(400)}"}` }], deterministic: false },
     } as DMLEvent);
     const text = lines.join('\n');
-    expect(text).toContain('nested');
+    expect(text).not.toContain('nested');
     expect(text).toContain('R = ');
     expect(text).toContain('…');
     expect(text).not.toContain('y'.repeat(400));
@@ -387,10 +390,24 @@ describe('block spacing', () => {
     expect(lines.join('')).not.toMatch(/\n\n/);
   });
 
-  it('indents nested (execute child) frames one extra level', () => {
+  it('indents nested (execute child) frames one extra level with no label', () => {
     const { lines, renderer } = capture('plain');
     renderer.render({ type: 'output', content: 'inside', frameKind: 'nested', depth: 1 } as DMLEvent);
-    expect(lines.join('')).toContain('    nested │ inside');
+    expect(lines.join('')).toContain('    inside');
+    expect(lines.join('')).not.toContain('nested');
+  });
+
+  it('labels task activity with a Task symbol', () => {
+    const { lines, renderer } = capture('plain', false);
+    renderer.render({ type: 'task_activity', taskState: 'started', taskDescription: 'Do the thing', frameKind: 'nested', depth: 1 } as DMLEvent);
+    renderer.render({ type: 'task_activity', taskState: 'completed', frameKind: 'nested', depth: 1 } as DMLEvent);
+    renderer.render({ type: 'task_activity', taskState: 'failed', frameKind: 'nested', depth: 1 } as DMLEvent);
+    const out = lines.join('\n');
+    expect(out).toContain('▸ Task');
+    expect(out).toContain('Do the thing');
+    expect(out).toContain('✔ Task');
+    expect(out).toContain('✖ Task');
+    expect(out).not.toContain('⠋');
   });
 
   it('separates a compaction notice from surrounding output', () => {

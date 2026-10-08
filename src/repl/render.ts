@@ -452,11 +452,11 @@ export class ReplRenderer {
   private renderTaskActivity(event: DMLEvent, prefix: string): void {
     const state = event.taskState ?? 'started';
     if (state === 'started') {
-      this.writeLine(this.paint(`${prefix}⠋ ${this.describeTask(event)}`, ANSI.dim));
+      this.writeLine(this.paint(`${prefix}▸ Task  ${this.describeTask(event)}`, ANSI.dim));
       return;
     }
     const ok = state === 'completed';
-    this.writeLine(this.paint(`${prefix}${ok ? '✔' : '✖'} task ${ok ? 'done' : 'failed'}`, ok ? ANSI.dim : ANSI.red));
+    this.writeLine(this.paint(`${prefix}${ok ? '✔' : '✖'} Task  ${ok ? 'done' : 'failed'}`, ok ? ANSI.dim : ANSI.red));
   }
 
   private describeTask(event: DMLEvent): string {
@@ -645,15 +645,18 @@ export class ReplRenderer {
     }
   }
 
-  /** `meta │ `, `run │ `, or indented `nested │ ` for a frame's events. */
+  /** `run │ ` for an object frame; nested (`execute` child) events are indented only. */
   private frameLabel(event: DMLEvent): string {
     // `--no-events` also drops the frame label, so output/answer lines are plain.
     if (!this.showEvents || !event.frameKind) return '';
     const depth = event.depth ?? 0;
+    // Nested (`execute` child) activity reads as belonging to the parent tool
+    // call through indentation alone — no `nested` label.
+    if (event.frameKind === 'nested') {
+      return '  '.repeat(depth + 1);
+    }
     const label = event.frameKind === 'object' ? 'run' : event.frameKind;
-    // Indent nested (`execute` child) activity one extra level so it reads as
-    // belonging to the parent tool call.
-    const indent = '  '.repeat(event.frameKind === 'nested' ? depth + 1 : depth);
+    const indent = '  '.repeat(depth);
     return `${indent}${label} │ `;
   }
 

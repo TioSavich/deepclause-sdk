@@ -4,6 +4,10 @@
 
 ### Changed
 
+- **Nested activity is indented, not labelled.** The `nested │` prefix is gone;
+  `execute` child events are shown by indentation alone, and task activity renders
+  as `▸ Task  <description>` / `✔ Task  done` / `✖ Task  failed` instead of a
+  spinner frame.
 - **The system prompt is one file.** `AGENT_PROMPT.md` is now a single,
   self-contained prompt: DML intro, module/skill model, inspect/execute/edit,
   host tools (`bash`, `ask_user`), the `tool/2` annotation, file I/O, the
