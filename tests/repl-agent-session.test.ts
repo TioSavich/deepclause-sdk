@@ -56,8 +56,10 @@ describe('REPL authoring agent', () => {
       {
         text: 'adding greet/1',
         toolCalls: [
-          { id: '1', name: 'define', arguments: { head: 'greet(Name)', clauses: 'greet(world).' } },
-          { id: '2', name: 'finish', arguments: { success: true } },
+          { id: '1', name: 'begin_turn', arguments: {} },
+          { id: '2', name: 'define', arguments: { head: 'greet(Name)', clauses: 'greet(world).' } },
+          { id: '3', name: 'end_turn', arguments: {} },
+          { id: '4', name: 'finish', arguments: { success: true } },
         ],
         finishReason: 'tool_use',
       },
@@ -72,7 +74,7 @@ describe('REPL authoring agent', () => {
     expect(events.some((event) => event.type === 'solution')).toBe(true);
   });
 
-  it('shows a host transaction bracket when the agent edits without begin_turn', async () => {
+  it('refuses an edit while no transaction is open', async () => {
     await openAgent([
       {
         text: 'adding greet/1',
@@ -85,27 +87,41 @@ describe('REPL authoring agent', () => {
     ]);
     const events = await collect(repl!.prompt('add a greet/1 fact'));
 
-    const hostBegin = events.find((e) => (
-      e.type === 'tool_call' && e.toolName === 'begin_turn' && (e.toolSummary ?? '').includes('(host)')
+    const failed = events.find((e) => (
+      e.type === 'tool_call' && e.toolName === 'define' && e.toolState === 'failed'
     ));
-    const hostEnd = events.find((e) => (
-      e.type === 'tool_call' && e.toolName === 'end_turn' && (e.toolSummary ?? '').includes('(host)')
-    ));
-    expect(hostBegin).toBeTruthy();
-    expect(hostEnd).toBeTruthy();
-
-    // The implicit begin is shown before the first edit.
-    const beginIndex = events.findIndex((e) => (
-      e.type === 'tool_call' && e.toolName === 'begin_turn' && (e.toolSummary ?? '').includes('(host)')
-    ));
-    const editIndex = events.findIndex((e) => (
-      e.type === 'tool_call' && e.toolName === 'define' && e.toolState === 'starting'
-    ));
-    expect(beginIndex).toBeGreaterThanOrEqual(0);
-    expect(beginIndex).toBeLessThan(editIndex);
+    expect(failed?.toolError).toContain('no open transaction');
+    expect(await repl!.list('greet/1')).not.toContain('greet/1');
   });
 
-  it('does not add a host marker when the agent brackets explicitly', async () => {
+  it('nudges the agent to close an open transaction at the end of the loop', async () => {
+    const backend = await openAgent([
+      {
+        text: 'opened without committing',
+        toolCalls: [
+          { id: '1', name: 'begin_turn', arguments: {} },
+          { id: '2', name: 'define', arguments: { head: 'greet(Name)', clauses: 'greet(world).' } },
+          { id: '3', name: 'finish', arguments: { success: true } },
+        ],
+        finishReason: 'tool_use',
+      },
+      {
+        text: 'committing now',
+        toolCalls: [
+          { id: '1', name: 'end_turn', arguments: {} },
+          { id: '2', name: 'finish', arguments: { success: true } },
+        ],
+        finishReason: 'tool_use',
+      },
+    ]);
+    const events = await collect(repl!.prompt('add a greet/1 fact'));
+
+    expect(events.some((e) => e.type === 'output' && (e.content ?? '').includes('NUDGE'))).toBe(true);
+    expect(backend.calls.length).toBe(2);
+    expect(await repl!.list('greet/1')).toContain('greet/1');
+  });
+
+  it('commits when the agent brackets explicitly', async () => {
     await openAgent([
       {
         text: 'explicit',
@@ -119,12 +135,10 @@ describe('REPL authoring agent', () => {
       },
     ]);
     const events = await collect(repl!.prompt('add greet/1 explicitly'));
-    const hostMarkers = events.filter((e) => (
-      e.type === 'tool_call'
-      && (e.toolName === 'begin_turn' || e.toolName === 'end_turn')
-      && (e.toolSummary ?? '').includes('(host)')
-    ));
-    expect(hostMarkers).toHaveLength(0);
+    expect(events.some((e) => (
+      e.type === 'tool_call' && e.toolName === 'end_turn' && e.toolState === 'completed'
+    ))).toBe(true);
+    expect(await repl!.list('greet/1')).toContain('greet/1');
   });
 
   it('rolls back edits made before a rollback tool call', async () => {
@@ -132,9 +146,10 @@ describe('REPL authoring agent', () => {
       {
         text: 'adding then rolling back',
         toolCalls: [
-          { id: '1', name: 'define', arguments: { head: 'temp(1)', clauses: 'temp(1).' } },
-          { id: '2', name: 'rollback', arguments: {} },
-          { id: '3', name: 'finish', arguments: { success: true } },
+          { id: '1', name: 'begin_turn', arguments: {} },
+          { id: '2', name: 'define', arguments: { head: 'temp(1)', clauses: 'temp(1).' } },
+          { id: '3', name: 'rollback', arguments: {} },
+          { id: '4', name: 'finish', arguments: { success: true } },
         ],
         finishReason: 'tool_use',
       },
@@ -150,9 +165,11 @@ describe('REPL authoring agent', () => {
       {
         text: '',
         toolCalls: [
-          { id: '1', name: 'define', arguments: { head: 'fact(N, F)', clauses: 'fact(0, 1).\nfact(N, F) :- N > 0, N1 is N - 1, fact(N1, F1), F is N * F1.' } },
-          { id: '2', name: 'execute', arguments: { goal: 'fact(5, F)' } },
-          { id: '3', name: 'finish', arguments: { success: true } },
+          { id: '1', name: 'begin_turn', arguments: {} },
+          { id: '2', name: 'define', arguments: { head: 'fact(N, F)', clauses: 'fact(0, 1).\nfact(N, F) :- N > 0, N1 is N - 1, fact(N1, F1), F is N * F1.' } },
+          { id: '3', name: 'execute', arguments: { goal: 'fact(5, F)' } },
+          { id: '4', name: 'end_turn', arguments: {} },
+          { id: '5', name: 'finish', arguments: { success: true } },
         ],
         finishReason: 'tool_use',
       },
@@ -201,6 +218,7 @@ describe('harness edit transactions', () => {
 
   it('define replaces every predicate in a multi-predicate block', async () => {
     repl = await openSession();
+    await repl.session.beginTurn();
     await repl.session.define('a(1)', 'a(1).\nb(2).\nc(3).');
     await repl.session.define('a(9)', 'a(9).\nb(8).\nc(7).');
 
@@ -217,6 +235,7 @@ describe('harness edit transactions', () => {
 
   it('delete abolishes a predicate instead of leaving a phantom', async () => {
     repl = await openSession();
+    await repl.session.beginTurn();
     await repl.session.define('temp(1)', 'temp(1).');
     const result = await repl.session.deletePredicate('temp/1');
     expect(result.ok).toBe(true);
@@ -225,6 +244,7 @@ describe('harness edit transactions', () => {
 
   it('define rejects a non-callable head and does not touch system functors', async () => {
     repl = await openSession();
+    await repl.session.beginTurn();
     const result = await repl.session.define('fetch_page.sh', 'x(1).');
     expect(result.ok).toBe(false);
     const listing = await repl.list('all');
@@ -233,6 +253,7 @@ describe('harness edit transactions', () => {
 
   it('forwards execute child events for display', async () => {
     repl = await openSession();
+    await repl.session.beginTurn();
     await repl.session.define('note(X)', 'note(a).\nnote(b).');
     const child: DMLEvent[] = [];
     const result = await repl.session.execute('note(X), output(X)', 5, undefined, (event) => child.push(event));

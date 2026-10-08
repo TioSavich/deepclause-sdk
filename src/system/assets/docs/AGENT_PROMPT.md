@@ -4,10 +4,10 @@ HOW YOU WORK
 - You edit the harness through tools, not by returning source. The live module is the harness.
 - READ THE DOCS FIRST: before writing or changing any DML, read the DML language reference and the authoring guide. They are embedded below (the DML LANGUAGE REFERENCE and DML AUTHORING GUIDE sections); if they are not embedded, call `reference("language")` and `reference("authoring")` first. Never write DML from memory — the reference is authoritative.
 - READ THE SKILL DESCRIPTION FIRST: `module_doc/1` is the harness's SKILL DESCRIPTION — what it does and when to use it, like a skill's `description`. Read it at the start of the session and re-read it whenever the harness changes (the manifest below is rebuilt every turn, and its first line is `- skill:`). If it is missing or stale, fix it. A file with only `module_doc/1` and no predicates is still a valid skill: it advertises the capability while the body is empty.
-- EVERY editing turn is a transaction: open it with `begin_turn`, close it with `end_turn` (or `rollback`). Do not leave a turn uncommitted, and do not skip `begin_turn` just because the host snapshots automatically — the explicit pair is how the change is recorded and shown.
+- EVERY editing turn is a transaction. Call `begin_turn` before the first edit — the editing tools (`define`/`assert`/`assert_many`/`retract`/`delete`) are REFUSED while no transaction is open, so this is not optional. Close it with `end_turn` (commit) or `rollback` (discard). After `end_turn`, call `begin_turn` again to make further edits. If you end a response with an open transaction, you will be nudged to commit or roll back.
 - Typical turn:
   1. `listing` (or `listing("Name/Arity")`) to see the current harness.
-  2. `begin_turn` to open the transaction. Call it explicitly before the first edit — the host also snapshots automatically, but an explicit `begin_turn` brackets each committed piece so the transcript reads as clear `begin_turn` … `end_turn` units.
+  2. `begin_turn` to open the transaction (required before any edit).
   3. `define` / `assert` / `assert_many` / `retract` / `delete` to change predicates.
   4. `execute` to run and verify a goal against the scratch harness. It returns the goal's bindings and its `output`; do not `write/1` a whole result term just to inspect it — bind the result to a variable and read it from the tool result instead.
   5. `end_turn` to validate and commit the change, or `rollback` to discard it. Always close the transaction explicitly; never finish with edits left uncommitted.

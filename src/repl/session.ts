@@ -971,42 +971,33 @@ export class DMLSession {
     const historyStart = Date.now();
     this.lastTurnCommitted = false;
     this.lastCommitVersion = undefined;
-    await this.beginTurn();
+    // No automatic transaction: `define`/`assert`/… are refused until the agent
+    // calls `begin_turn`, so the transaction is explicit and visible.
 
     const agent = await this.getHarnessAgent();
-    // Fallback transaction visibility: the host snapshots at the start of every
-    // request, but if the agent edits without opening a transaction we show that
-    // implicit `begin_turn`, and when the host auto-commits at the end we show
-    // the implicit `end_turn`. Explicit agent calls take precedence.
-    const editTools = new Set(['define', 'assert', 'assert_many', 'retract', 'delete']);
-    let transactionOpen = false;
     let failed = false;
+    let nudges = 0;
+    const maxNudges = 3;
+    let requestText = request;
     try {
-      for await (const event of agent.run(request, { signal: options.signal })) {
-        if (event.type === 'tool_call') {
-          if (event.toolState === 'starting' && event.toolName === 'begin_turn') {
-            transactionOpen = true;
-          } else if (event.toolState === 'starting' && editTools.has(event.toolName ?? '') && !transactionOpen) {
-            // The agent edited without opening a transaction; show the host's.
-            transactionOpen = true;
-            const marker: DMLEvent = {
-              type: 'tool_call',
-              toolName: 'begin_turn',
-              toolArgs: {},
-              toolState: 'completed',
-              toolSummary: 'open transaction (host)',
-            };
-            this.recordHistoryEvent(turn, marker);
-            yield marker;
-          } else if (event.toolState === 'completed' && event.toolName === 'end_turn') {
-            transactionOpen = false;
-          }
+      for (;;) {
+        for await (const event of agent.run(requestText, { signal: options.signal })) {
+          // A nested (`execute` child) error is a tool result the agent can
+          // react to; only the agent's own errors fail the turn.
+          if (event.type === 'error' && event.frameKind !== 'nested') failed = true;
+          this.recordHistoryEvent(turn, event);
+          yield event;
         }
-        // A nested (`execute` child) error is a tool result the agent can react
-        // to; only the agent's own errors fail the turn.
-        if (event.type === 'error' && event.frameKind !== 'nested') failed = true;
-        this.recordHistoryEvent(turn, event);
-        yield event;
+        if (options.signal?.aborted || failed) break;
+        // The loop ended with an open transaction: nudge the agent to commit or
+        // discard it rather than auto-committing silently.
+        if (this.transactionBefore === null) break;
+        if (nudges >= maxNudges) break;
+        nudges += 1;
+        requestText = 'NUDGE: you still have an OPEN edit transaction with uncommitted changes. '
+          + 'Call `end_turn` to commit it (or `rollback` to discard it), then call `finish`.';
+        this.recordHistoryEvent(turn, { type: 'output', content: requestText });
+        yield { type: 'output', content: requestText };
       }
     } catch (error) {
       failed = true;
@@ -1020,19 +1011,17 @@ export class DMLSession {
     if (options.signal?.aborted || failed) {
       await this.rollbackTurn();
     } else if (this.transactionBefore !== null) {
-      // Reaching the end without an explicit end_turn commits the edits.
+      // Last resort after the nudges: commit so nothing is lost, and show it.
       await this.endTurn();
-      if (transactionOpen) {
-        const marker: DMLEvent = {
-          type: 'tool_call',
-          toolName: 'end_turn',
-          toolArgs: {},
-          toolState: 'completed',
-          toolSummary: 'commit transaction (host)',
-        };
-        this.recordHistoryEvent(turn, marker);
-        yield marker;
-      }
+      const marker: DMLEvent = {
+        type: 'tool_call',
+        toolName: 'end_turn',
+        toolArgs: {},
+        toolState: 'completed',
+        toolSummary: 'commit transaction (host; agent did not end_turn)',
+      };
+      this.recordHistoryEvent(turn, marker);
+      yield marker;
     }
     await this.persistSessionHarness(this.history?.currentVersion ?? 0);
 
@@ -1149,6 +1138,14 @@ export class DMLSession {
     return changed.sort();
   }
 
+  /** Edit tools require an open transaction (opened by `begin_turn`). */
+  private requireTransaction(): { ok: false; error: string } | undefined {
+    if (this.transactionBefore === null) {
+      return { ok: false, error: 'no open transaction; call begin_turn before editing' };
+    }
+    return undefined;
+  }
+
   private editResult(result: unknown): { ok: boolean; error?: string } {
     if (result === 'ok') {
       this.transactionDirty = true;
@@ -1158,6 +1155,8 @@ export class DMLSession {
   }
 
   async define(head: string, clauses: string): Promise<{ ok: boolean; error?: string }> {
+    const closed = this.requireTransaction();
+    if (closed) return closed;
     const result = this.prologQuery(
       `deepclause_mi:repl_define('${this.sessionId}', ${quoteString(head)}, ${quoteString(clauses)}, Result)`
     );
@@ -1165,21 +1164,29 @@ export class DMLSession {
   }
 
   async assertClause(clause: string): Promise<{ ok: boolean; error?: string }> {
+    const closed = this.requireTransaction();
+    if (closed) return closed;
     const result = this.prologQuery(`deepclause_mi:repl_assert('${this.sessionId}', ${quoteString(clause)}, Result)`);
     return this.editResult(plainValue(result?.Result));
   }
 
   async assertMany(clauses: string): Promise<{ ok: boolean; error?: string }> {
+    const closed = this.requireTransaction();
+    if (closed) return closed;
     const result = this.prologQuery(`deepclause_mi:repl_assert_many('${this.sessionId}', ${quoteString(clauses)}, Result)`);
     return this.editResult(plainValue(result?.Result));
   }
 
   async retractClause(clause: string): Promise<{ ok: boolean; error?: string }> {
+    const closed = this.requireTransaction();
+    if (closed) return closed;
     const result = this.prologQuery(`deepclause_mi:repl_retract('${this.sessionId}', ${quoteString(clause)}, Result)`);
     return this.editResult(plainValue(result?.Result));
   }
 
   async deletePredicate(nameArity: string): Promise<{ ok: boolean; error?: string }> {
+    const closed = this.requireTransaction();
+    if (closed) return closed;
     const match = /^\s*([^\s/]+)\s*\/\s*(\d+)\s*$/.exec(nameArity);
     if (!match) {
       return { ok: false, error: `expected Name/Arity, got '${nameArity}'` };

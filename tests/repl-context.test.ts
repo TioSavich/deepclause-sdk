@@ -47,8 +47,10 @@ function finalResponse(code: string, run?: string): CannedResponse {
     toolCalls: [
       ...(run
         ? [
+            { name: 'begin_turn', arguments: {} },
             { name: 'assert_many', arguments: { clauses: code } },
             { name: 'execute', arguments: { goal: run } },
+            { name: 'end_turn', arguments: {} },
           ]
         : []),
       { name: 'set_result', arguments: { variable: 'DMLCode', value: code } },
@@ -167,7 +169,9 @@ describe('execute recursion', () => {
           text: '',
           toolCalls: [
             { name: 'execute', arguments: { goal: 'task("nested ask", R), output(R)' } },
+            { name: 'begin_turn', arguments: {} },
             { name: 'assert_many', arguments: { clauses: 'kept(1).' } },
+            { name: 'end_turn', arguments: {} },
             { name: 'finish', arguments: { success: true } },
           ],
         };

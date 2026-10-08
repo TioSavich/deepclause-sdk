@@ -4,13 +4,13 @@
 
 ### Changed
 
-- **Explicit edit transactions.** The authoring prompt and the `begin_turn`
-  tool description no longer call it "optional": every editing turn is told to
-  open with `begin_turn` and close with `end_turn`. As a fallback, the host
-  emits an `open transaction (host)` marker before the first edit and a
-  `commit transaction (host)` marker on auto-commit, so the transcript always
-  shows the transaction bracket even when the agent relies on the automatic
-  snapshot.
+- **Enforced edit transactions.** `define`/`assert`/`assert_many`/`retract`/
+  `delete` are refused while no transaction is open — the agent must call
+  `begin_turn` first — and after `end_turn` a new `begin_turn` is required to edit
+  again. When the agent loop ends with an open transaction the host nudges the
+  agent to `end_turn`/`rollback`; if it still doesn't, the host commits as a last
+  resort and shows `commit transaction (host)`. Every change is now an explicit
+  `begin_turn` … `end_turn` unit.
 - **`tool/2` is documented as an annotation, not an implementation.** It only
   exposes an existing harness predicate to the nested `task/N` agent, so the
   docs now define a normal predicate and have `tool/2` delegate to it

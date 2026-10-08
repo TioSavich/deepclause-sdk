@@ -75,7 +75,7 @@ export function createHarnessTools(controller: HarnessToolController): Map<strin
   });
 
   tools.set('begin_turn', {
-    description: 'Open an edit transaction: snapshot the harness before editing. Call it before the first edit of a turn; `end_turn` then commits (or `rollback` discards). The host also snapshots at the start of a request, so an extra call when nothing has changed is a no-op.',
+    description: 'Open an edit transaction (snapshot the harness). You MUST call this before the first edit; `define`/`assert`/`assert_many`/`retract`/`delete` are refused while no transaction is open. `end_turn` commits it, `rollback` discards it.',
     parameters: { type: 'object', properties: {}, required: [] },
     execute: async () => {
       await controller.beginTurn();
@@ -84,7 +84,7 @@ export function createHarnessTools(controller: HarnessToolController): Map<strin
   });
 
   tools.set('end_turn', {
-    description: 'Validate and commit the current transaction and record a harness version. Call after the harness is tested. Returns the predicates changed.',
+    description: 'Validate and commit the open transaction (opened by begin_turn) and record a harness version. Returns the predicates changed.',
     parameters: {
       type: 'object',
       properties: { summary: stringProp('One-line summary of the change (optional).') },
@@ -103,7 +103,7 @@ export function createHarnessTools(controller: HarnessToolController): Map<strin
   });
 
   tools.set('define', {
-    description: 'Replace the predicate(s) defined by a clause block: remove every predicate the block defines (plus the head pattern) and assert the block in order. Use this for any change to existing predicates — a block may define several.',
+    description: 'Replace the predicate(s) defined by a clause block: remove every predicate the block defines (plus the head pattern) and assert the block in order. Requires an open transaction (call begin_turn first). Use this for any change to existing predicates — a block may define several.',
     parameters: {
       type: 'object',
       properties: {
@@ -116,7 +116,7 @@ export function createHarnessTools(controller: HarnessToolController): Map<strin
   });
 
   tools.set('assert', {
-    description: 'Assert one clause. Use only for a new predicate — assert appends, so asserting over an existing predicate duplicates clauses. Use define to change one.',
+    description: 'Assert one clause. Requires an open transaction (call begin_turn first). Use only for a new predicate — assert appends, so asserting over an existing predicate duplicates clauses. Use define to change one.',
     parameters: {
       type: 'object',
       properties: { clause: stringProp('The DML clause/fact text to assert (no trailing period required).') },
@@ -126,7 +126,7 @@ export function createHarnessTools(controller: HarnessToolController): Map<strin
   });
 
   tools.set('assert_many', {
-    description: 'Assert a block of clauses in the order written. Use this to define a whole predicate so clause order (base case before recursive rule) is preserved.',
+    description: 'Assert a block of clauses in the order written. Requires an open transaction (call begin_turn first). Use this to define a whole predicate so clause order (base case before recursive rule) is preserved.',
     parameters: {
       type: 'object',
       properties: { clauses: stringProp('The DML clauses/facts, in order, each ending with a period.') },
@@ -136,7 +136,7 @@ export function createHarnessTools(controller: HarnessToolController): Map<strin
   });
 
   tools.set('retract', {
-    description: 'Remove matching clauses from the harness (reserved names are protected).',
+    description: 'Remove matching clauses from the harness. Requires an open transaction (call begin_turn first). Reserved names are protected.',
     parameters: {
       type: 'object',
       properties: { clause: stringProp('The clause pattern to retract (no trailing period required).') },
@@ -146,7 +146,7 @@ export function createHarnessTools(controller: HarnessToolController): Map<strin
   });
 
   tools.set('delete', {
-    description: 'Delete a predicate entirely (abolishes all its clauses), e.g. delete("describe_image/2").',
+    description: 'Delete a predicate entirely (abolishes all its clauses), e.g. delete("describe_image/2"). Requires an open transaction (call begin_turn first).',
     parameters: {
       type: 'object',
       properties: { predicate: stringProp('The predicate indicator to delete, e.g. "describe_image/2".') },

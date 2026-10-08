@@ -40,7 +40,9 @@ function commitResponse(code: string): CannedResponse {
   return {
     text: '',
     toolCalls: [
+      { name: 'begin_turn', arguments: {} },
       { name: 'assert_many', arguments: { clauses: code } },
+      { name: 'end_turn', arguments: {} },
       { name: 'finish', arguments: { success: true } },
     ],
   };

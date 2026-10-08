@@ -129,17 +129,19 @@ committed fact/2, demo/0
 
 A prompt is an **edit transaction**:
 
-1. the living module is snapshotted at the start of the request;
-2. the authoring agent edits the harness through tools (`listing`, `define`,
-   `assert`/`assert_many`, `retract`, `delete`) and tests with `execute`;
-3. `end_turn` commits the change and records a version; `rollback` discards it;
-4. a run that ends without an explicit `end_turn` auto-commits, and a failed or
-   aborted run restores the harness unchanged.
+1. the authoring agent opens it with `begin_turn` (snapshots the living module);
+   the editing tools (`define`, `assert`/`assert_many`, `retract`, `delete`) are
+   **refused** while no transaction is open;
+2. the agent edits through those tools and tests with `execute`;
+3. `end_turn` commits the change and records a version; `rollback` discards it.
+   After `end_turn` the transaction is closed, so further edits need a new
+   `begin_turn`;
+4. if the agent loop ends while a transaction is still open, the host **nudges**
+   the agent to `end_turn` or `rollback` (a few times). As a last resort it
+   commits so nothing is lost, showing `commit transaction (host)`;
+5. a failed or aborted run restores the harness unchanged.
 
-The transcript brackets each transaction with `begin_turn`/`end_turn`. If the
-agent edits without opening one, or the host auto-commits, the host emits the
-missing marker (`open transaction (host)` / `commit transaction (host)`) so the
-bracket is always visible; explicit agent calls take precedence.
+This makes every change an explicit, visible `begin_turn` … `end_turn` unit.
 
 For a larger change the agent is asked to commit working pieces incrementally,
 so a late failure does not lose earlier progress.
@@ -182,11 +184,12 @@ the turn reports the error.
 ### Authoring agent
 
 Plain-English requests are authored by a normal TypeScript agent with a system
-prompt and harness tools. It edits the live harness through `listing` /
-`define` / `assert` / `assert_many` / `retract` / `delete`, tests with
-`execute`, and commits with `end_turn` (or discards with `rollback`). The host
-snapshots at the start of each request and auto-commits if the run ends without
-an explicit `end_turn`; it can run several committed turns in one request.
+prompt and harness tools. It opens a transaction with `begin_turn`, edits the
+live harness through `listing` / `define` / `assert` / `assert_many` / `retract`
+/ `delete`, tests with `execute`, and commits with `end_turn` (or discards with
+`rollback`). Editing is refused while no transaction is open, and the host
+nudges the agent if the run ends with one still open; it can run several
+committed turns in one request.
 
 #### Steering a running turn
 

@@ -77,7 +77,9 @@ the agent's own conversation is the history.
 - `rollback` restores the start-of-run snapshot and discards edits.
 - `begin_turn` starts a fresh transaction (snapshot again) so several committed
   turns can happen in one run.
-- If the run ends with uncommitted edits and no `rollback`, the host auto-commits.
+- If the run ends with uncommitted edits and no `rollback`, the host nudges the
+  agent to `end_turn`/`rollback`; if it still doesn't, the host commits as a
+  last resort.
 - A failed run rolls back.
 
 ### Tools

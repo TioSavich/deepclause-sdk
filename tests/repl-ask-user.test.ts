@@ -46,7 +46,9 @@ function finalResponse(code: string): CannedResponse {
   return {
     text: 'Here is the harness.',
     toolCalls: [
+      { name: 'begin_turn', arguments: {} },
       { name: 'assert_many', arguments: { clauses: code } },
+      { name: 'end_turn', arguments: {} },
       { name: 'finish', arguments: { success: true } },
     ],
   };
@@ -170,7 +172,9 @@ describe('harness input/2', () => {
       text: '',
       toolCalls: [
         { name: 'execute', arguments: { goal: 'input("Nested question?", A), output(A)' } },
+        { name: 'begin_turn', arguments: {} },
         { name: 'assert_many', arguments: { clauses: 'kept(1).' } },
+        { name: 'end_turn', arguments: {} },
         { name: 'finish', arguments: { success: true } },
       ],
     }]);

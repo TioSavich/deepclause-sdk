@@ -50,7 +50,13 @@ function finalResponse(code: string, run?: string): CannedResponse {
   return {
     text: 'Here is the harness.',
     toolCalls: [
-      ...(code.trim() ? [{ name: 'assert_many', arguments: { clauses: code } }] : []),
+      ...(code.trim()
+        ? [
+            { name: 'begin_turn', arguments: {} },
+            { name: 'assert_many', arguments: { clauses: code } },
+            { name: 'end_turn', arguments: {} },
+          ]
+        : []),
       ...(run ? [{ name: 'execute', arguments: { goal: run } }] : []),
       { name: 'finish', arguments: { success: true } },
     ],
@@ -239,9 +245,11 @@ describe('prompt mode', () => {
     backend = new CannedBackend([{
       text: '',
       toolCalls: [
+        { name: 'begin_turn', arguments: {} },
         { name: 'define', arguments: { head: 'greet(Name, Msg)', clauses: 'greet(Name, Msg) :- format(atom(Msg), "hi ~w", [Name]).' } },
         { name: 'define', arguments: { head: 'greet(Name, Msg)', clauses: 'greet(Name, Msg) :- format(atom(Msg), "yo ~w", [Name]).' } },
         { name: 'execute', arguments: { goal: 'greet(bob, M), output(M)' } },
+        { name: 'end_turn', arguments: {} },
         { name: 'set_result', arguments: { variable: 'DMLCode', value: 'greet(Name, Msg) :- format(atom(Msg), "yo ~w", [Name]).' } },
         { name: 'set_result', arguments: { variable: 'Answer', value: '' } },
         { name: 'finish', arguments: { success: true } },
@@ -264,6 +272,7 @@ describe('prompt mode', () => {
       {
         text: 'ok',
         toolCalls: [
+          { name: 'begin_turn', arguments: {} },
           {
             name: 'define',
             arguments: {
@@ -272,6 +281,7 @@ describe('prompt mode', () => {
             },
           },
           { name: 'execute', arguments: { goal: 'research("capital of Australia?", A), output(A)' } },
+          { name: 'end_turn', arguments: {} },
           {
             name: 'set_result',
             arguments: {
@@ -308,8 +318,10 @@ describe('prompt mode', () => {
       {
         text: '',
         toolCalls: [
+          { name: 'begin_turn', arguments: {} },
           { name: 'assert_many', arguments: { clauses: 'foo :- task("hi", X), output(X).\n' } },
           { name: 'execute', arguments: { goal: 'foo' } },
+          { name: 'end_turn', arguments: {} },
           { name: 'set_result', arguments: { variable: 'DMLCode', value: 'kept(1).' } },
           { name: 'set_result', arguments: { variable: 'Answer', value: '' } },
           { name: 'finish', arguments: { success: true } },
@@ -345,8 +357,10 @@ describe('prompt mode', () => {
     backend = new CannedBackend([{
       text: '',
       toolCalls: [
+        { name: 'begin_turn', arguments: {} },
         { name: 'assert_many', arguments: { clauses: 'a(1).\nb(2).\nc(3) :- true.\n' } },
         { name: 'execute', arguments: { goal: 'a(X), b(Y), c(Z)' } },
+        { name: 'end_turn', arguments: {} },
         { name: 'set_result', arguments: { variable: 'DMLCode', value: 'kept(1).' } },
         { name: 'set_result', arguments: { variable: 'Answer', value: '' } },
         { name: 'finish', arguments: { success: true } },
@@ -368,7 +382,9 @@ describe('prompt mode', () => {
       text: '',
       toolCalls: [
         { name: 'execute', arguments: { goal: 'no_such_predicate(1)' } },
+        { name: 'begin_turn', arguments: {} },
         { name: 'assert_many', arguments: { clauses: 'kept(1).' } },
+        { name: 'end_turn', arguments: {} },
         { name: 'finish', arguments: { success: true } },
       ],
     }]);
@@ -384,6 +400,7 @@ describe('prompt mode', () => {
     backend = new CannedBackend([{
       text: '',
       toolCalls: [
+        { name: 'begin_turn', arguments: {} },
         {
           name: 'assert_many',
           arguments: {
@@ -391,6 +408,7 @@ describe('prompt mode', () => {
           },
         },
         { name: 'execute', arguments: { goal: 'fact(5, F)' } },
+        { name: 'end_turn', arguments: {} },
         { name: 'set_result', arguments: { variable: 'DMLCode', value: 'kept(1).' } },
         { name: 'set_result', arguments: { variable: 'Answer', value: '' } },
         { name: 'finish', arguments: { success: true } },
@@ -433,7 +451,9 @@ describe('prompt mode', () => {
       {
         text: '',
         toolCalls: [
+          { name: 'begin_turn', arguments: {} },
           { name: 'define', arguments: { head: 'fact(N, F)', clauses: second } },
+          { name: 'end_turn', arguments: {} },
           { name: 'finish', arguments: { success: true } },
         ],
       },
@@ -493,11 +513,13 @@ describe('prompt mode', () => {
       {
         text: '',
         toolCalls: [
+          { name: 'begin_turn', arguments: {} },
           { name: 'assert_many', arguments: { clauses: 'foo(1).\nfoo(2).\nbar(1).\n' } },
           // A full-clause pattern must target foo/1, not every rule.
           { name: 'retract', arguments: { clause: 'foo(_) :- true' } },
           { name: 'execute', arguments: { goal: 'foo(X)' } },
           { name: 'execute', arguments: { goal: 'bar(1)' } },
+          { name: 'end_turn', arguments: {} },
           { name: 'finish', arguments: { success: true } },
         ],
       },
