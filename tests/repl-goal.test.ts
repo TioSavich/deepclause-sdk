@@ -67,6 +67,31 @@ describe('goal mode', () => {
     expect(solutionValues(events, 'F')).toEqual(['120']);
   });
 
+  it('keeps a predicate annotated with tool/2 callable from a goal', async () => {
+    const loaded = await repl.session.loadCode(
+      'strlen(Text, N) :- atom_length(Text, N).\n'
+      + 'tool(strlen(Text, N), "Length of an atom (test).") :- strlen(Text, N).\n',
+    );
+    expect(loaded.error).toBeUndefined();
+
+    // The capability is reachable from execute/goal: ...
+    const events = await collect(repl.query('strlen(abcd, N)'));
+    expect(solutionValues(events, 'N')).toEqual(['4']);
+    // ... and the annotation registers it for the nested agent.
+    expect(await repl.list('tools')).toContain('strlen');
+  });
+
+  it('does not expose a predicate defined only inside tool/2', async () => {
+    const loaded = await repl.session.loadCode(
+      'tool(hidden(Value), "Only a tool.") :- Value = 7.\n',
+    );
+    expect(loaded.error).toBeUndefined();
+
+    const events = await collect(repl.query('hidden(V)'));
+    expect(events.some((event) => event.type === 'error')).toBe(true);
+    expect(events.some((event) => event.type === 'solution')).toBe(false);
+  });
+
   it('renders output events in the interactive goal pager (not only solutions)', async () => {
     const sink: string[] = [];
     const renderer = new ReplRenderer({ mode: 'plain', color: false, sink: (text) => sink.push(text) });

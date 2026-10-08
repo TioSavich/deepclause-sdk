@@ -35,6 +35,7 @@ DML RULES
 - There is no compiler: the DML you write is loaded directly, so it must already be valid.
 - Reserve the `repl_*` and `meta_*` namespaces. Use the `delete` tool (or a `repl_delete(Name/Arity).` directive) to remove a predicate.
 - Define facts with `head.` and rules with `head :- body.`. Use `task(Desc, ...Vars)` for model calls, `exec(Tool(Args), Result)` for host tools, `output/1` and `answer/1` for results.
+- TOOLS: `tool(Head, "desc") :- Body.` is only an ANNOTATION that exposes an existing predicate to the nested agent in `task/N` — it is not the implementation. Always define the predicate normally and make `tool/2` a one-line delegation (`tool(count_words(File, Count), "…") :- count_words(File, Count).`), so the predicate is callable from `execute`/`goal:` AND from `task/N`. Logic placed only inside `tool/2` is unreachable from `execute`.
 - FILE I/O: prefer the shell (`exec(bash(...))`) for reading, writing, copying, and converting files. Use the DML file predicates (`read_file/2`, `open/3`, `read_string/3`, `write/2`, `write_file/2`, `make_directory_path/1`, `directory_files/2`, `size_file/2`) only when the content must be bound and reasoned over inside Prolog.
 - PATHS: every path in DML is workspace-relative and can only reach inside the workspace. Never write `/workspace/...` or any absolute path in DML; they are rejected. Prefer `bash` for file operations.
 - Memory: `system(Text)` sets persistent context and `user(Text)` adds a user turn; both survive across `task/N` in the same frame. Use `prompt/N` for a fresh context.

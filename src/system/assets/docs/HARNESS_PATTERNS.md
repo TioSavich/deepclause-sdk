@@ -32,7 +32,7 @@ composition of the same small set of constructs:
 | One typed decision | `choose/4`, `rate/4`, `verify/3`, `probability/3`, `judge/2` | Constrained outputs, batched, memoized |
 | One constrained token | `sample_token/2,3` | Grammar/label frontier lives in the allowed list |
 | A host capability | `exec(Tool(Args), Result)` | Only the catalog tools; `bash` by default |
-| A capability the model can call | `tool(Head, "desc") :- Body.` | The nested agent calls these during `task/N` |
+| A capability the nested agent can call | `tool(Head, "desc") :- Goal.` | An annotation over an existing predicate; keep `Goal` a delegation |
 | A reusable subroutine | a plain predicate | Named, documented, tested |
 | Knowledge | facts (data facts) | Data = code; small data lives in the module |
 | A note across steps | `system/1`, `user/1`, explicit variables | Nested `task/N` starts with **fresh** memory |
@@ -146,44 +146,47 @@ skills/coding.dml          # the harness
 ```prolog
 module_doc("Coding assistant: read, search, edit a repository and run its tests.").
 
-% --- tools the model may call inside a task/N ---
-tool(shell(Command, Output), "Run a shell command in the workspace. Returns stdout.") :-
+% --- capabilities: normal predicates, callable from execute/goal: AND task/N ---
+run_shell(Command, Output) :-
     exec(bash(command: Command), Result),
     ( get_dict(stdout, Result, Out) -> Output = Out ; Output = "" ).
 
-tool(read_file(Path, Text), "Read a workspace-relative text file.") :-
-    read_file(Path, Text).
+fs_read(Path, Text) :- read_file(Path, Text).
+fs_write(Path, Content) :- write_file(Path, Content).
 
-tool(write_file(Path, Content), "Write a workspace-relative file (overwrites).") :-
-    write_file(Path, Content).
-
-tool(grep(Pattern, Path, Matches), "Search a path for a pattern; returns matching lines.") :-
+fs_grep(Pattern, Path, Matches) :-
     format(atom(Cmd), "grep -rn -- ~w ~w", [Pattern, Path]),
     exec(bash(command: Cmd), Result),
     ( get_dict(stdout, Result, Out) -> Matches = Out ; Matches = "" ).
+
+% --- annotations: expose the predicates above to the nested agent ---
+tool(run_shell(Command, Output), "Run a shell command in the workspace. Returns stdout.") :- run_shell(Command, Output).
+tool(fs_read(Path, Text), "Read a workspace-relative text file.") :- fs_read(Path, Text).
+tool(fs_write(Path, Content), "Write a workspace-relative file (overwrites).") :- fs_write(Path, Content).
+tool(fs_grep(Pattern, Path, Matches), "Search a path for a pattern; returns matching lines.") :- fs_grep(Pattern, Path, Matches).
 
 % --- skills ---
 doc(explain/2, "Explain code relevant to a question. explain(+Question, -Answer). Example: goal: explain(\"how is auth wired?\", A).").
 
 explain(Question, Answer) :-
     system("You are a coding assistant working in a repository. Use the tools; cite file paths and line numbers."),
-    with_tools([shell, read_file, grep],
+    with_tools([run_shell, fs_read, fs_grep],
         task("Answer this question about the repository: {Question}", Answer)).
 
 doc(patch/3, "Apply a minimal fix and run the tests. patch(+File, +Issue, -Summary).").
 
 patch(File, Issue, Summary) :-
     system("Make the smallest change that fixes the issue. Never rewrite unrelated code. Run the project's tests and report the result."),
-    with_tools([shell, read_file, write_file, grep],
+    with_tools([run_shell, fs_read, fs_write, fs_grep],
         task("Fix this issue in {File}: {Issue}. Then run the test suite and report what changed and the test result.", Summary)).
 
 % --- test: pins behavior an edit must not break ---
 test_grep_tool :-
-    grep("needs", "src", _).
+    fs_grep("needs", "src", _).
 ```
 
-**Guardrails.** Paths are workspace-relative and confined, so `read_file`/
-`write_file` cannot escape. `bash` runs in the sandbox, and its standard output
+**Guardrails.** Paths are workspace-relative and confined, so `fs_read`/
+`fs_write` cannot escape. `bash` runs in the sandbox, and its standard output
 is the model's ground truth. Destructive shell work (force-push, `rm -rf`,
 package publish) should be gated behind `input/2`; see §5.
 
@@ -217,15 +220,20 @@ module_doc("Web research: search and read sources, then write a cited report.").
 script_file(web_search, ".dc-repl/scripts/web_search.sh").
 script_file(fetch_page, ".dc-repl/scripts/fetch_page.sh").
 
-tool(web_search(Query, Results), "Search the web. Returns titles, URLs and snippets.") :-
+% Capabilities (callable from execute/goal: and task/N).
+web_search(Query, Results) :-
     script_file(web_search, Script),
     format(atom(Cmd), "bash '~w' ~w", [Script, Query]),
     exec(bash(command: Cmd), R), get_dict(stdout, R, Results).
 
-tool(fetch_page(Url, Text), "Fetch a URL as readable text.") :-
+fetch_page(Url, Text) :-
     script_file(fetch_page, Script),
     format(atom(Cmd), "bash '~w' ~w", [Script, Url]),
     exec(bash(command: Cmd), R), get_dict(stdout, R, Text).
+
+% Annotations exposing them to the nested agent.
+tool(web_search(Query, Results), "Search the web. Returns titles, URLs and snippets.") :- web_search(Query, Results).
+tool(fetch_page(Url, Text), "Fetch a URL as readable text.") :- fetch_page(Url, Text).
 
 doc(research/2, "Research a question with web sources and citations. research(+Question, -Report).").
 
@@ -371,20 +379,19 @@ browser_action(Action, Args, Out) :-
     exec(bash(command: Cmd), R),
     get_dict(stdout, R, Out).
 
-tool(browser_open(Url, Page), "Open a URL. Returns {title, url, elements: [{index, role, name}]}.") :-
-    browser_action(open, _{url: Url}, Page).
+% Capabilities (callable from execute/goal: and task/N).
+browser_open(Url, Page) :- browser_action(open, _{url: Url}, Page).
+browser_click(Index, Page) :- browser_action(click, _{index: Index}, Page).
+browser_type(Index, Text, Page) :- browser_action(type, _{index: Index, text: Text}, Page).
+browser_text(Index, Text) :- browser_action(text, _{index: Index}, Text).
+browser_screenshot(Path) :- browser_action(screenshot, _{path: Path}, _).
 
-tool(browser_click(Index, Page), "Click the element at the given index; returns the updated page.") :-
-    browser_action(click, _{index: Index}, Page).
-
-tool(browser_type(Index, Text, Page), "Type text into the element at the given index.") :-
-    browser_action(type, _{index: Index, text: Text}, Page).
-
-tool(browser_text(Index, Text), "Return the visible text of the element at the given index.") :-
-    browser_action(text, _{index: Index}, Text).
-
-tool(browser_screenshot(Path), "Screenshot the page to a workspace-relative path (PNG).") :-
-    browser_action(screenshot, _{path: Path}, _).
+% Annotations exposing them to the nested agent.
+tool(browser_open(Url, Page), "Open a URL. Returns {title, url, elements: [{index, role, name}]}.") :- browser_open(Url, Page).
+tool(browser_click(Index, Page), "Click the element at the given index; returns the updated page.") :- browser_click(Index, Page).
+tool(browser_type(Index, Text, Page), "Type text into the element at the given index.") :- browser_type(Index, Text, Page).
+tool(browser_text(Index, Text), "Return the visible text of the element at the given index.") :- browser_text(Index, Text).
+tool(browser_screenshot(Path), "Screenshot the page to a workspace-relative path (PNG).") :- browser_screenshot(Path).
 
 doc(browse/3, "Complete a browsing task. browse(+Url, +Task, -Result). Example: goal: browse(\"https://example.com\", \"find the price\", R).").
 
@@ -482,9 +489,14 @@ module_doc("One sentence: what this harness is for.").
 % fact(a).
 
 % --- tools the model may call inside task/N ---
-tool(shell(Command, Output), "Run a shell command; returns stdout.") :-
+% Capability (callable from execute/goal: and task/N).
+run_shell(Command, Output) :-
     exec(bash(command: Command), Result),
     ( get_dict(stdout, Result, Out) -> Output = Out ; Output = "" ).
+
+% Annotation exposing it to the nested agent.
+tool(run_shell(Command, Output), "Run a shell command; returns stdout.") :-
+    run_shell(Command, Output).
 
 % --- skills ---
 doc(example/2, "One line: what it does. example(+In, -Out). Example: goal: example(\"x\", O).").

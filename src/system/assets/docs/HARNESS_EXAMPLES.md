@@ -25,21 +25,28 @@ module_doc("Example harness: a few small skills used as patterns. Use when you n
 
 Materialize the program as a workspace file (run a DML goal with
 `make_directory_path("scripts"), write_file("scripts/count_words.py", "…")`),
-link it with `script_file/2`, and expose it as a `tool/2`. Untrusted data goes
-through files/stdin, never interpolated into the shell command:
+link it with `script_file/2`, and define a predicate for it. `tool/2` is only an
+annotation that exposes an existing predicate to `task/N`; keep it a one-line
+delegation so the predicate is also callable from `execute`/`goal:`:
 
 ```prolog
 script_file(count_words, ".dc-repl/scripts/count_words.py").
 
-tool(count_words(File, Count), "Count words in a workspace file.") :-
+% The capability: callable from `execute`/`goal:` and from `task/N`.
+count_words(File, Count) :-
     script_file(count_words, Script),
     format(atom(Cmd), "python3 '~w' '~w'", [Script, File]),
     exec(bash(command: Cmd), Result),
     get_dict(stdout, Result, Count).
+
+% The annotation exposing it to the nested agent (delegation only).
+tool(count_words(File, Count), "Count words in a workspace file.") :-
+    count_words(File, Count).
 ```
 
-`script_file/2` is just a fact (the exporter bundles the file); the write lands
-on disk immediately, so `bash` can run the script in the same turn.
+Untrusted data goes through files/stdin, never interpolated into the shell
+command. `script_file/2` is just a fact (the exporter bundles the file); the
+write lands on disk immediately, so `bash` can run the script in the same turn.
 
 ## 2. A skill that calls the model
 

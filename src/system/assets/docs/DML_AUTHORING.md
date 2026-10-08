@@ -124,6 +124,13 @@ doc(tally/2, "Count occurrences of each item. tally(+List, -Counts) yields Key-N
   re-read it whenever the harness changes**. A file with only `module_doc/1` and
   no predicates is still a valid skill: it advertises the capability while the
   body is empty.
+- `tool(Head, "desc") :- Body.` — **an annotation, not an implementation**: it
+  exposes an existing predicate to the nested agent in `task/N`. Define the
+  predicate normally and delegate
+  (`tool(count_words(File, Count), "…") :- count_words(File, Count).`), so the
+  same predicate is callable from `execute`/`goal:` **and** from `task/N`. Logic
+  placed only inside `tool/2` is unreachable from `execute` (the loader asserts
+  `tool(Head)`, never `Head`).
 - `doc(Name/Arity, Text)` — one fact per skill, helper, or tool; terse, with
   arguments (`+in` / `-out`) and an example goal.
 

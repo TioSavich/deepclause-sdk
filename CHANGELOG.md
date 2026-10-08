@@ -4,6 +4,13 @@
 
 ### Changed
 
+- **`tool/2` is documented as an annotation, not an implementation.** It only
+  exposes an existing harness predicate to the nested `task/N` agent, so the
+  docs now define a normal predicate and have `tool/2` delegate to it
+  (`tool(count_words(F, C), "…") :- count_words(F, C).`). Logic placed only
+  inside `tool/2` is unreachable from `execute`/`goal:` — the loader asserts
+  `tool(Head)`, never `Head`. Updated `DML_REFERENCE.md`, `DML_AUTHORING.md`,
+  `HARNESS_EXAMPLES.md`, `HARNESS_PATTERNS.md`, and `AGENT_PROMPT.md`.
 - **The authoring agent has no file or shell tools.** `read_file`, `write_file`,
   `list_files`, and `delete_file` were removed; the agent's file I/O now goes
   through DML (`make_directory_path/1` + `write_file/2`, …) or `bash` via its

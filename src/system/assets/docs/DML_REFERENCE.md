@@ -221,34 +221,46 @@ exec(get_time, CurrentTime)
 
 ### Tool Definitions
 
-Define tools in DML that the LLM can call during `task()`. Tools use the `tool/2` predicate with a description:
+`tool/2` is an **annotation**, not an implementation. It exposes an existing
+harness predicate to the nested agent that runs inside `task/N`. Define the
+predicate normally, then add a `tool/2` clause that delegates to it:
 
 ```prolog
-% Define a tool - makes it available to the LLM with description
-tool(calculate(Expression, Result), "Calculate a mathematical expression") :-
-    exec(calculator(expression: Expression), Result).
+% 1. The capability: a normal predicate, callable from `execute` and `goal:`.
+count_words(File, Count) :-
+    script_file(count_words, Script),
+    format(atom(Cmd), "python3 '~w' '~w'", [Script, File]),
+    exec(bash(command: Cmd), Result),
+    get_dict(stdout, Result, Count).
 
-agent_main :-
-    system("You have a calculate tool."),
-    task("What is the square root of 144?"),
-    answer("Done").
+% 2. The annotation: exposes it to the nested agent. Thin body only.
+tool(count_words(File, Count), "Count words in a workspace file.") :-
+    count_words(File, Count).
 ```
 
-Tool definitions have the form:
+A predicate defined *only* inside a `tool/2` clause is invisible to
+`execute`/`goal:` — the loader asserts it as `tool(Head)`, never as `Head`. Split
+the two so one implementation is reachable from both surfaces:
+
 ```prolog
-tool(name(Arg1, Arg2, ..., Result), "Description") :- Body.
+goal: count_words("report.txt", C).          % authoring agent / goal:
+task("Count the words in report.txt.", N).   % nested agent calls the tool
 ```
 
-The last argument is typically the output. The description is shown to the LLM.
-```
+The tool head's **last argument is the output**; the description is shown to the
+nested agent. Keep the `tool/2` body a single delegation — put no logic in it.
 
-You can add Prolog logic in tool implementations:
+Logic lives in the predicate, not the annotation:
+
 ```prolog
-tool(safe_divide(A, B, Result), "Safely divide two numbers") :-
+safe_divide(A, B, Result) :-
     (   B =:= 0
     ->  Result = error("Division by zero")
-    ;   exec(calculator(expression: A/B), Result)
+    ;   Result is A / B
     ).
+
+tool(safe_divide(A, B, Result), "Safely divide two numbers.") :-
+    safe_divide(A, B, Result).
 ```
 
 #### Using `task()` Inside Tools
@@ -256,20 +268,22 @@ tool(safe_divide(A, B, Result), "Safely divide two numbers") :-
 Tools can use `task()` and `prompt()` internally to combine Prolog logic with LLM reasoning:
 
 ```prolog
-% A tool that computes then explains
-:- tool(explain_calculation(A, B), "Calculate and explain the result").
-
-tool(explain_calculation(A, B, Explanation)) :-
+% A predicate that computes then explains.
+explain_calculation(A, B, Explanation) :-
     Sum is A + B,  % Prolog computation
     format(string(Desc), "Explain ~w + ~w = ~w to a child", [A, B, Sum]),
     task(Desc, Explanation).  % LLM explanation
 
-% A tool that uses LLM for formatting
-:- tool(format_data(Data), "Format data nicely using LLM").
+tool(explain_calculation(A, B, Explanation), "Calculate and explain the result.") :-
+    explain_calculation(A, B, Explanation).
 
-tool(format_data(Data, FormattedOutput)) :-
+% A predicate that uses the LLM for formatting.
+format_data(Data, FormattedOutput) :-
     format(string(Desc), "Format this data nicely: ~w", [Data]),
     task(Desc, FormattedOutput).
+
+tool(format_data(Data, FormattedOutput), "Format data nicely using LLM.") :-
+    format_data(Data, FormattedOutput).
 ```
 
 **Memory Isolation:** When `task()` or `prompt()` runs inside a tool, the nested agent starts with **fresh memory**. It does NOT inherit the parent's accumulated memory from `system()`, `user()`, or previous `task()` calls. If you need context in a nested task, pass it explicitly as a tool argument or add it with `system()` inside the tool body.
@@ -277,13 +291,16 @@ tool(format_data(Data, FormattedOutput)) :-
 **Tool Access:** The nested agent has access to all DML tools **except** the tool that is currently executing (automatic call stack exclusion to prevent infinite recursion). You can further control tool access using `with_tools/2` and `without_tools/2`.
 
 ```prolog
-% Example: Passing context explicitly
-tool(smart_grep(BuildContext, Pattern, Summary), "Grep with context") :-
+% Example: passing context explicitly.
+smart_grep(BuildContext, Pattern, Summary) :-
     system(BuildContext),            % add context to the nested task's memory
     format(atom(Cmd), "grep -rn '~w' .", [Pattern]),
     exec(bash(command: Cmd), Results),
     format(string(Desc), "Summarize these matches: ~w", [Results]),
     task(Desc, Summary).
+
+tool(smart_grep(BuildContext, Pattern, Summary), "Grep with context.") :-
+    smart_grep(BuildContext, Pattern, Summary).
 ```
 
 ---
