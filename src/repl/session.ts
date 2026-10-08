@@ -974,9 +974,34 @@ export class DMLSession {
     await this.beginTurn();
 
     const agent = await this.getHarnessAgent();
+    // Fallback transaction visibility: the host snapshots at the start of every
+    // request, but if the agent edits without opening a transaction we show that
+    // implicit `begin_turn`, and when the host auto-commits at the end we show
+    // the implicit `end_turn`. Explicit agent calls take precedence.
+    const editTools = new Set(['define', 'assert', 'assert_many', 'retract', 'delete']);
+    let transactionOpen = false;
     let failed = false;
     try {
       for await (const event of agent.run(request, { signal: options.signal })) {
+        if (event.type === 'tool_call') {
+          if (event.toolState === 'starting' && event.toolName === 'begin_turn') {
+            transactionOpen = true;
+          } else if (event.toolState === 'starting' && editTools.has(event.toolName ?? '') && !transactionOpen) {
+            // The agent edited without opening a transaction; show the host's.
+            transactionOpen = true;
+            const marker: DMLEvent = {
+              type: 'tool_call',
+              toolName: 'begin_turn',
+              toolArgs: {},
+              toolState: 'completed',
+              toolSummary: 'open transaction (host)',
+            };
+            this.recordHistoryEvent(turn, marker);
+            yield marker;
+          } else if (event.toolState === 'completed' && event.toolName === 'end_turn') {
+            transactionOpen = false;
+          }
+        }
         // A nested (`execute` child) error is a tool result the agent can react
         // to; only the agent's own errors fail the turn.
         if (event.type === 'error' && event.frameKind !== 'nested') failed = true;
@@ -997,6 +1022,17 @@ export class DMLSession {
     } else if (this.transactionBefore !== null) {
       // Reaching the end without an explicit end_turn commits the edits.
       await this.endTurn();
+      if (transactionOpen) {
+        const marker: DMLEvent = {
+          type: 'tool_call',
+          toolName: 'end_turn',
+          toolArgs: {},
+          toolState: 'completed',
+          toolSummary: 'commit transaction (host)',
+        };
+        this.recordHistoryEvent(turn, marker);
+        yield marker;
+      }
     }
     await this.persistSessionHarness(this.history?.currentVersion ?? 0);
 

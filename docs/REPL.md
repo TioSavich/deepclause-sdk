@@ -136,6 +136,11 @@ A prompt is an **edit transaction**:
 4. a run that ends without an explicit `end_turn` auto-commits, and a failed or
    aborted run restores the harness unchanged.
 
+The transcript brackets each transaction with `begin_turn`/`end_turn`. If the
+agent edits without opening one, or the host auto-commits, the host emits the
+missing marker (`open transaction (host)` / `commit transaction (host)`) so the
+bracket is always visible; explicit agent calls take precedence.
+
 For a larger change the agent is asked to commit working pieces incrementally,
 so a late failure does not lose earlier progress.
 

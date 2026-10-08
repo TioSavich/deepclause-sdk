@@ -72,6 +72,61 @@ describe('REPL authoring agent', () => {
     expect(events.some((event) => event.type === 'solution')).toBe(true);
   });
 
+  it('shows a host transaction bracket when the agent edits without begin_turn', async () => {
+    await openAgent([
+      {
+        text: 'adding greet/1',
+        toolCalls: [
+          { id: '1', name: 'define', arguments: { head: 'greet(Name)', clauses: 'greet(world).' } },
+          { id: '2', name: 'finish', arguments: { success: true } },
+        ],
+        finishReason: 'tool_use',
+      },
+    ]);
+    const events = await collect(repl!.prompt('add a greet/1 fact'));
+
+    const hostBegin = events.find((e) => (
+      e.type === 'tool_call' && e.toolName === 'begin_turn' && (e.toolSummary ?? '').includes('(host)')
+    ));
+    const hostEnd = events.find((e) => (
+      e.type === 'tool_call' && e.toolName === 'end_turn' && (e.toolSummary ?? '').includes('(host)')
+    ));
+    expect(hostBegin).toBeTruthy();
+    expect(hostEnd).toBeTruthy();
+
+    // The implicit begin is shown before the first edit.
+    const beginIndex = events.findIndex((e) => (
+      e.type === 'tool_call' && e.toolName === 'begin_turn' && (e.toolSummary ?? '').includes('(host)')
+    ));
+    const editIndex = events.findIndex((e) => (
+      e.type === 'tool_call' && e.toolName === 'define' && e.toolState === 'starting'
+    ));
+    expect(beginIndex).toBeGreaterThanOrEqual(0);
+    expect(beginIndex).toBeLessThan(editIndex);
+  });
+
+  it('does not add a host marker when the agent brackets explicitly', async () => {
+    await openAgent([
+      {
+        text: 'explicit',
+        toolCalls: [
+          { id: '1', name: 'begin_turn', arguments: {} },
+          { id: '2', name: 'define', arguments: { head: 'greet(Name)', clauses: 'greet(world).' } },
+          { id: '3', name: 'end_turn', arguments: {} },
+          { id: '4', name: 'finish', arguments: { success: true } },
+        ],
+        finishReason: 'tool_use',
+      },
+    ]);
+    const events = await collect(repl!.prompt('add greet/1 explicitly'));
+    const hostMarkers = events.filter((e) => (
+      e.type === 'tool_call'
+      && (e.toolName === 'begin_turn' || e.toolName === 'end_turn')
+      && (e.toolSummary ?? '').includes('(host)')
+    ));
+    expect(hostMarkers).toHaveLength(0);
+  });
+
   it('rolls back edits made before a rollback tool call', async () => {
     await openAgent([
       {
