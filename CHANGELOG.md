@@ -4,6 +4,10 @@
 
 ### Added
 
+- **Harness patterns reference** (`HARNESS_PATTERNS.md`, `reference("patterns")`):
+  how a harness typically looks for a coding assistant, a research agent, an SOP
+  runner, and a tool collection (browser use), mapped to the Anthropic/OpenAI
+  workflow and orchestration patterns, with guardrails and a default skeleton.
 - **TypeScript authoring agent**: the REPL's main agent is a normal LLM agent
   with a system prompt and harness tools (`begin_turn`, `end_turn`, `rollback`,
   `listing`, `define`, `assert`, `assert_many`, `retract`, `delete`, `execute`,

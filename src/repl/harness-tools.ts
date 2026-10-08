@@ -242,7 +242,7 @@ export function createHarnessTools(controller: HarnessToolController): Map<strin
   });
 
   tools.set('reference', {
-    description: 'Read DeepClause language documentation. Topics: "language" (DML reference), "authoring" (authoring guide), "examples" (harness examples), "snippets" (Prolog snippets), "tools" (host tool catalog).',
+    description: 'Read DeepClause language documentation. Topics: "language" (DML reference), "authoring" (authoring guide), "patterns" (harness patterns by use case), "examples" (harness examples), "snippets" (Prolog snippets), "tools" (host tool catalog).',
     parameters: {
       type: 'object',
       properties: { topic: stringProp('language | authoring | examples | snippets | tools.') },

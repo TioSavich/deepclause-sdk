@@ -61,4 +61,4 @@ TOOLS AVAILABLE TO YOU
 CURRENT HARNESS MANIFEST
 {{MANIFEST}}
 
-Harness examples and Prolog snippets are available via `reference("examples")` and `reference("snippets")`; use them when shaping a new skill.
+Harness examples and Prolog snippets are available via `reference("examples")` and `reference("snippets")`; use `reference("patterns")` for the harness patterns by use case (coding, research, SOP, tool collections). Use them when shaping a new skill.

@@ -214,7 +214,10 @@ and `{{AUTHORING}}` (the DML language reference and authoring guide).
 * **`tool`** leaves them out and relies on the `reference(topic)` tool; the prompt
   is much smaller but the agent only sees the docs if it asks for them.
 
-Set it with `--agent-docs embed|tool` or under `repl` in the config.
+Set it with `--agent-docs embed|tool` or under `repl` in the config. The
+`reference(topic)` tool also serves `patterns` (harness patterns by use case —
+coding, research, SOP, tool collections), `examples`, `snippets`, and `tools`
+(the host tool catalog).
 
 To override the prompt itself **without rebuilding the SDK**, create
 `.deepclause/system/AGENT_PROMPT.md` in the workspace; the runtime prefers it
@@ -233,7 +236,8 @@ The authoring agent is restricted to `listing`, `begin_turn`, `end_turn`,
 `read_file`, `write_file`, `list_files`, `delete_file`, `ask_user`, and
 `reference`. The harness's own `tool/2` predicates are hidden from it, and the
 system prompt embeds the bundled `DML_REFERENCE.md`, a curated set of **idiomatic
-harness patterns**, the host tool catalog, and the current harness manifest. The
+harness patterns** (`HARNESS_EXAMPLES.md`, plus `HARNESS_PATTERNS.md` via
+`reference("patterns")`), the host tool catalog, and the current harness manifest. The
 catalog pairing rule is explicit: **only the `exec(...)` names in the catalog
 exist — by default just `bash`** — so the agent never invents
 `calculator`/`fetch_url`/`web_search`/`vm_exec`. The rules that matter most:

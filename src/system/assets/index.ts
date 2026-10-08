@@ -8,6 +8,7 @@ export type WorkspaceDocAssetName =
   | 'dml-reference'
   | 'dml-authoring'
   | 'harness-examples'
+  | 'harness-patterns'
   | 'prolog-snippets';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -40,6 +41,8 @@ function getWorkspaceDocFileName(name: WorkspaceDocAssetName): string {
       return 'DML_AUTHORING.md';
     case 'harness-examples':
       return 'HARNESS_EXAMPLES.md';
+    case 'harness-patterns':
+      return 'HARNESS_PATTERNS.md';
     case 'prolog-snippets':
       return 'PROLOG_SNIPPETS.md';
   }

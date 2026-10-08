@@ -154,6 +154,7 @@ export class DMLSession {
   private dmlReference?: string;
   private dmlAuthoring?: string;
   private harnessExamples?: string;
+  private harnessPatterns?: string;
   private prologSnippets?: string;
   private disposed = false;
   /** History recorder; present only when the caller enables it. */
@@ -661,8 +662,12 @@ export class DMLSession {
   }
 
   /** Load a bundled doc asset once (cached by field). */
-  private async loadDocAsset(name: 'harness-examples' | 'prolog-snippets'): Promise<string> {
-    const cached = name === 'harness-examples' ? this.harnessExamples : this.prologSnippets;
+  private async loadDocAsset(name: 'harness-examples' | 'harness-patterns' | 'prolog-snippets'): Promise<string> {
+    const cached = name === 'harness-examples'
+      ? this.harnessExamples
+      : name === 'harness-patterns'
+        ? this.harnessPatterns
+        : this.prologSnippets;
     if (cached !== undefined) return cached;
     let text = '';
     try {
@@ -671,6 +676,7 @@ export class DMLSession {
       text = '';
     }
     if (name === 'harness-examples') this.harnessExamples = text;
+    else if (name === 'harness-patterns') this.harnessPatterns = text;
     else this.prologSnippets = text;
     return text;
   }
@@ -1179,12 +1185,15 @@ export class DMLSession {
         return this.loadDmlAuthoring();
       case 'examples':
         return this.loadDocAsset('harness-examples');
+      case 'patterns':
+      case 'harness-patterns':
+        return this.loadDocAsset('harness-patterns');
       case 'snippets':
         return this.loadDocAsset('prolog-snippets');
       case 'tools':
         return this.hostToolsCatalog ?? '(no host capability tools registered)';
       default:
-        return `unknown reference topic '${topic}'. Topics: language, authoring, examples, snippets, tools.`;
+        return `unknown reference topic '${topic}'. Topics: language, authoring, examples, patterns, snippets, tools.`;
     }
   }
 
