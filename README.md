@@ -177,6 +177,103 @@ Each harness has its own content and version history under
 content (the agent continues what is there instead of re-creating it), and
 `/rollback` never crosses harnesses.
 
+### Example: build a coding agent
+
+You can ask for a whole **capability**, not just a one-off answer:
+
+```text
+dml> build me a coding agent harness for this repo
+
+  ⚙ listing
+  ✔ listing · 1ms
+  ⚙ begin_turn
+  ✔ begin_turn · 2ms
+  ⚙ define(head=run_shell(Command, Output), clauses=run_shell(Command, Output) :- exec(bash(…), Result), …)
+  ✔ define · 31ms
+  ⚙ define(head=fs_read(Path, Text), clauses=fs_read(Path, Text) :- read_file(Path, Text).)
+  ✔ define · 6ms
+  ⚙ define(head=fs_write(Path, Content), clauses=fs_write(Path, Content) :- write_file(Path, Content).)
+  ✔ define · 5ms
+  ⚙ define(head=fs_grep(Pattern, Path, Matches), clauses=fs_grep(Pattern, Path, Matches) :- …)
+  ✔ define · 7ms
+  ⚙ assert_many(clauses=tool(run_shell(…)) :- run_shell(…). tool(fs_read(…)) :- …. …)
+  ✔ assert_many · 4ms
+  ⚙ define(head=explain(Question, Answer), clauses=explain(Question, Answer) :- system(…), with_tools(…).)
+  ✔ define · 8ms
+  ⚙ define(head=patch(File, Issue, Summary), clauses=patch(File, Issue, Summary) :- system(…), with_tools(…).)
+  ✔ define · 9ms
+  ⚙ execute
+    fs_read("package.json", T), run_shell("npm test", R).
+  ✔ execute · 1.4s
+  ⚙ end_turn(summary=Add coding-agent skills: run_shell/fs_read/fs_write/fs_grep + explain/patch)
+  ✔ end_turn · 12ms — {"committed":true,"changed":["+run_shell/2","+fs_read/2","+fs_write/2","+fs_grep/3","+explain/2","+patch/3"]}
+
+A coding-agent harness is ready: a small shell/file toolset exposed to `task/N`, plus
+`explain/2` and `patch/3` skills that scope those tools per task.
+```
+
+The harness it built (trimmed):
+
+```prolog
+module_doc("Coding agent: read, search, and edit a repository and run its tests.").
+
+run_shell(Command, Output) :-
+    exec(bash(command: Command), Result),
+    ( get_dict(stdout, Result, Out) -> Output = Out ; Output = "" ).
+
+fs_read(Path, Text) :- read_file(Path, Text).
+fs_write(Path, Content) :- write_file(Path, Content).
+
+fs_grep(Pattern, Path, Matches) :-
+    format(atom(Cmd), "grep -rn -- ~w ~w", [Pattern, Path]),
+    exec(bash(command: Cmd), Result),
+    ( get_dict(stdout, Result, Out) -> Matches = Out ; Matches = "" ).
+
+% `tool/2` only exposes the predicates above to the nested agent in task/N.
+tool(run_shell(Command, Output), "Run a shell command; returns stdout.") :- run_shell(Command, Output).
+tool(fs_read(Path, Text), "Read a workspace file.") :- fs_read(Path, Text).
+tool(fs_write(Path, Content), "Write a workspace file.") :- fs_write(Path, Content).
+tool(fs_grep(Pattern, Path, Matches), "Search a path; returns matching lines.") :- fs_grep(Pattern, Path, Matches).
+
+doc(explain/2, "Explain code relevant to a question. explain(+Question, -Answer).").
+explain(Question, Answer) :-
+    system("You are a coding assistant working in a repository. Cite file paths and line numbers."),
+    with_tools([run_shell, fs_read, fs_grep],
+        task("Answer this question about the repository: {Question}", Answer)).
+
+doc(patch/3, "Apply a minimal fix and run the tests. patch(+File, +Issue, -Summary).").
+patch(File, Issue, Summary) :-
+    system("Make the smallest change that fixes the issue. Run the project's tests and report the result."),
+    with_tools([run_shell, fs_read, fs_write, fs_grep],
+        task("Fix this issue in {File}: {Issue}. Then run the tests and report what changed.", Summary)).
+```
+
+Use it:
+
+```text
+dml> /goal explain("where are the CLI entry points?", A).
+A = "…"
+
+dml> /goal patch("src/cli.ts", "the --help flag is missing", S).
+S = "…"
+
+dml> /export coding_agent.dml
+```
+
+```bash
+deepclause repl -l coding_agent.dml                             # harness `coding_agent`
+deepclause run coding_agent.dml --goal 'explain("…", A)'       # one-shot
+```
+
+Notes:
+
+- `tool/2` is only an annotation; the *capabilities* are the predicates above, so
+they are reachable from `execute`/`goal:` **and** from `task/N`.
+- `with_tools/2` scopes which tools a `task/N` turn may call — `explain` cannot
+edit files, `patch` can.
+- Because a `task/N` turn can call these tools (and itself), the module is an
+RLM-style harness, not a fixed script.
+
 ### Sessions
 
 The REPL also records sessions, turns, and harness versions under
