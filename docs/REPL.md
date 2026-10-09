@@ -18,7 +18,7 @@ deepclause repl -g "member(X, [1,2,3])"
 deepclause repl -l harness.dml -f -g "explain_factorial"
 
 # Scripted session over stdin
-printf 'goal: fact(5, F).\nlisting.\nhalt.\n' | deepclause repl -l fact.dml --no-ask
+printf '/goal fact(5, F).\nlisting.\nhalt.\n' | deepclause repl -l fact.dml --no-ask
 
 # Interactive
 deepclause repl
@@ -63,7 +63,7 @@ treated as a prompt.
 
 ### Iterating over solutions
 
-After each solution of a `goal:` the REPL pauses; in the TUI the editor border
+After each solution of a `/goal` the REPL pauses; in the TUI the editor border
 shows `? Enter/; more · a all · . stop`. Press **Enter** (or `;`) for the next
 solution, `a` for all, and `.`/`q` to stop. Lines typed while the goal is still
 running are buffered and used for the next pager prompt instead of being lost.
@@ -160,7 +160,7 @@ ERROR: turn aborted; current harness saved to /tmp/deepclause-repl-<id>-<ts>.dml
 ```
 
 Load that file with `deepclause repl -l <file>` to resume. The same applies to
-`goal:` queries and `-g` runs.
+`/goal` queries and `-g` runs.
 
 ### Saving on exit
 

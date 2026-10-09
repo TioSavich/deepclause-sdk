@@ -576,7 +576,7 @@ harness predicate to the nested agent that runs inside `task/N`. Define the
 predicate normally, then add a `tool/2` clause that delegates to it:
 
 ```prolog
-% 1. The capability: a normal predicate, callable from `execute` and `goal:`.
+% 1. The capability: a normal predicate, callable from `execute` and `/goal`.
 count_words(File, Count) :-
     script_file(count_words, Script),
     format(atom(Cmd), "python3 '~w' '~w'", [Script, File]),
@@ -589,11 +589,11 @@ tool(count_words(File, Count), "Count words in a workspace file.") :-
 ```
 
 A predicate defined *only* inside a `tool/2` clause is invisible to
-`execute`/`goal:` — the loader asserts it as `tool(Head)`, never as `Head`. Split
+`execute` / `/goal` — the loader asserts it as `tool(Head)`, never as `Head`. Split
 the two so one implementation is reachable from both surfaces:
 
 ```prolog
-goal: count_words("report.txt", C).          % authoring agent / goal:
+/goal count_words("report.txt", C).          % authoring agent
 task("Count the words in report.txt.", N).   % nested agent calls the tool
 ```
 
@@ -1307,14 +1307,15 @@ backtracking reuses an answer instead of re-querying the model.
 
 DML skills can also be grown interactively in a persistent **living module**.
 
-- `goal: <dml>.` runs a goal and enumerates its solutions.
+- `/goal <dml>` runs a goal and enumerates its solutions (the legacy dotted
+  `goal: <dml>.` form still works).
 - Plain English builds the module: the **authoring agent** inspects and edits it
   through tools (`listing`, `begin_turn`, `define`/`assert`/`assert_many`,
   `retract`/`delete`, `execute`, `end_turn`/`rollback`). Edits are transactions:
   `begin_turn` is required before any edit, `end_turn` commits a version.
   Nothing is auto-run; the agent uses `execute` to test during a turn.
 - There is **no implicit `agent_main` requirement** in the REPL. Run any
-  predicate with `goal: <name>(…)`. Define `agent_main` in the module when it
+  predicate with `/goal <name>(…)`. Define `agent_main` in the module when it
   should also run with `deepclause run` / `/dc-run`.
 - `freeze.` makes the module read-only; `export <file>.` serializes it.
   `export harness.zip` bundles the module with its linked script files;

@@ -27,12 +27,12 @@ Materialize the program as a workspace file (run a DML goal with
 `make_directory_path("scripts"), write_file("scripts/count_words.py", "…")`),
 link it with `script_file/2`, and define a predicate for it. `tool/2` is only an
 annotation that exposes an existing predicate to `task/N`; keep it a one-line
-delegation so the predicate is also callable from `execute`/`goal:`:
+delegation so the predicate is also callable from `execute` / `/goal`:
 
 ```prolog
 script_file(count_words, ".dc-repl/scripts/count_words.py").
 
-% The capability: callable from `execute`/`goal:` and from `task/N`.
+% The capability: callable from `execute` / `/goal` and from `task/N`.
 count_words(File, Count) :-
     script_file(count_words, Script),
     format(atom(Cmd), "python3 '~w' '~w'", [Script, File]),
@@ -54,7 +54,7 @@ write lands on disk immediately, so `bash` can run the script in the same turn.
 description so the model fills it:
 
 ```prolog
-doc(classify/2, "Route a support message. classify(+Message, -Team). Example: goal: classify(\"I was charged twice\", T).").
+doc(classify/2, "Route a support message. classify(+Message, -Team). Example: /goal classify(\"I was charged twice\", T).").
 
 classify(Message, Team) :-
     task("Route this support message to exactly one of billing, orders, or account. Message: {Message}. Store the choice in Team.", Team).
@@ -98,21 +98,21 @@ parent(alice, carol).
 parent(bob, dave).
 parent(carol, eve).
 
-doc(ancestor/2, "Transitive parent. ancestor(+A, -B) enumerates descendants. Example: goal: ancestor(alice, X).").
+doc(ancestor/2, "Transitive parent. ancestor(+A, -B) enumerates descendants. Example: /goal ancestor(alice, X).").
 
 ancestor(A, B) :- parent(A, B).
 ancestor(A, B) :- parent(A, C), ancestor(C, B).
 ```
 
 ```text
-goal: ancestor(alice, X).
+/goal ancestor(alice, X).
 X = bob ; X = carol ; X = dave ; X = eve
 ```
 
 ## 5. Pure logic + a test predicate
 
 ```prolog
-doc(tally/2, "Count occurrences of each item. tally(+List, -Counts) yields Key-N pairs. Example: goal: tally([a,b,a,c,a], C).").
+doc(tally/2, "Count occurrences of each item. tally(+List, -Counts) yields Key-N pairs. Example: /goal tally([a,b,a,c,a], C).").
 
 tally(List, Counts) :-
     list_to_set(List, Items),
@@ -123,8 +123,8 @@ test_tally :-
     C == [a-3, b-1, c-1].
 ```
 
-`goal: test_tally.` succeeds when the behavior is correct. When a skill changes,
-update or add its test and run it (`execute` during a turn, or `goal:`).
+`/goal test_tally.` succeeds when the behavior is correct. When a skill changes,
+update or add its test and run it (`execute` during a turn, or `/goal`).
 
 ## 6. Semantic judgments (the model decides, Prolog enforces)
 
@@ -144,7 +144,7 @@ urgent(Message) :-
 ```prolog
 :- use_module(library(clpfd)).
 
-doc(solve/3, "X+Y=Total with X<Y over 0..100. solve(+Total, -X, -Y). Example: goal: solve(10, X, Y).").
+doc(solve/3, "X+Y=Total with X<Y over 0..100. solve(+Total, -X, -Y). Example: /goal solve(10, X, Y).").
 
 solve(Total, X, Y) :-
     [X, Y] ins 0..100,
@@ -159,7 +159,7 @@ The `:- use_module(...)` directive must be **top-level** (an inline
 ## 8. Vision: describe a workspace image
 
 ```prolog
-doc(describe_image/2, "Describe an image file. describe_image(+Path, -Text). Example: goal: describe_image(\"photos/fox.png\", T).").
+doc(describe_image/2, "Describe an image file. describe_image(+Path, -Text). Example: /goal describe_image(\"photos/fox.png\", T).").
 
 describe_image(Path, Text) :-
     read_media(Path, Image),         % media(Path, Mime) — no bytes

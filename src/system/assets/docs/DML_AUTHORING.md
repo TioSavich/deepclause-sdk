@@ -7,7 +7,7 @@ harness shapes) and `PROLOG_SNIPPETS.md` (tested building blocks).
 
 A harness is a **living library of reusable DML skills** for the workspace —
 not a single program. A skill is a predicate; name them descriptively and run
-them with `execute` (during a turn) or `goal:`. Skills are built from:
+them with `execute` (during a turn) or `/goal`. Skills are built from:
 
 - **helper predicates** (plain Prolog/CLP),
 - **semantic judgments** (`choose`/`rate`/`verify`/`probability`),
@@ -17,7 +17,7 @@ them with `execute` (during a turn) or `goal:`. Skills are built from:
 
 The module is **data = code**: small/medium structured data belongs in it as
 facts (`country(ch, "Switzerland").`), inspected and queried exactly like
-predicates (`listing`, `goal:`, `execute`). Add data as facts when it is small
+predicates (`listing`, `/goal`, `execute`). Add data as facts when it is small
 enough to reason over; keep large datasets in a file or a linked script rather
 than bloating the module.
 
@@ -33,7 +33,7 @@ requires; never refactor or extend it on your own initiative.
 
 **Generalize, don't specialize.** Prefer a few small, composable primitives over
 a predicate per request, and express one-off requests by composing them (or a
-direct `goal:`) instead of naming a predicate for every phrasing. A hard-coded
+direct `/goal`) instead of naming a predicate for every phrasing. A hard-coded
 "latest image in `~/Downloads`" is wrong; even `find_latest(Dir, Pattern, Path)`
 is fairly narrow — the reusable parts (list a directory, filter, pick a
 best/latest element) are shared by many tasks. Ask whether another caller would
@@ -115,7 +115,7 @@ frontmatter, not like a title:
 ```prolog
 module_doc("Support triage: classify a customer message and route it to the right team. Use when a message needs a team.").
 
-doc(classify/2, "Route a support message to a team. classify(+Message, -Team). Example: goal: classify(\"I was charged twice\", T).").
+doc(classify/2, "Route a support message to a team. classify(+Message, -Team). Example: /goal classify(\"I was charged twice\", T).").
 doc(tally/2, "Count occurrences of each item. tally(+List, -Counts) yields Key-N pairs. Example: tally([a,b,a], C).").
 ```
 
@@ -128,7 +128,7 @@ doc(tally/2, "Count occurrences of each item. tally(+List, -Counts) yields Key-N
   exposes an existing predicate to the nested agent in `task/N`. Define the
   predicate normally and delegate
   (`tool(count_words(File, Count), "…") :- count_words(File, Count).`), so the
-  same predicate is callable from `execute`/`goal:` **and** from `task/N`. Logic
+  same predicate is callable from `execute` / `/goal` **and** from `task/N`. Logic
   placed only inside `tool/2` is unreachable from `execute` (the loader asserts
   `tool(Head)`, never `Head`).
 - `doc(Name/Arity, Text)` — one fact per skill, helper, or tool; terse, with
