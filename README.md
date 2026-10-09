@@ -268,7 +268,7 @@ deepclause run coding_agent.dml --goal 'explain("…", A)'       # one-shot
 Notes:
 
 - `tool/2` is only an annotation; the *capabilities* are the predicates above, so
-they are reachable from `execute`/`goal:` **and** from `task/N`.
+they are reachable from `execute` / `/goal` **and** from `task/N`.
 - `with_tools/2` scopes which tools a `task/N` turn may call — `explain` cannot
 edit files, `patch` can.
 - Because a `task/N` turn can call these tools (and itself), the module is an
@@ -292,7 +292,7 @@ edits. DML makes that literal:
 
 - **The harness is data = code.** Skills are predicates, data is facts
   (`city(ch, "Zürich").`). The model reads it (`listing`), queries it
-  (`goal:`), extends it, and reuses it — no separate plugin format and no
+  (`/goal`), extends it, and reuses it — no separate plugin format and no
   recompile step.
 - **One language for logic and language.** Recursion, backtracking, and CLP
   constraints sit next to LLM calls (`task/N`) and typed semantic judgments
@@ -320,10 +320,12 @@ failure does not lose earlier progress.
 ### Auditability
 
 Every session, turn, event trace, and harness version is written under
-`.deepclause/repl/` and exposed to DML as queryable `harness_*` facts
-(`harness_session/5`, `harness_turn/5`, `harness_change/5`, `harness_changed/4`,
-`harness_head/4`, `harness_trace/3`). `rollback.` restores the previous version,
-step by step, and a harness can query its own past:
+`.deepclause/repl/` — per harness under `harnesses/<name>/` (`harness.dml`,
+`baseline.dml`, `HEAD.json`, `changes.jsonl`, `versions/`) — and exposed to DML
+as queryable `harness_*` facts (`harness_session/5`, `harness_turn/5`,
+`harness_change/5`, `harness_changed/4`, `harness_head/4`, `harness_trace/3`).
+`rollback.` restores the previous version, step by step, and a harness can query
+its own past:
 
 ```prolog
 recent_changes(N, Changes) :-
@@ -509,10 +511,11 @@ const { valid, errors, warnings } = await validateWithProlog(dmlSource);
   "temperatures": { "run": 0.7 },
   "providers": { "openai": { "apiKey": "..." } },
   "agentvm": { "network": false },
-  "shell": { "wrapper": "auto", "strictIsolation": false },
+  "shell": { "wrapper": "auto", "strictIsolation": false, "timeoutMs": 0, "idleTimeoutMs": 180000 },
   "repl": {
     "tui": "auto",
     "harness": "main",
+    "showReasoning": "summary",
     "maxModelCalls": 100,
     "compaction": { "enabled": true, "auto": true },
     "history": { "enabled": true, "dir": ".deepclause/repl", "trace": "summary" }
