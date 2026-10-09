@@ -267,7 +267,7 @@ describe('ReplRenderer', () => {
     try {
       const { lines, renderer } = capture('rich', true, 80);
       renderer.render({ type: 'model_call', modelCallState: 'started', modelId: 'gpt-x', frameKind: 'meta' } as DMLEvent);
-      expect(lines.join('')).toContain('model call (gpt-x)…');
+      expect(lines.join('')).toContain('working…');
       // The frame is rewritten in place (carriage return + clear line).
       vi.advanceTimersByTime(200);
       expect(lines.join('')).toContain('\r\u001b[K');
@@ -275,6 +275,46 @@ describe('ReplRenderer', () => {
       renderer.render({ type: 'model_call', modelCallState: 'completed' } as DMLEvent);
       renderer.dispose();
       expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps a spinner while reasoning is hidden (showReasoning: off)', () => {
+    vi.useFakeTimers();
+    try {
+      const lines: string[] = [];
+      const renderer = new ReplRenderer({
+        mode: 'rich',
+        color: true,
+        reasoning: 'off',
+        sink: (text) => lines.push(text),
+        errorSink: (text) => lines.push(text),
+      });
+      renderer.render({ type: 'model_call', modelCallState: 'started', modelId: 'm' } as DMLEvent);
+      renderer.render({ type: 'reasoning', content: 'hidden chain of thought' } as DMLEvent);
+      renderer.render({ type: 'reasoning', content: 'more hidden' } as DMLEvent);
+      vi.advanceTimersByTime(200);
+      const out = lines.join('');
+      expect(out).toContain('thinking…');
+      expect(out).toContain('\r\u001b[K');
+      expect(out).not.toContain('hidden chain of thought');
+
+      renderer.dispose();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('shows reasoning text and creates no spinner when reasoning is visible', () => {
+    vi.useFakeTimers();
+    try {
+      const { lines, renderer } = capture('rich', true, 100);
+      renderer.render({ type: 'reasoning', content: 'visible thinking' } as DMLEvent);
+      expect(vi.getTimerCount()).toBe(0);
+      expect(lines.join('')).toContain('visible thinking');
+      renderer.dispose();
     } finally {
       vi.useRealTimers();
     }

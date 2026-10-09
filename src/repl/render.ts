@@ -394,8 +394,8 @@ export class ReplRenderer {
       return;
     }
 
-    this.stopSpinner();
     if (event.type !== 'stream' && event.type !== 'reasoning') {
+      this.stopSpinner();
       this.flushStream();
     }
     this.beginBlock(this.blockKeyFor(event));
@@ -431,11 +431,21 @@ export class ReplRenderer {
         this.renderModelCall(event, prefix);
         break;
       case 'stream':
+        // Visible model text supersedes the working indicator.
+        this.stopSpinner();
         this.writeStream(event, event.content ?? '', 'text');
         break;
       case 'reasoning':
         if (event.content) {
-          this.writeReasoning(event, event.content);
+          if (this.writeReasoning(event, event.content)) {
+            this.stopSpinner();
+          } else {
+            // Reasoning is hidden (`off`) or truncated (`summary`): commit any
+            // visible reasoning, then keep a spinner so the user still sees the
+            // model working.
+            this.flushStream();
+            this.ensureThinkingSpinner(prefix);
+          }
         }
         break;
       case 'log':
@@ -568,7 +578,7 @@ export class ReplRenderer {
   /** Show/hide the live model-call indicator. */
   private renderModelCall(event: DMLEvent, prefix: string): void {
     if (event.modelCallState === 'started') {
-      this.startSpinner(prefix, event.modelId ? `model call (${event.modelId})…` : 'model call…');
+      this.startSpinner(prefix, 'working…');
       return;
     }
     this.stopSpinner();
@@ -649,9 +659,15 @@ export class ReplRenderer {
    * Stream reasoning according to `showReasoning`: `off` hides it, `summary`
    * shows a bounded preview, `full` shows everything (all dimmed).
    */
-  private writeReasoning(event: DMLEvent, chunk: string): void {
+  /**
+   * Stream reasoning according to `showReasoning`: `off` hides it, `summary`
+   * shows a bounded preview, `full` shows everything (all dimmed). Returns
+   * whether anything was made visible (so the caller can keep a spinner when it
+   * is hidden).
+   */
+  private writeReasoning(event: DMLEvent, chunk: string): boolean {
     if (this.reasoningMode === 'off') {
-      return;
+      return false;
     }
     const region = `${event.frameKind ?? 'plain'}@${event.depth ?? 0}`;
     if (region !== this.reasoningRegion) {
@@ -662,7 +678,7 @@ export class ReplRenderer {
     const limit = this.reasoningMode === 'summary' ? REASONING_SUMMARY_CHARS : Infinity;
     if (this.reasoningChars >= limit) {
       this.announceReasoningTruncated(event);
-      return;
+      return false;
     }
     const remaining = limit - this.reasoningChars;
     const text = chunk.length > remaining ? chunk.slice(0, remaining) : chunk;
@@ -671,6 +687,15 @@ export class ReplRenderer {
     if (this.reasoningChars >= limit) {
       this.announceReasoningTruncated(event);
     }
+    return text.length > 0;
+  }
+
+  /** Keep a `thinking…` spinner running (restart once if the label differs). */
+  private ensureThinkingSpinner(prefix: string): void {
+    if (this.spinnerTimer && this.spinnerLabel === 'thinking…') {
+      return;
+    }
+    this.startSpinner(prefix, 'thinking…');
   }
 
   private announceReasoningTruncated(event: DMLEvent): void {
