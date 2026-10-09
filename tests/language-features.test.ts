@@ -1542,6 +1542,48 @@ describe('File I/O Operations', () => {
 
       expect(events.find(e => e.type === 'answer')?.content).toBe('ok');
     });
+
+    it('should resolve clpfd predicates inside meta-calls (call_with_inference_limit)', async () => {
+      const code = `
+        :- use_module(library(clpfd)).
+
+        agent_main :-
+            X in 1..3,
+            call_with_inference_limit(label([X]), 10000, R),
+            (   R == true
+            ->  answer(X)
+            ;   answer(R)
+            ).
+      `;
+
+      const events: any[] = [];
+      for await (const event of sdk.runDML(code, { workspacePath: testWorkspace })) {
+        events.push(event);
+      }
+
+      expect(events.some(e => e.type === 'error')).toBe(false);
+      expect(events.find(e => e.type === 'answer')?.content).toBe('1');
+    });
+
+    it('should bound an unbounded clpfd enumeration with call_with_inference_limit', async () => {
+      const code = `
+        :- use_module(library(clpfd)).
+
+        agent_main :-
+            length(Xs, 12),
+            Xs ins 1..9,
+            call_with_inference_limit(findall(Xs, label(Xs), _), 5000, R),
+            answer(R).
+      `;
+
+      const events: any[] = [];
+      for await (const event of sdk.runDML(code, { workspacePath: testWorkspace, gasLimit: 400000 })) {
+        events.push(event);
+      }
+
+      expect(events.some(e => e.type === 'error')).toBe(false);
+      expect(events.find(e => e.type === 'answer')?.content).toBe('inference_limit_exceeded');
+    });
   });
 
   describe('Writing Files', () => {

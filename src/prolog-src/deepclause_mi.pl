@@ -705,14 +705,26 @@ workspace_module_reference(Module) :-
 process_use_module_directive(Module, SessionId) :-
     (   workspace_module_reference(Module)
     ->  process_directive(consult(Module), SessionId)
-    ;   SessionId:use_module(Module)
+    ;   SessionId:use_module(Module),
+        import_library_into_mi(Module)
     ).
 
 process_use_module_directive(Module, Exports, SessionId) :-
     (   workspace_module_reference(Module)
     ->  process_directive(consult(Module), SessionId)
-    ;   SessionId:use_module(Module, Exports)
+    ;   SessionId:use_module(Module, Exports),
+        import_library_into_mi(Module)
     ).
+
+%% System libraries are also imported into the meta-interpreter module itself,
+%% so meta-calls (`call_with_inference_limit/3`, `once/1`, `catch/3`, ...) can
+%% resolve them. Without this, `call_with_inference_limit(label(Xs), ...)` fails
+%% with `existence_error(deepclause_mi:label/1)` because clpfd was imported only
+%% into the session module.
+import_library_into_mi(library(Name)) :-
+    !,
+    catch(deepclause_mi:use_module(library(Name)), _, true).
+import_library_into_mi(_).
 
 %% process_directive(+Directive, +SessionId)
 process_directive(param(Key, Desc), SessionId) :-

@@ -1017,8 +1017,24 @@ bounded_findall(Goal, Xs) :-
 
 `Result` is `inference_limit_exceeded` when the limit is hit (otherwise the
 normal call result). Use it for `findall/3`, `aggregate_all/3`, and CLP
-`label/1` over a large or under-specified domain. For shell commands, pass
-`exec(bash(command: Cmd, timeoutMs: N), R)` instead.
+`label/1` over a large or under-specified domain:
+
+```prolog
+sudoku_solve(Puzzle, Solution) :-
+    ...
+    call_with_inference_limit(label(Solution), 500000, Result),
+    (   Result == inference_limit_exceeded
+    ->  throw(error(inference_limit_exceeded, context(sudoku_solve/2, label)))
+    ;   true
+    ).
+```
+
+System libraries imported with `:- use_module(library(...)).` (e.g. `clpfd`) are
+also visible inside meta-calls, so `label/1`, `all_distinct/1`, and `ins/2` work
+unqualified through the wrapper. If a library predicate is somehow not found
+inside a wrapper (`existence_error`), qualify it: `clpfd:label(Xs)`.
+
+For shell commands, pass `exec(bash(command: Cmd, timeoutMs: N), R)` instead.
 
 ### Assert/Retract (within session)
 ```prolog
