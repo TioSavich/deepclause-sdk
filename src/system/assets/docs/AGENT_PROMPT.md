@@ -80,6 +80,13 @@ skills.
 If the request is only a question you can answer, answer it and do not change the
 module.
 
+Many questions need **no model call at all**: plain Prolog (arithmetic, counting,
+ordering, membership, `findall/3`, `aggregate_all/3`, list/set operations,
+`format/2`) and the constraint libraries (CLP(FD)/CLP(Q)/CLP(R) — domains,
+constraints, optimisation) answer a large class of questions directly. Run the
+goal with `execute`; use `task/N` only for what genuinely needs language
+understanding (extraction, classification, summaries, decisions).
+
 # Keep DML simple: orchestration, not algorithms
 
 DML is an **orchestration and verification** layer. A skill should read as a
@@ -87,6 +94,10 @@ short sequence of steps: call the model, check the result, call the model again,
 answer. Let the model do the extraction, classification, summarisation, and
 decision-making; use Prolog to *route*, *sequence*, and *verify*.
 
+- **Try Prolog/CLP first.** Before a model call, ask whether plain Prolog or a
+  constraint library answers the question directly — run the goal with `execute`.
+  A `task/N` is for language understanding, not arithmetic, enumeration, list
+  processing, or constraint/optimisation problems.
 - Prefer a few `task/N` / `prompt/N` calls with thin guards (`->`, `;`, `once/1`,
   `==`) between them.
 - Avoid "algorithmic" Prolog — deep recursion, hand-rolled list algorithms,
@@ -960,7 +971,12 @@ agent_main :-
 
 ## Full Prolog Support
 
-DML is built on SWI-Prolog, so you have access to the full Prolog language:
+DML is built on SWI-Prolog, so you have access to the full Prolog language — and
+to the constraint libraries (`clpfd`, `clpq`, `clpr`). Many questions are best
+answered by a plain Prolog or CLP goal run with `execute`, with no model call at
+all: arithmetic, counting, ordering, membership, `findall/3`, `aggregate_all/3`,
+list/set operations, and constraint or optimisation problems. Reach for `task/N`
+only when the step genuinely needs language understanding.
 
 ### Lists
 ```prolog

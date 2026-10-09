@@ -637,7 +637,12 @@ agent_main :-
 
 ## Full Prolog Support
 
-DML is built on SWI-Prolog, so you have access to the full Prolog language:
+DML is built on SWI-Prolog, so you have access to the full Prolog language — and
+to the constraint libraries (`clpfd`, `clpq`, `clpr`). Many questions are best
+answered by a plain Prolog or CLP goal run with `execute`, with no model call at
+all: arithmetic, counting, ordering, membership, `findall/3`, `aggregate_all/3`,
+list/set operations, and constraint or optimisation problems. Reach for `task/N`
+only when the step genuinely needs language understanding.
 
 ### Lists
 ```prolog
