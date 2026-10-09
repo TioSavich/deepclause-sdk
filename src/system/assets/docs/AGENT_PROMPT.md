@@ -102,6 +102,12 @@ decision-making; use Prolog to *route*, *sequence*, and *verify*.
   e.g. `call_with_inference_limit(findall(X, gen(X), Xs), 1000000, R)` or a
   `label/1` over a large domain. `Result` is `inference_limit_exceeded` when the
   limit is hit. The session `gas` budget does not stop a single builtin either.
+- **LP / integer optimisation.** Continuous LP: `clpr` (reals) or `clpq`
+  (rationals) — `{Constraints}, maximize(Obj)` — but `maximize/1` binds only at a
+  *unique* optimum, so read the value with `sup/2`/`inf/2`. An integer optimum:
+  `bb_inf/5` (negate the objective to maximise). A genuinely integer problem:
+  CLP(FD) `labeling([max(Expr), down], Vars)`. `library(simplex)` loads but is
+  unreliable here — avoid it. There is no `clpfq`.
 
 # Host access outside the REPL
 
@@ -1084,6 +1090,58 @@ solve_sum_product(Total, X, Y) :-
 % A search bounded by inference count instead of by the domain.
 bounded_label(Xs, Result) :-
     call_with_inference_limit(label(Xs), 500000, Result).
+```
+
+#### Optimisation (LP / MIP)
+
+The CLP family here is **CLP(FD)** (integers), **CLP(Q)** (exact rationals) and
+**CLP(R)** (reals) — there is no `clpfq`. `library(simplex)` loads but returns
+unreliable answers in this runtime (its minimum/maximum come back wrong); do not
+build on it.
+
+**Continuous LP** — `clpr` (reals) / `clpq` (rationals), same interface. `{...}`
+posts the constraints; `maximize/1` / `minimize/1` find the optimum:
+
+```prolog
+:- use_module(library(clpr)).
+
+lp(X, Y) :-
+    {X >= 0, Y >= 0, X =< 10, Y =< 10, X + 2*Y =< 14},
+    maximize(X + Y).               % X = 10.0, Y = 2.0
+```
+
+> **Caveat:** `maximize/1` / `minimize/1` bind the variables only when the optimum
+> is a *unique vertex*. If the optimum is a face (a family of optima), they succeed
+> and bind nothing. Use `sup/2` / `inf/2` to get the optimum **value** reliably —
+> `{X >= 0, Y >= 0, X + Y =< 10, 2*X + Y =< 15}, sup(X + Y, S)` → `S = 10.0`.
+> (`inf/3` / `sup/3` do not exist in this build.)
+
+**Integer optimum** — negate the objective and use `bb_inf/5`; the 4th argument
+comes back as the integer vertex:
+
+```prolog
+:- use_module(library(clpr)).
+
+mip(Inf, Vertex) :-
+    {X >= 0, Y >= 0, X + Y =< 4, X + 3*Y =< 6},
+    bb_inf([X, Y], -(3*X + 2*Y), Inf, Vertex, 0.001).
+    % Inf = -12.0, Vertex = [4,0]     (negate the objective to maximise)
+```
+
+**Exact integer optimum** — CLP(FD) with a `max(Expr)` label option. Prefer this
+when the problem is genuinely integer: it is exact, bounded, and well-tested.
+Bound every domain first and keep `label`/`labeling` inside
+`call_with_inference_limit/3`:
+
+```prolog
+:- use_module(library(clpfd)).
+
+exact_max(X, Y) :-
+    [X, Y] ins 0..10,
+    X + Y #=< 4,
+    X + 3*Y #=< 6,
+    call_with_inference_limit(labeling([max(3*X + 2*Y), down], [X, Y]), 500000, _).
+    % X = 4, Y = 0
 ```
 
 ### Dictionaries (SWI-Prolog)

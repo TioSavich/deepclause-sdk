@@ -1625,6 +1625,65 @@ describe('File I/O Operations', () => {
       expect(events.some(e => e.type === 'error')).toBe(false);
       expect(events.find(e => e.type === 'answer')?.content).toBe('2');
     });
+
+    it('solves a continuous LP with clpr and reads the optimum via sup/2', async () => {
+      const code = `
+        :- use_module(library(clpr)).
+
+        agent_main :-
+            {X >= 0, Y >= 0, X + Y =< 10, 2*X + Y =< 15},
+            sup(X + Y, S),
+            answer(S).
+      `;
+
+      const events: any[] = [];
+      for await (const event of sdk.runDML(code, { workspacePath: testWorkspace })) {
+        events.push(event);
+      }
+
+      expect(events.some(e => e.type === 'error')).toBe(false);
+      expect(events.find(e => e.type === 'answer')?.content).toBe('10.0');
+    });
+
+    it('finds an integer optimum with bb_inf/5', async () => {
+      const code = `
+        :- use_module(library(clpr)).
+
+        agent_main :-
+            {X >= 0, Y >= 0, X + Y =< 4, X + 3*Y =< 6},
+            bb_inf([X, Y], -(3*X + 2*Y), Inf, Vertex, 0.001),
+            answer(Inf-Vertex).
+      `;
+
+      const events: any[] = [];
+      for await (const event of sdk.runDML(code, { workspacePath: testWorkspace })) {
+        events.push(event);
+      }
+
+      expect(events.some(e => e.type === 'error')).toBe(false);
+      expect(events.find(e => e.type === 'answer')?.content).toBe('-12.0-[4,0]');
+    });
+
+    it('finds an exact integer optimum with clpfd labeling([max(...)])', async () => {
+      const code = `
+        :- use_module(library(clpfd)).
+
+        agent_main :-
+            [X, Y] ins 0..10,
+            X + Y #=< 4,
+            X + 3*Y #=< 6,
+            call_with_inference_limit(labeling([max(3*X + 2*Y), down], [X, Y]), 500000, _),
+            answer(X-Y).
+      `;
+
+      const events: any[] = [];
+      for await (const event of sdk.runDML(code, { workspacePath: testWorkspace, gasLimit: 400000 })) {
+        events.push(event);
+      }
+
+      expect(events.some(e => e.type === 'error')).toBe(false);
+      expect(events.find(e => e.type === 'answer')?.content).toBe('4-0');
+    });
   });
 
   describe('Writing Files', () => {
