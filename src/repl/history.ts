@@ -215,6 +215,11 @@ export class HistoryStore {
     return this.headVersion > 0;
   }
 
+  /** Facts for this harness only (`harness_change`/`changed`/`head`/`rollback`). */
+  private get harnessFactsFile(): string {
+    return path.join(this.harnessDir, 'history.dml');
+  }
+
   /** Create directories, read the current version, and prune old entries. */
   async init(): Promise<void> {
     await fs.mkdir(this.sessionDirAbs, { recursive: true });
@@ -313,11 +318,18 @@ export class HistoryStore {
 
   /** The persisted facts, to be loaded into the module at session start. */
   async readFacts(): Promise<string> {
-    try {
-      return await fs.readFile(this.historyFile, 'utf8');
-    } catch {
-      return '';
-    }
+    const read = async (file: string): Promise<string> => {
+      try {
+        return await fs.readFile(file, 'utf8');
+      } catch {
+        return '';
+      }
+    };
+    const [workspace, harness] = await Promise.all([
+      read(this.historyFile),
+      read(this.harnessFactsFile),
+    ]);
+    return `${workspace}${harness}`;
   }
 
   /** The turns recorded for a session, oldest first (used for input history). */
@@ -440,7 +452,7 @@ export class HistoryStore {
       }),
       `harness_head(${version}, ${prologAtom(ts)}, ${prologAtom(record.sessionId)}, ${record.turn}).`,
     ];
-    await this.appendFacts(facts);
+    await this.appendHarnessFacts(facts);
     await this.appendJsonl(this.changesFile, {
       version,
       ts,
@@ -507,7 +519,7 @@ export class HistoryStore {
       `harness_rollback(${from}, ${to}, ${prologAtom(ts)}, ${prologAtom(sessionId)}, ${turn}).`,
       `harness_head(${to}, ${prologAtom(ts)}, ${prologAtom(sessionId)}, ${turn}).`,
     ];
-    await this.appendFacts(facts);
+    await this.appendHarnessFacts(facts);
     await this.appendJsonl(this.changesFile, { ts, sessionId, turn, kind: 'rollback', from, to });
     await this.writeJson(this.headFile, {
       version: to,
@@ -730,6 +742,11 @@ export class HistoryStore {
   private async appendFacts(facts: string[]): Promise<void> {
     if (facts.length === 0) return;
     await this.appendRaw(this.historyFile, `${facts.join('\n')}\n`);
+  }
+
+  private async appendHarnessFacts(facts: string[]): Promise<void> {
+    if (facts.length === 0) return;
+    await this.appendRaw(this.harnessFactsFile, `${facts.join('\n')}\n`);
   }
 
   private async appendJsonl(file: string, record: Record<string, unknown>): Promise<void> {

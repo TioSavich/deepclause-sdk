@@ -28,12 +28,16 @@ overrides it to `.pi/deepclause/repl/` to honor "never create `.deepclause/`".
 
 ```text
 .deepclause/repl/
-├── history.dml                           # append-only harness_* facts
-├── harness/
-│   ├── HEAD.json                         # current version pointer
-│   ├── changes.jsonl                     # one line per harness change
-│   └── versions/
-│       └── 0001_2026-01-15T10-35-12-900Z.json   # full snapshot per version
+├── history.dml                           # workspace facts (harness_session/turn)
+├── harnesses/
+│   └── main/                             # one dir per harness (--harness)
+│       ├── harness.dml                   # current content (source of truth)
+│       ├── baseline.dml                  # version 0 / rollback floor
+│       ├── history.dml                   # harness_change/changed/head/rollback
+│       ├── HEAD.json                     # current version pointer
+│       ├── changes.jsonl                 # one line per harness change
+│       └── versions/
+│           └── 0001_2026-01-15T10-35-12-900Z.json   # full snapshot per version
 └── sessions/
     └── repl_m9x1_1/
         ├── session.json                  # metadata, start/end, exit, resumes
@@ -42,8 +46,10 @@ overrides it to `.pi/deepclause/repl/` to honor "never create `.deepclause/`".
         └── events.jsonl                  # the runtime event trace
 ```
 
-`history.dml` is consulted into the module at session start, so every session
-begins with the full queryable history. Everything else is detail.
+Both `history.dml` files are consulted into the module at session start, so every
+session begins with the full queryable history. A project can hold several
+harnesses; each has its own content, baseline, and versions (`--harness`,
+`repl.harness`, default `main`).
 
 ## 3. The facts
 
@@ -59,8 +65,8 @@ harness_turn(SessionId, Turn, Timestamp, Mode, Outcome).
 %   Outcome = committed | answered | failed | aborted | query
 
 % One per harness change (a commit, a load, or a reset).
-harness_change(Version, Timestamp, Kind, SessionId, Turn, Entry).
-%   Kind = commit | load | reset ; Entry = atom or none
+harness_change(Version, Timestamp, Kind, SessionId, Turn).
+%   Kind = commit | load | reset
 
 % The predicates a version touched.
 harness_changed(Version, Name, Arity, Action).
@@ -82,7 +88,7 @@ Query examples:
 
 ```prolog
 recent_changes(N, Cs) :-
-    findall(V-Ts-E, harness_change(V, Ts, commit, _, _, E), All),
+    findall(V-Ts, harness_change(V, Ts, commit, _, _), All),
     last_n(All, N, Cs).
 
 tried_before(Name/Arity) :-
@@ -117,7 +123,7 @@ materializes facts via `repl_history_load/2` / `repl_history_record/2`.
 | session open | `harness_session/5` (and load prior `history.dml`) | `session.json` |
 | each event | — | `events.jsonl` (buffered, flushed at turn end) |
 | turn end | `harness_turn/5`, `harness_trace/3` | `turns.jsonl` |
-| commit / load / reset | `harness_change/6`, `harness_changed/4`, `harness_head/4` | `changes.jsonl`, `versions/`, `HEAD.json` |
+| commit / load / reset | `harness_change/5`, `harness_changed/4`, `harness_head/4` | `harnesses/<name>/changes.jsonl`, `versions/`, `HEAD.json` |
 | session end | `harness_session_end/2` | `session.json` update |
 
 Timing matters: facts are written **after** the turn resolves (post-commit,
@@ -166,7 +172,7 @@ diffable.
 * a prompt turn writes `harness_session/turn/change/changed/head` to
   `history.dml`, `turns.jsonl`/`events.jsonl`, and `HEAD.json`;
 * a second session loads the prior facts and can query
-  `harness_change/6` and `harness_session/5` from a `goal:`;
+  `harness_change/5` and `harness_session/5` from a `goal:`;
 * history facts are not listed as harness predicates.
 
 ## 9. Rollback

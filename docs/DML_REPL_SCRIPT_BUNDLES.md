@@ -76,7 +76,7 @@ call `make_directory_path/1` first. (The earlier in-memory staging overlay made
 problem.)
 
 The prompt turn is still a transaction for the **module**: the living module is
-snapshotted before the meta task and restored on failure/abort, and the commit
+snapshotted before the authoring turn and restored on failure/abort, and the commit
 is replace-by-predicate. On commit, harness script files no longer referenced by
 a `script_file/2` fact are garbage-collected. The abort safety net writes a
 **bundle zip** (module + scripts) to a temp file, so a long debugging turn is

@@ -4,6 +4,9 @@
 
 ### Fixed
 
+- **Harness-scoped history facts.** `harness_change`/`harness_changed`/
+  `harness_head`/`harness_rollback` now live in `harnesses/<name>/history.dml`
+  (one per harness); session/turn facts stay in the workspace `history.dml`.
 - **Reasoning now actually streams.** The pi adapter passed the thinking level
   as `options.thinkingLevel`, but pi's `SimpleStreamOptions` enables thinking
   with `options.reasoning` (`ThinkingLevel`). The key was ignored, so providers
@@ -11,6 +14,9 @@
 
 ### Changed
 
+- **Docs + README refreshed.** Added a worked example session (create a skill
+  transaction → inspect/rollback → export → load as a new harness → multiple
+  harnesses per project), and updated the history layout/arity references.
 - **Authoring agent tool set trimmed.** `ask_user` and the loop-level `finish`
   are no longer offered to the authoring model. Clarifying questions go in the
   final message, and a turn ends when the model replies without a tool call.

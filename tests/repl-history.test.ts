@@ -111,9 +111,13 @@ describe('harness history', () => {
     expect(history).toContain('harness_session(');
     expect(history).toContain('harness_session_end(');
     expect(history).toContain('harness_turn(');
-    expect(history).toContain('harness_change(1,');
-    expect(history).toContain('harness_changed(1,');
-    expect(history).toContain('harness_head(1,');
+    const harnessHistory = await fs.readFile(
+      path.join(workspace, '.deepclause/repl/harnesses/main/history.dml'),
+      'utf8',
+    );
+    expect(harnessHistory).toContain('harness_change(1,');
+    expect(harnessHistory).toContain('harness_changed(1,');
+    expect(harnessHistory).toContain('harness_head(1,');
 
     const sessionDir = path.join(workspace, '.deepclause/repl/sessions', sessionId);
     expect(await fs.readFile(path.join(sessionDir, 'turns.jsonl'), 'utf8')).toContain('"outcome":"committed"');
@@ -369,7 +373,10 @@ describe('harness history', () => {
     expect(nothing.ok).toBe(false);
     expect(nothing.error).toMatch(/no harness changes/);
 
-    const history = await fs.readFile(path.join(workspace, '.deepclause/repl/history.dml'), 'utf8');
+    const history = await fs.readFile(
+      path.join(workspace, '.deepclause/repl/harnesses/main/history.dml'),
+      'utf8',
+    );
     expect(history).toContain('harness_rollback(');
     const head = JSON.parse(
       await fs.readFile(path.join(workspace, '.deepclause/repl/harnesses/main/HEAD.json'), 'utf8'),

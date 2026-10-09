@@ -4,6 +4,9 @@ Status: **implemented (P1)** · Scope: `deepclause-sdk` REPL
 
 > P1 is implemented and P2 is complete: the TypeScript agent is the only
 > authoring path and the DML meta-frame implementation has been removed.
+> The authoring agent's tools are `listing`, `begin_turn`, `end_turn`,
+> `rollback`, `define`, `assert`, `assert_many`, `retract`, `delete`,
+> `execute`, and `reference`.
 > New files: `src/repl/agent.ts`, `src/repl/harness-tools.ts`,
 > `src/system/assets/docs/AGENT_PROMPT.md`.
 > Tests: `tests/repl-agent.test.ts`, `tests/repl-agent-session.test.ts`.
@@ -42,7 +45,7 @@ abilities", "no Markdown→DML compiler").
 ## Architecture
 
 ```
-CLI / config (repl.authoring)                    src/cli/repl.ts, src/cli/config.ts
+CLI / config                                      src/cli/repl.ts, src/cli/config.ts
         │
         ▼
 HarnessRepl.prompt  ──►  DMLSession.prompt        src/repl/index.ts, session.ts

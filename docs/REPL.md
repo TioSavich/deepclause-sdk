@@ -401,12 +401,12 @@ before:
 
 ```prolog
 recent(N, Cs) :-
-    findall(V-Ts-E, harness_change(V, Ts, commit, _, _, E), All),
+    findall(V-Ts, harness_change(V, Ts, commit, _, _), All),
     last_n(All, N, Cs).
 ```
 
 `harness_session/5`, `harness_session_end/2`, `harness_turn/5`,
-`harness_change/6`, `harness_changed/4`, `harness_head/4`,
+`harness_change/5`, `harness_changed/4`, `harness_head/4`,
 `harness_rollback/5`, and `harness_trace/3` are system-owned: queryable from
 DML, but never committed, exported, or listed as harness predicates
 (`listing(history)` shows a tail). A new session loads the persisted

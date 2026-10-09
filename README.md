@@ -84,34 +84,103 @@ authoring agent edits the module for you through tools, testing as it goes. Ask
 for anything — add a skill, add a tool, change existing logic, run or test code
 in the living module, or just ask a question about the harness.
 
-### Saving and re-loading a harness
+### A worked session
 
-Once you are happy with what your harness can do, you can save it for later re-use. A harness is a normal `.dml` file you can check in, diff, and re-open.
+A full pass: create a skill, watch the transaction, run it, export it, and load
+it again as a new harness.
+
+**1. Create (one transaction)**
 
 ```text
-dml> add a tally(List, Counts) skill and a demo
-dml> /goal tally([a,b,a,c,a], C).
-C = [a-3, b-1, c-1]
+dml> add a research(Question, Answer) skill that answers with task/2
 
-dml> /export tally.dml
-exported 3 clauses, 0 tools, 0 scripts → tally.dml
+  ⚙ begin_turn
+  ✔ begin_turn · 2ms
+  ⚙ assert_many(clauses=module_doc("…"), research(Question, Answer) :- task(…), doc(research/2, …))
+  ✔ assert_many · 11ms
+  ⚙ execute
+    research("Why is the sky blue?", A).
+      ▸ Task  Answer this research question: Why is the sky blue?
+      ✔ Task  done
+      A = "Rayleigh scattering…"
+  ✔ execute · 3.7s
+  ⚙ end_turn(summary=Add research/2)
+  ✔ end_turn · 4ms — {"committed":true,"changed":["+research/2","+module_doc/1","+doc/2"]}
 
-dml> /halt
+Added research/2 — a one-call task/2 research skill.
 ```
+
+The agent opened a transaction (`begin_turn`), wrote the predicates
+(`assert_many`), tested them with `execute`, and committed with `end_turn` — which
+printed the predicates it changed and recorded a version. Had the turn failed,
+the host would have rolled the module back to exactly its prior state.
+
+**2. Inspect, run, undo**
+
+```text
+dml> /listing
+skill: Research a question and return a written answer.
+
+doc/2
+doc(research/2,"Answer a question in one model call. research(+Question, -Answer). …").
+
+module_doc/1
+module_doc("Research a question and return a written answer. …").
+
+research/2
+research(A,B) :-
+    task("Answer this question: {A}",B).
+
+dml> /goal research("Why is the sky blue?", A).
+A = "Rayleigh scattering…"
+
+dml> /rollback
+rolled back harness: version 1 → 0
+
+dml> /goal research("Why is the sky blue?", A).
+false.                       % the skill is gone
+```
+
+`end_turn` is the only commit point, and `/rollback` moves the harness back one
+committed version (here, to the baseline) — so nothing is committed silently.
+
+**3. Export**
+
+```text
+dml> /export research.dml
+exported 3 clauses, 0 tools, 0 scripts → research.dml
+```
+
+`research.dml` is a plain DML file: commit it, diff it, mail it. Use a `.zip`
+target to bundle linked `script_file/2` scripts.
+
+**4. Load it elsewhere (a harness from somewhere else)**
 
 ```bash
-deepclause run tally.dml --goal 'tally([a,b,a], C)'   # run a goal from the file
-deepclause repl -l tally.dml                          # or re-open it and keep building
-dml> /goal tally([x,y,x], C).
-C = [x-2, y-1]
+deepclause repl -l research.dml
 ```
 
-`/export <file>` writes a portable `.dml`; use a `.zip` target to bundle linked
-`script_file/2` scripts. `--export <file>` exports on exit, and exiting without
-an export auto-saves the harness to a temp `.zip` bundle.
+Loading a file targets the harness named after it (`research`), creating it if
+needed. The file becomes that harness's **baseline**, so it works with no prior
+history: `/rollback` floors at the loaded file, never at empty.
+
+**5. Several harnesses in one project**
+
+```bash
+deepclause repl                    # harness `main`
+deepclause repl --harness support  # harness `support`
+deepclause repl -l research.dml    # harness `research`
+```
+
+Each harness has its own content and version history under
+`.deepclause/repl/harnesses/<name>/`. A fresh session loads its harness's current
+content (the agent continues what is there instead of re-creating it), and
+`/rollback` never crosses harnesses.
+
+### Sessions
 
 The REPL also records sessions, turns, and harness versions under
-`.deepclause/repl/`, so you can pick a session back up later. Its harness,
+`.deepclause/repl/`, so you can pick a conversation back up later. Its harness,
 conversation memory, and turn count are restored:
 
 ```bash
@@ -376,8 +445,8 @@ vendor/
 
 Bundled prompt assets: `AGENT_PROMPT.md` (the authoring agent's contract),
 `DML_REFERENCE.md` (language), `DML_AUTHORING.md` (guide),
-`HARNESS_EXAMPLES.md` (idiomatic shapes), `PROLOG_SNIPPETS.md` (tested building
-blocks).
+`HARNESS_EXAMPLES.md` (idiomatic shapes), `HARNESS_PATTERNS.md` (harness shapes
+by use case), `PROLOG_SNIPPETS.md` (tested building blocks).
 
 ## Development
 
