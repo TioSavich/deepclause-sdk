@@ -1584,6 +1584,47 @@ describe('File I/O Operations', () => {
       expect(events.some(e => e.type === 'error')).toBe(false);
       expect(events.find(e => e.type === 'answer')?.content).toBe('inference_limit_exceeded');
     });
+
+    it('runs a realistic CLP(FD) search (all_distinct + labeling)', async () => {
+      const code = `
+        :- use_module(library(clpfd)).
+
+        agent_main :-
+            length(Xs, 9),
+            Xs ins 1..9,
+            all_distinct(Xs),
+            labeling([ff], Xs),
+            answer(Xs).
+      `;
+
+      const events: any[] = [];
+      for await (const event of sdk.runDML(code, { workspacePath: testWorkspace, gasLimit: 400000 })) {
+        events.push(event);
+      }
+
+      expect(events.some(e => e.type === 'error')).toBe(false);
+      expect(events.find(e => e.type === 'answer')?.content).toBe('[1,2,3,4,5,6,7,8,9]');
+    });
+
+    it('constrains a single variable with `in`', async () => {
+      const code = `
+        :- use_module(library(clpfd)).
+
+        agent_main :-
+            X in 1..3,
+            X #> 1,
+            once(label([X])),
+            answer(X).
+      `;
+
+      const events: any[] = [];
+      for await (const event of sdk.runDML(code, { workspacePath: testWorkspace })) {
+        events.push(event);
+      }
+
+      expect(events.some(e => e.type === 'error')).toBe(false);
+      expect(events.find(e => e.type === 'answer')?.content).toBe('2');
+    });
   });
 
   describe('Writing Files', () => {

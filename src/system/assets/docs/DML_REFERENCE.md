@@ -738,12 +738,16 @@ under-specified model, or one that is simply **unsatisfiable**, can search
 essentially forever, so a buggy skill hangs the turn instead of failing fast.
 If you use it:
 
-- **Bound every domain first** (`X ins 0..100`). Unbounded or huge domains are
-  the usual cause of runaway search.
-- Call `label/1` only when you need concrete values, and wrap it in `once/1`
-  when a single witness is enough.
-- Add an explicit bound or timeout when the goal can be unsatisfiable — off the
-  shelf, an unsatisfiable constraint does not fail fast, it explores the space.
+- **Bound every domain first.** For one variable use `X in 0..100`; for a list use
+  `[X,Y,Z] ins 0..100`. (`X ins 0..100` on a bare variable is an
+  `instantiation_error` — use `in` for a single variable.)
+- `all_distinct/1` / `all_different/1` over the list constrains it pairwise.
+- Call `label/1` (or `labeling/2` with options such as `ff`) only when you need
+  concrete values; wrap it in `once/1` when a single witness is enough.
+- To bound a search that can run away, wrap it in `call_with_inference_limit/3`
+  (see *Bounding a goal* above):
+  `call_with_inference_limit(label(Xs), 500000, R)` — `R == inference_limit_exceeded`
+  when it gave up. This works for CLP(FD) predicates in this runtime.
 - Keep the model small; a big model is a sign the step belongs in a `task/N`.
 
 - **CLP(FD)**: finite domains (integers). `:- use_module(library(clpfd)).`
@@ -759,6 +763,10 @@ solve_sum_product(Total, X, Y) :-
     X + Y #= Total,
     X * Y #= 2400,
     once(label([X, Y])).
+
+% A search bounded by inference count instead of by the domain.
+bounded_label(Xs, Result) :-
+    call_with_inference_limit(label(Xs), 500000, Result).
 ```
 
 ### Dictionaries (SWI-Prolog)
