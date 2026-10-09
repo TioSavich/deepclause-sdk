@@ -14,7 +14,6 @@
   - [system/1, user/1](#memory-predicates)
   - [output/1, yield/1, log/1](#output-predicates)
   - [answer/1](#answer1)
-  - [param/3](#param3)
 - [Control Flow](#control-flow)
 - [String Interpolation](#string-interpolation)
 - [Backtracking](#backtracking)
@@ -58,7 +57,7 @@ agent_main :-
 ```
 
 ### agent_main/1
-Receives the first parameter:
+Receives the first argument:
 ```prolog
 agent_main(Name) :-
     format(string(Msg), "Hello, ~w!", [Name]),
@@ -66,7 +65,7 @@ agent_main(Name) :-
 ```
 
 ### agent_main/2
-Receives first two parameters:
+Receives the first two arguments:
 ```prolog
 agent_main(Name, Task) :-
     system("You are a helpful assistant."),
@@ -510,25 +509,6 @@ agent_main :-
 
 ---
 
-### `param(+Key, +Description, -Value)`
-
-Access parameters passed from the caller:
-
-```prolog
-agent_main :-
-    param(name, "User's name", Name),
-    param(age, "User's age", Age),
-    format(string(Msg), "Hello ~w, you are ~w years old!", [Name, Age]),
-    answer(Msg).
-```
-
-Called from TypeScript:
-```typescript
-dc.runDML(code, { params: { name: 'Alice', age: 30 } });
-```
-
----
-
 ## Control Flow
 
 DML supports standard Prolog control flow:
@@ -573,14 +553,13 @@ throw(Error)
 
 ## String Interpolation
 
-Text arguments support `{variable}` interpolation with parameters:
+Text arguments support `{variable}` interpolation with bound variables:
 
 ```prolog
-agent_main :-
-    param(topic, "Research topic", Topic),
+agent_main(Topic) :-
     system("You are a research assistant."),
-    task("Research the topic: {topic}"),  % Topic is interpolated
-    answer("Research on {topic} complete!").
+    task("Research the topic: {Topic}"),  % Topic is interpolated
+    answer("Research on {Topic} complete!").
 ```
 
 ---
@@ -848,10 +827,8 @@ step(N, Desc) :-
     format(string(Msg), "Step ~w: ~w", [N, Desc]),
     output(Msg).
 
-% Main entry point
-agent_main :-
-    param(topic, "Research topic", Topic),
-    
+% Main entry point; the topic is an argument.
+agent_main(Topic) :-
     % Set up the assistant
     system("You are a thorough research assistant."),
     system("Provide detailed, accurate information."),
@@ -878,7 +855,7 @@ agent_main :-
 Run with:
 ```typescript
 for await (const event of dc.runDML(code, { 
-  params: { topic: 'quantum computing' } 
+  args: ['quantum computing'] 
 })) {
   console.log(event.type, event.content);
 }

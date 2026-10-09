@@ -527,8 +527,8 @@ when you add a predicate, add a test when you change one.
   in `.pi/deepclause/skills/` and runs them with `/dc-run`.
 - **Subagents.** A `task/N` with `with_tools/2` is Pi's subagent: a bounded turn
   with its own context and a restricted tool set. Use it for orchestrator–workers.
-- **Prompt templates.** `agent_main/1,2` + `param/3` play the role of a prompt
-  template with arguments; `/dc-plan` generates the DML.
+- **Prompt templates.** `agent_main/1,2` takes the role of a prompt template:
+  you pass the inputs as positional arguments; `/dc-plan` generates the DML.
 - **Plan mode.** Represent a plan as data (`step/2` facts, or a checklist file)
   and work it down; it survives compaction and rollback.
 - **Sessions.** The Pi session is the execution record; the harness holds only

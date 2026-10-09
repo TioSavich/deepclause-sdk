@@ -23,6 +23,30 @@ A module is a set of Prolog clauses plus annotations:
 - `script_file(Name, Path)` — links a workspace file to the module (bundled on
   export). It has no runtime semantics of its own; run the file with `bash`.
 
+# Inputs are arguments
+
+A harness takes its inputs as **predicate arguments**. Write a skill as
+`research(Question, Answer)` and pass the input when you run it:
+
+```prolog
+research(Question, Answer) :-
+    task("Answer this research question: {Question}", Answer).
+```
+
+```text
+/goal research("Why is the sky blue?", A).
+```
+
+For a `deepclause run` entry point, define `agent_main/1` (or `/2`) and pass the
+arguments on the command line:
+
+```bash
+deepclause run research.dml "why is the sky blue?"
+```
+
+Never invent an input of the form `question = "…"`, and never read an undeclared
+variable: a predicate's arguments are how a caller supplies values.
+
 # Inspect the module
 
 - `listing` — the whole module: skill description, predicates, and docs.
@@ -86,6 +110,44 @@ ordering, membership, `findall/3`, `aggregate_all/3`, list/set operations,
 constraints, optimisation) answer a large class of questions directly. Run the
 goal with `execute`; use `task/N` only for what genuinely needs language
 understanding (extraction, classification, summaries, decisions).
+
+# The harness is also memory
+
+The module is a living store, not only a set of skills. Keep small or medium
+facts in it and query them like code — often better than re-deriving an answer or
+re-reading a file:
+
+```prolog
+country(ch, "Switzerland").
+rate(chf, 1.08, "2026-01").
+```
+
+Facts persist across turns and sessions, appear in `listing` and the manifest,
+and travel with `export`. Prefer a fact for stable knowledge the user will ask
+about again; keep large datasets in a file or a linked script.
+
+The module also records its own **history**, queryable from DML (system-owned:
+excluded from `listing`/`export`, but callable):
+
+- `harness_change(Version, Timestamp, Kind, SessionId, Turn)` — every commit,
+  load, or reset (`Kind` is `commit` | `load` | `reset`).
+- `harness_changed(Version, Name, Arity, Action)` — predicates a version
+  added/removed/replaced.
+- `harness_head(Version, Timestamp, SessionId, Turn)` — the current version.
+- `harness_rollback(From, To, Timestamp, SessionId, Turn)` — a rollback.
+- `harness_session(SessionId, StartedAt, Model, Backend, TraceDir)`,
+  `harness_session_end/2`.
+- `harness_turn(SessionId, Turn, Timestamp, Mode, Outcome)`,
+  `harness_trace(SessionId, Turn, TracePath)`.
+
+Use them to answer questions about the harness itself — "what changed?", "when
+did we add `research/2`?", "what is the current version?":
+
+```prolog
+recent_changes(N, Cs) :-
+    findall(V-Ts, harness_change(V, Ts, commit, _, _), All),
+    last_n(All, N, Cs).
+```
 
 # Keep DML simple: orchestration, not algorithms
 
@@ -348,7 +410,6 @@ More patterns: `reference("patterns")`; shapes: `reference("examples")`.
   - [system/1, user/1](#memory-predicates)
   - [output/1, yield/1, log/1](#output-predicates)
   - [answer/1](#answer1)
-  - [param/3](#param3)
 - [Control Flow](#control-flow)
 - [String Interpolation](#string-interpolation)
 - [Backtracking](#backtracking)
@@ -392,7 +453,7 @@ agent_main :-
 ```
 
 ### agent_main/1
-Receives the first parameter:
+Receives the first argument:
 ```prolog
 agent_main(Name) :-
     format(string(Msg), "Hello, ~w!", [Name]),
@@ -400,7 +461,7 @@ agent_main(Name) :-
 ```
 
 ### agent_main/2
-Receives first two parameters:
+Receives the first two arguments:
 ```prolog
 agent_main(Name, Task) :-
     system("You are a helpful assistant."),
@@ -844,25 +905,6 @@ agent_main :-
 
 ---
 
-### `param(+Key, +Description, -Value)`
-
-Access parameters passed from the caller:
-
-```prolog
-agent_main :-
-    param(name, "User's name", Name),
-    param(age, "User's age", Age),
-    format(string(Msg), "Hello ~w, you are ~w years old!", [Name, Age]),
-    answer(Msg).
-```
-
-Called from TypeScript:
-```typescript
-dc.runDML(code, { params: { name: 'Alice', age: 30 } });
-```
-
----
-
 ## Control Flow
 
 DML supports standard Prolog control flow:
@@ -907,14 +949,13 @@ throw(Error)
 
 ## String Interpolation
 
-Text arguments support `{variable}` interpolation with parameters:
+Text arguments support `{variable}` interpolation with bound variables:
 
 ```prolog
-agent_main :-
-    param(topic, "Research topic", Topic),
+agent_main(Topic) :-
     system("You are a research assistant."),
-    task("Research the topic: {topic}"),  % Topic is interpolated
-    answer("Research on {topic} complete!").
+    task("Research the topic: {Topic}"),  % Topic is interpolated
+    answer("Research on {Topic} complete!").
 ```
 
 ---
@@ -1182,10 +1223,8 @@ step(N, Desc) :-
     format(string(Msg), "Step ~w: ~w", [N, Desc]),
     output(Msg).
 
-% Main entry point
-agent_main :-
-    param(topic, "Research topic", Topic),
-    
+% Main entry point; the topic is an argument.
+agent_main(Topic) :-
     % Set up the assistant
     system("You are a thorough research assistant."),
     system("Provide detailed, accurate information."),
@@ -1212,7 +1251,7 @@ agent_main :-
 Run with:
 ```typescript
 for await (const event of dc.runDML(code, { 
-  params: { topic: 'quantum computing' } 
+  args: ['quantum computing'] 
 })) {
   console.log(event.type, event.content);
 }
