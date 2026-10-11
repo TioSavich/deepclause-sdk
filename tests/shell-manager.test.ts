@@ -285,7 +285,7 @@ describe('HostShellManager cancellation', () => {
     });
   });
 
-  it('uses setpriv-wrapped bwrap when direct probing hits uid-map permission denial', async () => {
+  it.runIf(process.platform === 'linux')('uses setpriv-wrapped bwrap when direct probing hits uid-map permission denial', async () => {
     const child = createMockChildProcess(5511);
     childProcessMocks.spawn.mockReturnValue(child);
     childProcessMocks.spawnSync

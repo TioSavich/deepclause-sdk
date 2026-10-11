@@ -1116,7 +1116,7 @@ repl_solve(Goal, Names, SessionId, State) :-
     ).
 
 repl_solve_loop(Goal, Names, SessionId, State) :-
-    mi_call(Goal, State, StateOut),
+    mi_call_scoped(Goal, State, StateOut),
     collect_bindings(Names, Bindings),
     store_memory_for_state(SessionId, StateOut),
     engine_yield(solution(Bindings, false)),
@@ -2612,7 +2612,7 @@ post_signal_to_engine(SessionId, Signal) :-
 mi(Goal, StateIn, SessionId) :-
     nb_setval(current_session_id, SessionId),
     catch(
-        mi_call(Goal, StateIn, _StateOut),
+        mi_call_scoped(Goal, StateIn, _StateOut),
         Error,
         (   Error == '$answer_commit'
         ->  true  % answer/1 threw to commit - success, no backtracking
@@ -3810,19 +3810,29 @@ mi_call(param(Key, _Desc, Value), StateIn, StateIn) :-
 
 %% ============================================================
 %% Control Flow - STATE THREADED
-%% No cuts - rely on is_mi_special_predicate guard in catch-all
+%%
+%% A local `!` in this meta-interpreter cannot commit the choices made since
+%% entering a user predicate.  A reached cut therefore carries the remaining
+%% clause continuation and threaded state to the user-predicate dispatcher.
+%% The dispatcher commits clause selection there and resumes the continuation.
+%% Meta-predicate boundaries contain the same signal with mi_call_scoped/3.
 %% ============================================================
 
 %% mi_call((A, B), +StateIn, -StateOut)
 mi_call((A, B), StateIn, StateOut) :-
-    mi_call(A, StateIn, State1),
+    catch(
+        mi_call(A, StateIn, State1),
+        '$deepclause_cut'(Bindings, Continuation, CutState),
+        ( restore_cut_bindings(A, Bindings),
+          throw('$deepclause_cut'(Bindings, (Continuation, B), CutState)) )
+    ),
     mi_call(B, State1, StateOut).
 
 %% mi_call((Cond -> Then ; Else), +StateIn, -StateOut)
 %% MUST come before disjunction clause - if-then-else is syntactically a disjunction!
 mi_call((Cond -> Then ; Else), StateIn, StateOut) :-
     !,  % Commit to this clause for if-then-else patterns
-    (   mi_call(Cond, StateIn, State1)
+    (   mi_call_scoped(Cond, StateIn, State1)
     ->  mi_call(Then, State1, StateOut)
     ;   mi_call(Else, StateIn, StateOut)
     ).
@@ -3831,7 +3841,7 @@ mi_call((Cond -> Then ; Else), StateIn, StateOut) :-
 %% Soft cut without else branch
 mi_call((Cond -> Then), StateIn, StateOut) :-
     !,  % Commit to this clause
-    (   mi_call(Cond, StateIn, State1)
+    (   mi_call_scoped(Cond, StateIn, State1)
     ->  mi_call(Then, State1, StateOut)
     ).
 
@@ -3845,12 +3855,64 @@ mi_call((A ; B), StateIn, StateOut) :-
 
 %% mi_call(\+(Goal), +StateIn, -StateOut)
 mi_call(\+(Goal), StateIn, StateIn) :-
-    \+ mi_call(Goal, StateIn, _).
+    \+ mi_call_scoped(Goal, StateIn, _).
 
 %% mi_call(!, +StateIn, -StateOut)
-%% Cut DOES need to actually cut
-mi_call(!, StateIn, StateIn) :-
+mi_call(!, StateIn, _StateOut) :-
+    throw('$deepclause_cut'([], true, StateIn)).
+
+%% mark_cuts(+Goal, +ScopeVariables, -MarkedGoal)
+%% A thrown term is copied after bindings are unwound.  Put every variable in
+%% the cut scope into the signal so bindings established before `!` can be
+%% restored at the predicate or meta-call boundary.
+mark_cuts(Var, _ScopeVariables, Var) :-
+    var(Var),
     !.
+mark_cuts(!, ScopeVariables, '$deepclause_cut_marker'(ScopeVariables)) :-
+    !.
+mark_cuts('$deepclause_cut_marker'(_), ScopeVariables,
+          '$deepclause_cut_marker'(ScopeVariables)) :-
+    !.
+mark_cuts(Term, ScopeVariables, Marked) :-
+    compound(Term),
+    !,
+    Term =.. [Functor|Args],
+    maplist(mark_cuts_with(ScopeVariables), Args, MarkedArgs),
+    Marked =.. [Functor|MarkedArgs].
+mark_cuts(Term, _ScopeVariables, Term).
+
+mark_cuts_with(ScopeVariables, Term, Marked) :-
+    mark_cuts(Term, ScopeVariables, Marked).
+
+restore_cut_bindings(Goal, BoundVariables) :-
+    (   sub_term('$deepclause_cut_marker'(ScopeVariables), Goal)
+    ->  ScopeVariables = BoundVariables
+    ;   true
+    ).
+
+mi_call('$deepclause_cut_marker'(ScopeVariables), StateIn, _StateOut) :-
+    throw('$deepclause_cut'(ScopeVariables, true, StateIn)).
+
+%% Run a goal with cut scoped to this meta-call boundary.
+mi_call_scoped(Goal, StateIn, StateOut) :-
+    term_variables(Goal, ScopeVariables),
+    mark_cuts(Goal, ScopeVariables, MarkedGoal),
+    catch(
+        mi_call(MarkedGoal, StateIn, StateOut),
+        '$deepclause_cut'(BoundVariables, Continuation, CutState),
+        ( ScopeVariables = BoundVariables,
+          mi_run_after_cut(Continuation, ScopeVariables, CutState, StateOut) )
+    ).
+
+%% A later cut commits only the choices opened since this continuation began.
+mi_run_after_cut(Goal, ScopeVariables, StateIn, StateOut) :-
+    catch(
+        mi_call(Goal, StateIn, StateOut),
+        '$deepclause_cut'(BoundVariables, Continuation, CutState),
+        ( ScopeVariables = BoundVariables,
+          !,
+          mi_run_after_cut(Continuation, ScopeVariables, CutState, StateOut) )
+    ).
 
 %% mi_call(true, +StateIn, -StateOut)
 mi_call(true, StateIn, StateIn).
@@ -4023,24 +4085,24 @@ mi_partition(Goal, [H|T], Inc, Exc, StateIn, StateOut) :-
 %% Succeed if for all solutions of Cond, Action succeeds
 %% Note: State changes in Action are NOT preserved (bagof semantics)
 mi_call(forall(Cond, Action), StateIn, StateIn) :-
-    \+ (mi_call(Cond, StateIn, State1), \+ mi_call(Action, State1, _)).
+    \+ (mi_call_scoped(Cond, StateIn, State1), \+ mi_call_scoped(Action, State1, _)).
 
 %% mi_call(findall(Template, Goal, List), +StateIn, -StateOut)
 %% Collect all solutions - state changes are NOT preserved
 mi_call(findall(Template, Goal, List), StateIn, StateIn) :-
-    findall(Template, mi_call(Goal, StateIn, _), List).
+    findall(Template, mi_call_scoped(Goal, StateIn, _), List).
 
 %% mi_call(bagof(Template, Goal, List), +StateIn, -StateOut)
 mi_call(bagof(Template, Goal, List), StateIn, StateIn) :-
-    bagof(Template, mi_call(Goal, StateIn, _), List).
+    bagof(Template, mi_call_scoped(Goal, StateIn, _), List).
 
 %% mi_call(setof(Template, Goal, List), +StateIn, -StateOut)
 mi_call(setof(Template, Goal, List), StateIn, StateIn) :-
-    setof(Template, mi_call(Goal, StateIn, _), List).
+    setof(Template, mi_call_scoped(Goal, StateIn, _), List).
 
 %% mi_call(aggregate_all(Template, Goal, Result), +StateIn, -StateOut)
 mi_call(aggregate_all(Template, Goal, Result), StateIn, StateIn) :-
-    aggregate_all(Template, mi_call(Goal, StateIn, _), Result).
+    aggregate_all(Template, mi_call_scoped(Goal, StateIn, _), Result).
 
 %% mi_call(maplist(Goal, List), +StateIn, -StateOut)
 %% Apply Goal to each element (Goal/1)
@@ -4343,7 +4405,7 @@ mi_call(time_file(File, Time), StateIn, StateIn) :-
 %% mi_call(catch(Goal, Catcher, Recovery), +StateIn, -StateOut)
 mi_call(catch(Goal, Catcher, Recovery), StateIn, StateOut) :-
     catch(
-        mi_call(Goal, StateIn, StateOut),
+        mi_call_scoped(Goal, StateIn, StateOut),
         Catcher,
         mi_call(Recovery, StateIn, StateOut)
     ).
@@ -4398,7 +4460,16 @@ mi_call(Module:Goal, StateIn, StateOut) :-
     clause(Module:Goal, Body),
     (   Body == true
     ->  StateOut = StateIn  % Fact - succeed with state unchanged
-    ;   mi_call(Body, StateIn, StateOut)
+    ;   term_variables((Goal, Body), ScopeVariables),
+        mark_cuts(Body, ScopeVariables, MarkedBody),
+        mi_clause_body(MarkedBody, StateIn, Outcome),
+        (   Outcome = normal(StateOut)
+        ->  true
+        ;   Outcome = cut(BoundVariables, Continuation, CutState),
+            !,
+            ScopeVariables = BoundVariables,
+            mi_run_after_cut(Continuation, ScopeVariables, CutState, StateOut)
+        )
     ).
 
 mi_call(Module:Goal, StateIn, StateIn) :-
@@ -4476,6 +4547,7 @@ is_mi_special_predicate((_;_)).
 is_mi_special_predicate((_->_)).
 is_mi_special_predicate((_->_;_)).
 is_mi_special_predicate(\+(_)).
+is_mi_special_predicate('$deepclause_cut_marker'(_)).
 is_mi_special_predicate(catch(_,_,_)).
 is_mi_special_predicate(throw(_)).
 is_mi_special_predicate(!).
@@ -4544,7 +4616,7 @@ is_mi_special_predicate([_|_]).
 mi_call(call(Goal), StateIn, StateOut) :-
     guard_reserved_goal(Goal, StateIn),
     !,
-    mi_call(Goal, StateIn, StateOut).
+    mi_call_scoped(Goal, StateIn, StateOut).
 
 %% mi_call(call(Closure, Extra...), +StateIn, -StateOut)
 %% call/2..4 must also route through the meta-interpreter; otherwise a wrapped
@@ -4576,12 +4648,12 @@ extend_callable(Closure, Extra, Callable) :-
 %% task_named/3 undefined. Commits to the first solution of Goal, like once/1.
 mi_call(once(Goal), StateIn, StateOut) :-
     !,
-    once(mi_call(Goal, StateIn, StateOut)).
+    once(mi_call_scoped(Goal, StateIn, StateOut)).
 
 %% mi_call(ignore(Goal), +StateIn, -StateOut)
 mi_call(ignore(Goal), StateIn, StateOut) :-
     !,
-    (   once(mi_call(Goal, StateIn, StateOut0))
+    (   once(mi_call_scoped(Goal, StateIn, StateOut0))
     ->  StateOut = StateOut0
     ;   StateOut = StateIn
     ).
@@ -4689,12 +4761,22 @@ mi_call_dispatch(Goal, StateIn, StateOut) :-
         add_trace_entry(SessionId, call, Functor, Args, Depth),
         % Find a matching clause - allows backtracking to try multiple clauses
         clause(SessionId:Goal, Body),
+        term_variables((Goal, Body), ScopeVariables),
+        mark_cuts(Body, ScopeVariables, MarkedBody),
         NewDepth is Depth + 1,
         set_depth(StateIn, NewDepth, State1),
-        % Soft cut: execute the body for every solution (so findall/backtracking
-        % works), but still record a fail trace when the body has none.
-        (   mi_call(Body, State1, State2)
+        % Execute the body for every solution.  A reached DML cut returns its
+        % remaining continuation so the cut below commits this predicate's
+        % clause/2 choice point rather than mi_call(!)'s local choice point.
+        (   mi_clause_body(MarkedBody, State1, Outcome)
         *-> add_trace_entry(SessionId, exit, Functor, Args, Depth),
+            (   Outcome = normal(State2)
+            ->  true
+            ;   Outcome = cut(BoundVariables, Continuation, CutState),
+                !,
+                ScopeVariables = BoundVariables,
+                mi_run_after_cut(Continuation, ScopeVariables, CutState, State2)
+            ),
             set_depth(State2, Depth, StateOut)
         ;   add_trace_entry(SessionId, fail, Functor, Args, Depth),
             fail
@@ -4715,6 +4797,16 @@ mi_call_dispatch(Goal, StateIn, StateIn) :-
     get_session_id(SessionId),
     \+ predicate_property(SessionId:Goal, defined),
     call(Goal).
+
+%% Interpret one clause body until it either completes normally or reaches a
+%% cut.  The continuation is deliberately not run here: the caller must first
+%% commit the predicate's clause choice point.
+mi_clause_body(Body, StateIn, Outcome) :-
+    catch(
+        ( mi_call(Body, StateIn, StateOut), Outcome = normal(StateOut) ),
+        '$deepclause_cut'(BoundVariables, Continuation, CutState),
+        Outcome = cut(BoundVariables, Continuation, CutState)
+    ).
 
 %% ============================================================
 %% Helper Predicates

@@ -224,6 +224,54 @@ describe('Backtracking', () => {
 
     expect(events.find(e => e.type === 'answer')?.content).toBe('work complete');
   });
+
+  it('scopes cut to the current user predicate and preserves post-cut choices', async () => {
+    const code = `
+      first(X) :- member(X, [1,2,3]), !.
+      trim_positive([C|T], R) :- C > 0, !, trim_positive(T, R).
+      trim_positive(R, R).
+      committed_failure(X) :- member(X, [a,b]), !, fail.
+      committed_failure(fallback).
+      after_cut(X) :- !, member(X, [left,right]).
+      disjunctive(X) :- (member(X, [1,2]), ! ; X = 3).
+      condition_cut(X) :- ((member(X, [a,b]), !, fail) -> X = then ; X = else).
+      condition_cut(fallback).
+      caught_cut(X) :- catch((member(X, [red,blue]), !), _, fail).
+
+      agent_main :-
+          findall(X, first(X), First),
+          findall(R, trim_positive([1,2,0,3], R), Trimmed),
+          findall(F, committed_failure(F), Failed),
+          findall(A, after_cut(A), After),
+          findall(D, disjunctive(D), Disjunctive),
+          findall(C, condition_cut(C), Condition),
+          findall(K, caught_cut(K), Caught),
+          format(string(Result), "~w|~w|~w|~w|~w|~w|~w",
+                 [First, Trimmed, Failed, After, Disjunctive, Condition, Caught]),
+          answer(Result).
+    `;
+
+    const events: any[] = [];
+    for await (const event of sdk.runDML(code)) events.push(event);
+
+    expect(events.find(e => e.type === 'answer')?.content)
+      .toBe('[1]|[[0,3]]|[]|[left,right]|[1]|[else,fallback]|[red]');
+  });
+
+  it('contains a cut inside once and findall meta-call boundaries', async () => {
+    const code = `
+      agent_main :-
+          findall(X, (member(X, [1,2,3]), !), Direct),
+          findall(Y, once((member(Y, [a,b]), !)), Once),
+          format(string(Result), "~w|~w", [Direct, Once]),
+          answer(Result).
+    `;
+
+    const events: any[] = [];
+    for await (const event of sdk.runDML(code)) events.push(event);
+
+    expect(events.find(e => e.type === 'answer')?.content).toBe('[1]|[a]');
+  });
 });
 
 // ============================================================================

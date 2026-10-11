@@ -42,7 +42,7 @@ describe('capability toolset', () => {
   });
 
   it('registers bash by default through the CLI runtime (no config)', async () => {
-    const runtime = await createReplRuntime({ workspace });
+    const runtime = await createReplRuntime({ workspace, backend: 'env' });
     try {
       expect(runtime.toolset.tools.has('bash')).toBe(true);
       expect(runtime.toolset.catalog).toContain('bash');
